@@ -1,4 +1,4 @@
-"""Smoke tests for the v0.1.0 working recommender."""
+"""Smoke tests for the v0.1.1 working recommender (IVF rule tightened to n<5e4)."""
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +18,7 @@ from fractal_ann_diagnostics.diagnostic import (
 
 
 def test_version_pinned() -> None:
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.1.1"
 
 
 def test_correlation_dimension_on_uniform_2d() -> None:
@@ -109,7 +109,7 @@ def test_diagnose_flat_nsw_on_high_dim_gaussian() -> None:
 
 def test_diagnose_ivf_on_low_intrinsic_dim() -> None:
     # A 2D manifold embedded in R^20 with low ambient noise has D2 ~ 2 and
-    # n < 1e5, which should trigger the IVF rule (rules 1 and 2 cleanly
+    # n < 5e4, which should trigger the IVF rule (rules 1 and 2 cleanly
     # decline because D2/ambient ~ 0.1 and hubness is low).
     rng = np.random.default_rng(8)
     n = 500
@@ -119,3 +119,41 @@ def test_diagnose_ivf_on_low_intrinsic_dim() -> None:
     vectors = lifted + 0.001 * rng.standard_normal((n, 20))
     result = diagnose(vectors, sample_size=n)
     assert result.recommended_index == "ivf"
+
+
+def test_recommend_ivf_cutoff_tightened_to_5e4() -> None:
+    """v0.1.1 regression: 60k-point datasets like MNIST/Fashion-MNIST must
+    no longer be classified as IVF on the cardinality rule alone. The v0.1.0
+    cutoff at n<1e5 sent both to IVF; v0.1.1 tightens to n<5e4."""
+    from fractal_ann_diagnostics.descriptors import DescriptorPanel
+    from fractal_ann_diagnostics.diagnostic import _recommend
+
+    # Construct a panel that mimics MNIST after the descriptor pass:
+    # n=60000, d=784, D2 small enough to pass the "<10" half of rule 4,
+    # hubness and LID otherwise quiet so rules 1/2/3 don't fire.
+    rng = np.random.default_rng(0)
+    panel = DescriptorPanel(
+        correlation_dimension=9.3,
+        lid_distribution=rng.uniform(5.0, 25.0, size=200),
+        multifractal_width=0.5,
+        hubness_skew=0.6,
+        ambient_dimension=784,
+        n_points=60_000,
+    )
+    index, _drop, _rationale = _recommend(panel)
+    assert index == "hnsw", (
+        f"60k-point MNIST-like panel should fall through to HNSW now that the IVF "
+        f"cutoff is tightened to 5e4; got {index!r} instead."
+    )
+
+    # And confirm that a strictly smaller dataset still fires IVF.
+    small_panel = DescriptorPanel(
+        correlation_dimension=2.0,
+        lid_distribution=rng.uniform(2.0, 5.0, size=200),
+        multifractal_width=0.1,
+        hubness_skew=0.5,
+        ambient_dimension=20,
+        n_points=10_000,
+    )
+    index_small, _, _ = _recommend(small_panel)
+    assert index_small == "ivf"

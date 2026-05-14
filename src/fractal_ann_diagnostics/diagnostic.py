@@ -101,11 +101,15 @@ def _recommend(
     3. ``lid_p95 > 2 * lid_p50`` AND ``n_points > 1e6`` -> ``diskann``
        Elliott et al. (SIGIR 2024): heterogeneous LID at scale benefits
        from DiskANN's stricter construction.
-    4. ``D2 < 10`` AND ``n_points < 1e5`` -> ``ivf``
-       Low intrinsic dimension and modest cardinality partition cleanly
-       into IVF cells.
+    4. ``D2 < 10`` AND ``n_points < 5e4`` -> ``ivf``
+       Low intrinsic dimension and *small* cardinality partition cleanly
+       into IVF cells. The cutoff was tightened from 1e5 to 5e4 in v0.1.1
+       after the v0.1.0 calibration showed 60k MNIST and Fashion-MNIST
+       both flipped to IVF, while in practice both are canonical HNSW
+       workloads. v0.2.0 will replace this hand-set cutoff with a
+       boundary learned from ANN-benchmarks.
     5. else -> ``hnsw`` with predicted recall drop
-       ``min(0.3, max(0.0, (lid_p95 - 5) / 50))``. The ramp is a v0.1.0
+       ``min(0.3, max(0.0, (lid_p95 - 5) / 50))``. The ramp is a v0.1.x
        heuristic; v0.2.0 will calibrate it against ANN-benchmarks.
     """
     d2 = panel.correlation_dimension
@@ -136,12 +140,12 @@ def _recommend(
             "Heterogeneous LID (p95 > 2 x p50) at large scale (n > 1e6) "
             "motivates DiskANN's tighter graph construction (Elliott et al. 2024).",
         )
-    if d2 < 10.0 and n < 100_000:
+    if d2 < 10.0 and n < 50_000:
         return (
             "ivf",
             0.0,
-            "Low intrinsic dimension (D2 < 10) and modest cardinality "
-            "(n < 1e5) partition naturally into IVF cells.",
+            "Low intrinsic dimension (D2 < 10) and small cardinality "
+            "(n < 5e4) partition naturally into IVF cells.",
         )
 
     drop = float(min(0.3, max(0.0, (lid_p95 - 5.0) / 50.0)))

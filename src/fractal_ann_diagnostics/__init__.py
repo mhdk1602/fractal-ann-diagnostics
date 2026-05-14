@@ -12,7 +12,7 @@ from .descriptors import (  # noqa: F401
 )
 from .diagnostic import DiagnosticResult, diagnose  # noqa: F401
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Dineshkumar Malempati Hari"
 __orcid__ = "0009-0003-1036-9477"
 __license__ = "MIT"
