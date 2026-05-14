@@ -1,0 +1,37 @@
+{
+  "title": "fractal-ann-diagnostics: Intrinsic-dimension descriptors for predicting ANN index failure modes",
+  "description": "A diagnostic tool that ingests a vector dataset, computes a panel of intrinsic-dimension and fractal descriptors (correlation dimension D2, local intrinsic dimensionality distribution, multifractal spectrum width on graph distances), and outputs a workload-classed recommendation among HNSW, IVF, flat-NSW, and DiskANN, with a calibrated estimate of recall degradation under default parameters. Evaluated on the ANN-benchmarks corpus. Part of the broader fractal-indexing research program; H3 pivot from the May 2026 research plan.",
+  "creators": [
+    {
+      "name": "Malempati Hari, Dineshkumar",
+      "orcid": "0009-0003-1036-9477",
+      "affiliation": "Independent Researcher"
+    }
+  ],
+  "keywords": [
+    "approximate-nearest-neighbor",
+    "HNSW",
+    "intrinsic-dimensionality",
+    "local-intrinsic-dimensionality",
+    "fractal-dimension",
+    "correlation-dimension",
+    "vector-search",
+    "ANN-benchmarks"
+  ],
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "language": "eng",
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/mhdk1602/fractal-ann-diagnostics",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.20188013",
+      "relation": "isPartOf",
+      "scheme": "doi"
+    }
+  ]
+}

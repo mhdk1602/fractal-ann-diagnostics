@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the work via the Zenodo concept DOI minted on first release."
+title: "fractal-ann-diagnostics: Intrinsic-dimension descriptors for predicting ANN index failure modes"
+abstract: >-
+  A diagnostic tool that ingests a vector dataset, computes a panel of
+  intrinsic-dimension and fractal descriptors (correlation dimension D₂,
+  local intrinsic dimensionality distribution, multifractal spectrum width
+  on graph distances), and outputs a workload-classed recommendation among
+  HNSW, IVF, flat-NSW, and DiskANN, with a calibrated estimate of recall
+  degradation under default parameters. Evaluated on the ANN-benchmarks
+  corpus.
+authors:
+  - family-names: "Malempati Hari"
+    given-names: "Dineshkumar"
+    orcid: "https://orcid.org/0009-0003-1036-9477"
+    affiliation: "Independent Researcher"
+identifiers: []
+license: MIT
+repository-code: "https://github.com/mhdk1602/fractal-ann-diagnostics"
+type: software
+version: "0.0.1"
+keywords:
+  - "approximate-nearest-neighbor"
+  - "HNSW"
+  - "intrinsic-dimensionality"
+  - "local-intrinsic-dimensionality"
+  - "fractal-dimension"
+  - "correlation-dimension"
+  - "vector-search"

@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fractal-ann-diagnostics"
+version = "0.0.1"
+description = "Intrinsic-dimension descriptors for predicting approximate-nearest-neighbor index failure modes (HNSW, IVF, flat-NSW, DiskANN)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "Dineshkumar Malempati Hari", email = "mhdk.dinesh@gmail.com" },
+]
+keywords = [
+    "approximate-nearest-neighbor",
+    "HNSW",
+    "intrinsic-dimensionality",
+    "local-intrinsic-dimensionality",
+    "fractal-dimension",
+    "correlation-dimension",
+    "vector-search",
+    "ANN-benchmarks",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Database",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "MFDFA>=0.4",
+    "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+hnsw = ["hnswlib>=0.8.0"]
+faiss = ["faiss-cpu>=1.7"]
+benchmarks = ["h5py>=3.10", "pyarrow>=14.0"]
+dev = ["pytest>=7.0", "ruff>=0.3", "pre-commit>=3.0"]
+
+[project.urls]
+Repository = "https://github.com/mhdk1602/fractal-ann-diagnostics"
+"Research plan" = "https://github.com/mhdk1602/hurst-aware-partitioning"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fractal_ann_diagnostics"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
