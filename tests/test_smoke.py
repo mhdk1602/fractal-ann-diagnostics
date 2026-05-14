@@ -1,8 +1,7 @@
-"""Smoke tests for the v0.0.1 scaffold."""
+"""Smoke tests for the v0.1.0 working recommender."""
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from fractal_ann_diagnostics import __version__
 from fractal_ann_diagnostics.descriptors import (
@@ -11,11 +10,15 @@ from fractal_ann_diagnostics.descriptors import (
     lid_mle,
     multifractal_width,
 )
-from fractal_ann_diagnostics.diagnostic import compute_descriptors, diagnose
+from fractal_ann_diagnostics.diagnostic import (
+    DiagnosticResult,
+    compute_descriptors,
+    diagnose,
+)
 
 
 def test_version_pinned() -> None:
-    assert __version__ == "0.0.1"
+    assert __version__ == "0.1.0"
 
 
 def test_correlation_dimension_on_uniform_2d() -> None:
@@ -54,6 +57,24 @@ def test_hubness_returns_finite_float() -> None:
     assert np.isfinite(skew_value)
 
 
+def test_multifractal_width_finite_on_random() -> None:
+    rng = np.random.default_rng(5)
+    vectors = rng.standard_normal((200, 8))
+    width = multifractal_width(vectors, sample_size=200, rng=rng)
+    # Should be a finite, non-negative float on well-behaved random data.
+    assert isinstance(width, float)
+    assert np.isfinite(width)
+    assert width >= 0.0
+
+
+def test_multifractal_width_handles_degenerate_input() -> None:
+    # A handful of identical points produces a constant distance series and
+    # should yield NaN rather than crash.
+    vectors = np.ones((10, 4))
+    width = multifractal_width(vectors, sample_size=10)
+    assert np.isnan(width)
+
+
 def test_compute_descriptors_returns_panel() -> None:
     rng = np.random.default_rng(4)
     vectors = rng.standard_normal((200, 8))
@@ -62,17 +83,39 @@ def test_compute_descriptors_returns_panel() -> None:
     assert panel.n_points == 200
     assert np.isfinite(panel.correlation_dimension)
     assert panel.lid_distribution.shape == (200,)
+    # multifractal_width is now wired up; should be a finite float or NaN.
+    assert isinstance(panel.multifractal_width, float)
 
 
-def test_multifractal_width_unimplemented_in_scaffold() -> None:
-    rng = np.random.default_rng(5)
-    vectors = rng.standard_normal((50, 4))
-    with pytest.raises(NotImplementedError):
-        multifractal_width(vectors)
-
-
-def test_diagnose_raises_at_recommender_step() -> None:
+def test_diagnose_returns_recommended_index() -> None:
     rng = np.random.default_rng(6)
-    vectors = rng.standard_normal((100, 8))
-    with pytest.raises(NotImplementedError):
-        diagnose(vectors, sample_size=100)
+    vectors = rng.standard_normal((200, 8))
+    result = diagnose(vectors, sample_size=200)
+    assert isinstance(result, DiagnosticResult)
+    assert result.recommended_index in {"hnsw", "ivf", "flat-nsw", "diskann"}
+    assert 0.0 <= result.predicted_recall_drop <= 1.0
+    assert result.confidence == 0.5
+    assert isinstance(result.rationale, str) and len(result.rationale) > 0
+
+
+def test_diagnose_flat_nsw_on_high_dim_gaussian() -> None:
+    # A Gaussian sample in R^32 has heavy hubness skew (well above 2.0) on
+    # 400 points, which fires the Radovanović-rule for flat-NSW.
+    rng = np.random.default_rng(7)
+    vectors = rng.standard_normal((400, 32))
+    result = diagnose(vectors, sample_size=400)
+    assert result.recommended_index == "flat-nsw"
+
+
+def test_diagnose_ivf_on_low_intrinsic_dim() -> None:
+    # A 2D manifold embedded in R^20 with low ambient noise has D2 ~ 2 and
+    # n < 1e5, which should trigger the IVF rule (rules 1 and 2 cleanly
+    # decline because D2/ambient ~ 0.1 and hubness is low).
+    rng = np.random.default_rng(8)
+    n = 500
+    t = rng.uniform(-1.0, 1.0, size=(n, 2)).astype(np.float64)
+    M = rng.standard_normal((2, 20)).astype(np.float64)
+    lifted = np.einsum("ij,jk->ik", t, M)
+    vectors = lifted + 0.001 * rng.standard_normal((n, 20))
+    result = diagnose(vectors, sample_size=n)
+    assert result.recommended_index == "ivf"

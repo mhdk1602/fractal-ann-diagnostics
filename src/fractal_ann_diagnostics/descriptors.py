@@ -142,20 +142,90 @@ def multifractal_width(
     q_range: tuple[float, float] = (-5.0, 5.0),
     n_q: int = 21,
     sample_size: int | None = 2000,
+    rng: np.random.Generator | None = None,
 ) -> float:
-    """Width of the multifractal singularity spectrum on the kNN graph distances.
+    """Width of the multifractal singularity spectrum on all-pairs distances.
 
-    The descriptor is the difference α_max − α_min of the singularity spectrum
-    computed via MFDFA on the sequence of all-pairs distances treated as a
-    one-dimensional series. Width close to zero indicates monofractal
-    (single scaling regime); wide spectra indicate multifractality
-    (mixture of local dimensions).
+    The descriptor is α_max − α_min of the singularity spectrum produced by
+    Multifractal Detrended Fluctuation Analysis (MFDFA; Kantelhardt et al.,
+    2002) on the sequence of upper-triangular pairwise Euclidean distances
+    treated as a one-dimensional series. Width near zero indicates monofractal
+    behaviour (single global scaling); wide spectra indicate multifractality
+    (a mixture of local dimensions, often a sign that the dataset has
+    heterogeneous LID).
 
-    Unimplemented in v0.0.1 — wraps the MFDFA library at v0.1.0.
+    Parameters
+    ----------
+    vectors : ndarray of shape (n, d)
+    q_range : tuple of float
+        Inclusive (q_min, q_max) range of fractal exponents to sweep. q = 0
+        is dropped by the MFDFA library because the estimator diverges there.
+    n_q : int
+        Number of q points across q_range.
+    sample_size : int, optional
+        Subsample size for the underlying pairwise distance series; full
+        all-pairs distances on n = 1e5 are infeasible. The descriptor is an
+        intrinsic property and converges in N.
+    rng : np.random.Generator, optional
+
+    Returns
+    -------
+    float
+        α_max − α_min. NaN if the underlying MFDFA fit is degenerate
+        (e.g. constant distance series, too few points).
+
+    References
+    ----------
+    Kantelhardt, J. W., Zschiegner, S. A., Koscielny-Bunde, E., Havlin, S.,
+    Bunde, A., Stanley, H. E. (2002). Multifractal detrended fluctuation
+    analysis of nonstationary time series. Physica A, 316(1-4), 87–114.
     """
-    raise NotImplementedError(
-        "multifractal_width awaits the MFDFA-on-graph-distances pipeline planned for v0.1.0."
-    )
+    from MFDFA import MFDFA
+    from MFDFA.singspect import singularity_spectrum
+
+    if rng is None:
+        rng = np.random.default_rng(0)
+    n = len(vectors)
+    if sample_size is not None and n > sample_size:
+        idx = rng.choice(n, size=sample_size, replace=False)
+        x = vectors[idx]
+    else:
+        x = vectors
+
+    n_eff = len(x)
+    diffs = x[:, None, :] - x[None, :, :]
+    dists = np.sqrt(np.sum(diffs**2, axis=-1))
+    iu = np.triu_indices(n_eff, k=1)
+    series = dists[iu].astype(np.float64)
+    series = series[np.isfinite(series)]
+    if series.size < 64 or float(series.std()) == 0.0:
+        return float("nan")
+
+    # Centre the series; MFDFA integrates internally via cumsum.
+    series = series - series.mean()
+
+    # Lag grid: geometric, bounded by [4, len(series) // 4] per MFDFA guidance.
+    lag_lo = 4
+    lag_hi = max(lag_lo + 1, series.size // 4)
+    lag = np.unique(np.geomspace(lag_lo, lag_hi, num=24).astype(int))
+    lag = lag[lag >= lag_lo]
+    if lag.size < 4:
+        return float("nan")
+
+    q = np.linspace(q_range[0], q_range[1], n_q)
+    q = q[np.abs(q) > 1e-8]  # MFDFA drops q == 0
+
+    try:
+        _, fluct = MFDFA(series, lag=lag, q=q, order=1)
+        alpha, _ = singularity_spectrum(lag, fluct, q=q, lim=[None, None])
+    except Exception:
+        return float("nan")
+
+    alpha = np.asarray(alpha, dtype=float)
+    alpha = alpha[np.isfinite(alpha)]
+    if alpha.size < 2:
+        return float("nan")
+    return float(alpha.max() - alpha.min())
 
 
 def hubness(
