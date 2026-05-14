@@ -35,3 +35,5 @@ htmlcov/
 .env
 .env.local
 *.secret
+data/ann_cache/
+data/**/*.hdf5
