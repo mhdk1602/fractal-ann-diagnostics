@@ -1,12 +1,31 @@
-# Fractal ANN Diagnostics
+<p align="center">
+  <img src="assets/readme/ann-diagnostics-hero.svg" alt="Fractal ANN Diagnostics hero graphic" width="100%">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Status](https://img.shields.io/badge/status-scaffold-orange.svg)](https://github.com/mhdk1602/fractal-ann-diagnostics)
+<h1 align="center">Fractal ANN Diagnostics</h1>
 
-**Predict approximate-nearest-neighbor (ANN) index failure modes from intrinsic-dimension descriptors.**
+<p align="center">
+  <strong>Predict approximate-nearest-neighbor index failure modes from intrinsic-dimension descriptors &#8212; before you tune.</strong>
+</p>
 
-Given a vector dataset, this tool computes a panel of fractal and intrinsic-dimension descriptors and returns a workload-classed recommendation among **HNSW**, **IVF**, **flat-NSW**, and **DiskANN** — with a calibrated estimate of recall degradation under default parameters. The goal is not to invent a new index; it is to tell a practitioner *which existing index to use, and what to expect from it*, before they spend a week tuning the wrong one.
+<p align="center">
+  <img alt="Status pre-alpha" src="https://img.shields.io/badge/status-pre--alpha_scaffold-f5b84b?style=for-the-badge">
+  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776ab?style=for-the-badge&logo=python&logoColor=white">
+  <a href="https://orcid.org/0009-0003-1036-9477"><img alt="ORCID 0009-0003-1036-9477" src="https://img.shields.io/badge/ORCID-0009--0003--1036--9477-A6CE39?style=for-the-badge&logo=orcid&logoColor=white"></a>
+  <img alt="License MIT" src="https://img.shields.io/badge/license-MIT-55d6be?style=for-the-badge">
+</p>
+
+<p align="center">
+  <a href="#what-it-does">What it does</a> /
+  <a href="#descriptor-panel">Descriptor panel</a> /
+  <a href="#quickstart-intended">Quickstart</a> /
+  <a href="#position-in-the-literature">Position</a> /
+  <a href="#roadmap">Roadmap</a>
+</p>
+
+## What it does
+
+Given a vector dataset, this tool computes a panel of fractal and intrinsic-dimension descriptors and returns a workload-classed recommendation among **HNSW**, **IVF**, **flat-NSW**, and **DiskANN**, plus a calibrated estimate of recall degradation under default parameters. The goal is not to invent a new index; it is to tell a practitioner *which existing index to use, and what to expect from it*, before they spend a week tuning the wrong one.
 
 > **Status.** Pre-alpha scaffold. The descriptor panel has a reference implementation; the recommender, the workload classifier, and the ANN-benchmarks evaluation pipeline are stubs awaiting v0.1.0.
 
