@@ -126,11 +126,20 @@ def load_ann_benchmark(name: str, cache_dir: Path) -> AnnDataset:
 def evaluate_recall(
     index_handle, queries: np.ndarray, ground_truth: np.ndarray, k: int = 10
 ) -> float:
-    """Compute recall@k against ground-truth neighbour ids.
-
-    Stub until index backends are wired up at v0.2.0.
-    """
-    raise NotImplementedError("evaluate_recall lands with the index backends at v0.2.0.")
+    """Compute mean recall@k against exact neighbor ids."""
+    if k <= 0:
+        raise ValueError("k must be positive")
+    matrix = np.asarray(queries, dtype=np.float32)
+    truth = np.asarray(ground_truth, dtype=np.int64)
+    if matrix.ndim != 2 or truth.ndim != 2 or len(matrix) != len(truth):
+        raise ValueError("queries and ground_truth must be aligned 2D arrays")
+    index = getattr(index_handle, "index", index_handle)
+    recalls: list[float] = []
+    for query, expected in zip(matrix, truth, strict=True):
+        observed, _ = index.query(query, k)
+        target = set(expected[:k].tolist())
+        recalls.append(len(set(observed.tolist()).intersection(target)) / max(len(target), 1))
+    return float(np.mean(recalls))
 
 
 def descriptor_panel_for_corpus(cache_dir: Path) -> dict[str, dict]:

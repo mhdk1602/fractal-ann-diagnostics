@@ -1,15 +1,18 @@
-"""Thin wrappers around production ANN libraries.
+"""Compatibility wrappers around measured retrieval backends.
 
 The diagnostic recommender outputs one of {HNSW, IVF, flat-NSW, DiskANN}; this
 module isolates the actual library calls so the rest of the package is
-library-agnostic. All wrappers are stubs in v0.0.1.
+library-agnostic. HNSW is implemented in v0.2.0; the other index-selection
+stubs remain part of the retired v0.1 research path.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import numpy as np
+
+from .retrieval import HNSWSearchIndex
 
 
 @dataclass(frozen=True)
@@ -18,6 +21,7 @@ class IndexHandle:
 
     name: str
     backend: str
+    index: Any
 
 
 class ANNIndex(Protocol):
@@ -31,8 +35,9 @@ class ANNIndex(Protocol):
 
 
 def build_hnsw(vectors: np.ndarray, M: int = 16, ef_construction: int = 200) -> IndexHandle:
-    """Build an HNSW index via hnswlib. Stub in v0.0.1."""
-    raise NotImplementedError("HNSW build unimplemented in v0.0.1; integrate hnswlib at v0.1.0.")
+    """Build an HNSW index via hnswlib."""
+    index = HNSWSearchIndex(vectors, m=M, ef_construction=ef_construction)
+    return IndexHandle(name="hnsw", backend="hnswlib", index=index)
 
 
 def build_ivf(vectors: np.ndarray, nlist: int = 1024) -> IndexHandle:

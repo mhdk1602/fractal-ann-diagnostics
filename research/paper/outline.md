@@ -1,31 +1,92 @@
-# Paper Outline (Post-Empirical)
+# Paper outline
 
-**Working title:** Fractal Diagnostics for Approximate Nearest Neighbor Index Selection.
+**Registered title:** Adaptive Policy-Aware Vector Retrieval Under Corpus, Embedding, and
+Authorization Drift
 
-**Target venues:** SISAP 2027 short paper (primary) or SIGIR 2027 short paper (alternative).
+**Conditional title:** Fractal Risk Control for Policy-Aware RAG
 
-**Status:** Outline only. Empirical work begins at v0.1.0 of the package; the paper is drafted after calibration on the ANN-benchmarks corpus.
+The conditional title is permitted only if the preregistered geometric and controller gates pass.
 
-## Section plan
+## Claim hierarchy
 
-1. **Introduction.** Practitioners pick HNSW by default and discover recall problems only after deployment. The literature documents *why* (intrinsic dimensionality, hubness, manifold mismatch) but does not give them a workload-time diagnostic. We provide one.
-2. **Background.** HNSW (Malkov & Yashunin 2018); LID (Houle 2017, Amsaleg et al. 2015); correlation fractal dimension (Belussi & Faloutsos 1995); hubness (Radovanović et al. 2010); recent LID-aware variants (Elliott et al. SIGIR 2024, Dual-Branch HNSW 2025, MCGI 2026); Hub Highway Hypothesis (2024).
-3. **Descriptor panel.** Definitions, estimators, finite-sample properties. Why four descriptors and not one: each captures a distinct failure mode (D₂ for ambient/intrinsic mismatch, LID for hard-point distribution, multifractal width for mixture detection, hubness for emergent flat-NSW backbone).
-4. **Recommender.** From descriptor panel to index choice. Two flavours considered: (i) rule-based, derived from theory, (ii) calibrated, trained on the ANN-benchmarks corpus. Section reports both.
-5. **Calibration.** ANN-benchmarks corpus, descriptor panel for each dataset, recall under each of {HNSW default, HNSW tuned, IVF default, flat-NSW, DiskANN}.
-6. **Evaluation.** Held-out datasets (or held-out splits). The diagnostic's selection vs. an oracle that knows the best index post hoc. Reports the recall gap.
-7. **Discussion.** Where the diagnostic fails, what it does not predict (latency, memory), how to combine with cost-based query planning.
-8. **Limitations.** Static dataset assumption; the diagnostic is computed once at index build time, not refreshed as data drifts.
-9. **Reproducibility statement.** Code, ANN-benchmarks HDF5 hashes, seeds, fixed splits.
+1. Authorization is a deterministic boundary. The controller cannot grant access.
+2. Exact top-k over the live authorized corpus is the retrieval reference.
+3. Query-local geometry is a candidate failure signal, not a presumed mechanism.
+4. Adaptive value exists only if a controller beats a cost-matched static action.
+5. Answer-level claims require annotated evidence and validated generation evaluation.
 
-## Figures (planned)
+## Sections
 
-- F1. Descriptor panel for each canonical ANN-benchmarks dataset, scatter plot in (D₂ / ambient_d, LID p95) space, coloured by best-index-post-hoc.
-- F2. Per-dataset recall comparison: HNSW default vs. diagnostic recommendation.
-- F3. Confusion matrix of recommendation vs. oracle.
-- F4. Calibration curve of predicted-recall-drop vs. observed.
-- F5. Ablation: each descriptor removed singly.
+### 1. Problem
 
-## Pre-commitment statement (informal, not formal pre-registration)
+Enterprise RAG joins approximate vector search to live, heterogeneous IAM. A globally accurate
+index can still fail a specific authorized query because the permitted evidence occupies a sparse
+or geometrically difficult subset. Missing authorized evidence can produce unsupported answers;
+retrieve-then-filter can expose denied material.
 
-The descriptor panel is fixed at v0.0.1. Adding descriptors after seeing calibration results would inflate Type-I error. If the rule-based recommender fails calibration, we report it as a null result rather than search for a recommender that passes.
+### 2. Prior work and novelty boundary
+
+Position the paper after Authorization-First Retrieval, Permission-Aware RAG, Filtered-DiskANN,
+ACORN, Global-Local Selectivity, Ada-ef, Fiber-Navigable Search, and RAG extraction attacks. State
+what each already resolves. Do not claim the first permission-aware or geometry-aware filtered
+retrieval system.
+
+### 3. Formal contract
+
+Define the live authorized universe, exact authorized neighbor truth, evidence sufficiency,
+structural entitlement violation, false permit, false denial, compute budget, and controller regret.
+
+### 4. Reference architecture
+
+Describe the policy plane, authorized index, query geometry, action controller, deterministic
+evidence gate, audit record, and fail-closed states. Explain why geometry cannot decide permission.
+
+### 5. Candidate geometric mechanism
+
+Define LID, cross-scale instability, relative contrast, neighbor-radius expansion, hub exposure,
+and offline vector-policy correlation. Document metric handling and permutation tests. Include the
+rejected MFDFA feature as an integrity case study.
+
+### 6. Benchmark
+
+Describe corpora, evidence annotations, RBAC/ABAC generators, live policy revisions, exact truth,
+ANN backends, action grid, embedding revisions, drift sequences, hardware, warmups, and hashes.
+
+### 7. Preregistered analysis
+
+Report H1–H4 in order. Show corpus-specific estimates before pooled estimates. Keep authorization,
+retrieval fidelity, evidence sufficiency, latency, and cost in separate panels.
+
+### 8. Controller results
+
+Compare the adaptive policy with cost-matched low-effort, high-effort, exact, and abstention
+baselines. Report counterfactual action regret, calibration, fallback rate, and the security
+invariant.
+
+### 9. Drift and external transfer
+
+Show corpus, embedding, and policy drift separately. Failed transfer remains visible and limits the
+claim.
+
+### 10. Limitations
+
+Cover synthetic policies, effective corpus-level sample size, backend specificity, timing
+sensitivity, authorization-oracle assumptions, evaluator error, and the limits of zero observed
+violations.
+
+## Planned figures
+
+1. Authorization-first two-plane architecture.
+2. Query geometry under aligned and fragmented policy subsets.
+3. Failure probability by LID and allow-rate strata.
+4. Action frontier: authorized recall, p95 latency, and exact-fallback rate.
+5. Controller regret against the per-query oracle.
+6. Corpus, embedding, and policy drift trajectories.
+7. Fractal-feature ablation and calibration.
+8. Security and evidence-policy outcome matrix.
+
+## Release rule
+
+The benchmark, protocol, action matrix, drift traces, and negative results are released even when
+the geometric or controller hypotheses fail. The title and abstract change according to the gates;
+the data do not change according to the preferred story.

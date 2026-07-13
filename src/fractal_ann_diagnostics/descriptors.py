@@ -13,6 +13,7 @@ References
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -29,6 +30,57 @@ class DescriptorPanel:
     hubness_skew: float
     ambient_dimension: int
     n_points: int
+    lid_scale_instability: float = float("nan")
+    metric: str = "euclidean"
+
+
+def _validate_vectors(vectors: np.ndarray, *, minimum: int = 4) -> np.ndarray:
+    matrix = np.asarray(vectors, dtype=np.float64)
+    if matrix.ndim != 2:
+        raise ValueError("vectors must have shape (n_points, dimension)")
+    if len(matrix) < minimum:
+        raise ValueError(f"at least {minimum} vectors are required")
+    if not np.all(np.isfinite(matrix)):
+        raise ValueError("vectors contain non-finite values")
+    return matrix
+
+
+def _sample_pair_distances(
+    vectors: np.ndarray,
+    *,
+    metric: str,
+    max_pairs: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Sample unordered pairs without allocating an (n, n, d) tensor."""
+    n = len(vectors)
+    total_pairs = n * (n - 1) // 2
+    count = min(max_pairs, total_pairs)
+    if count == total_pairs and n <= 1200:
+        from scipy.spatial.distance import pdist
+
+        sklearn_metric = "cosine" if metric == "cosine" else "euclidean"
+        return pdist(vectors, metric=sklearn_metric)
+
+    left = rng.integers(0, n, size=count * 2)
+    right = rng.integers(0, n, size=count * 2)
+    valid = left != right
+    left, right = left[valid][:count], right[valid][:count]
+    while len(left) < count:
+        extra_left = rng.integers(0, n, size=count - len(left))
+        extra_right = rng.integers(0, n, size=count - len(left))
+        valid = extra_left != extra_right
+        left = np.concatenate([left, extra_left[valid]])[:count]
+        right = np.concatenate([right, extra_right[valid]])[:count]
+
+    if metric == "euclidean":
+        delta = vectors[left] - vectors[right]
+        return np.sqrt(np.einsum("ij,ij->i", delta, delta))
+    if metric == "cosine":
+        a, b = vectors[left], vectors[right]
+        denominator = np.clip(np.linalg.norm(a, axis=1) * np.linalg.norm(b, axis=1), 1e-12, None)
+        return 1.0 - np.einsum("ij,ij->i", a, b) / denominator
+    raise ValueError(f"unsupported metric: {metric!r}")
 
 
 def correlation_dimension(
@@ -36,6 +88,8 @@ def correlation_dimension(
     n_scales: int = 16,
     sample_size: int | None = 2000,
     rng: np.random.Generator | None = None,
+    metric: str = "euclidean",
+    max_pairs: int = 250_000,
 ) -> float:
     """Grassberger-Procaccia correlation dimension D₂.
 
@@ -59,25 +113,25 @@ def correlation_dimension(
         Estimated D₂. In low-noise self-similar data, this is the slope of
         log C(r) vs log r in the linear scaling region.
     """
+    matrix = _validate_vectors(vectors)
+    if metric not in {"euclidean", "cosine"}:
+        raise ValueError("metric must be 'euclidean' or 'cosine'")
     if rng is None:
         rng = np.random.default_rng(0)
-    n = len(vectors)
+    n = len(matrix)
     if sample_size is not None and n > sample_size:
         idx = rng.choice(n, size=sample_size, replace=False)
-        x = vectors[idx]
+        x = matrix[idx]
     else:
-        x = vectors
+        x = matrix
 
-    # Pairwise distances (upper triangle only)
-    n_eff = len(x)
-    diffs = x[:, None, :] - x[None, :, :]
-    dists = np.sqrt(np.sum(diffs**2, axis=-1))
-    iu = np.triu_indices(n_eff, k=1)
-    pair_dists = dists[iu]
+    pair_dists = _sample_pair_distances(x, metric=metric, max_pairs=max_pairs, rng=rng)
     pair_dists = pair_dists[pair_dists > 0]
 
     r_min = np.quantile(pair_dists, 0.02)
     r_max = np.quantile(pair_dists, 0.5)
+    if not np.isfinite(r_min) or not np.isfinite(r_max) or r_min <= 0 or r_max <= r_min:
+        return float("nan")
     r_grid = np.geomspace(r_min, r_max, n_scales)
 
     c_of_r = np.array([(pair_dists < r).mean() for r in r_grid])
@@ -96,6 +150,7 @@ def lid_mle(
     k: int = 100,
     sample_size: int | None = 2000,
     rng: np.random.Generator | None = None,
+    metric: str = "euclidean",
 ) -> np.ndarray:
     """MLE estimator of local intrinsic dimensionality (Amsaleg et al., 2015).
 
@@ -118,17 +173,21 @@ def lid_mle(
     -------
     ndarray of LID estimates, one per (subsampled) point.
     """
+    matrix = _validate_vectors(vectors)
+    if metric not in {"euclidean", "cosine"}:
+        raise ValueError("metric must be 'euclidean' or 'cosine'")
     if rng is None:
         rng = np.random.default_rng(0)
-    n = len(vectors)
+    n = len(matrix)
     if sample_size is not None and n > sample_size:
         idx = rng.choice(n, size=sample_size, replace=False)
-        query = vectors[idx]
+        query = matrix[idx]
     else:
-        query = vectors
+        query = matrix
 
-    knn = NearestNeighbors(n_neighbors=k + 1).fit(vectors)
-    dists, _ = knn.kneighbors(query, n_neighbors=k + 1)
+    use_k = min(k, n - 1)
+    knn = NearestNeighbors(n_neighbors=use_k + 1, metric=metric, algorithm="brute").fit(matrix)
+    dists, _ = knn.kneighbors(query, n_neighbors=use_k + 1)
     # Drop the self-distance at column 0
     dists = dists[:, 1:]
     d_k = dists[:, -1:]
@@ -144,15 +203,7 @@ def multifractal_width(
     sample_size: int | None = 2000,
     rng: np.random.Generator | None = None,
 ) -> float:
-    """Width of the multifractal singularity spectrum on all-pairs distances.
-
-    The descriptor is α_max − α_min of the singularity spectrum produced by
-    Multifractal Detrended Fluctuation Analysis (MFDFA; Kantelhardt et al.,
-    2002) on the sequence of upper-triangular pairwise Euclidean distances
-    treated as a one-dimensional series. Width near zero indicates monofractal
-    behaviour (single global scaling); wide spectra indicate multifractality
-    (a mixture of local dimensions, often a sign that the dataset has
-    heterogeneous LID).
+    """Retired non-invariant descriptor, retained only for API compatibility.
 
     Parameters
     ----------
@@ -171,8 +222,8 @@ def multifractal_width(
     Returns
     -------
     float
-        α_max − α_min. NaN if the underlying MFDFA fit is degenerate
-        (e.g. constant distance series, too few points).
+        Always NaN. Row permutations changed the old estimate even though the
+        point cloud was unchanged. Use ``multiscale_lid_dispersion`` instead.
 
     References
     ----------
@@ -180,52 +231,14 @@ def multifractal_width(
     Bunde, A., Stanley, H. E. (2002). Multifractal detrended fluctuation
     analysis of nonstationary time series. Physica A, 316(1-4), 87–114.
     """
-    from MFDFA import MFDFA
-    from MFDFA.singspect import singularity_spectrum
-
-    if rng is None:
-        rng = np.random.default_rng(0)
-    n = len(vectors)
-    if sample_size is not None and n > sample_size:
-        idx = rng.choice(n, size=sample_size, replace=False)
-        x = vectors[idx]
-    else:
-        x = vectors
-
-    n_eff = len(x)
-    diffs = x[:, None, :] - x[None, :, :]
-    dists = np.sqrt(np.sum(diffs**2, axis=-1))
-    iu = np.triu_indices(n_eff, k=1)
-    series = dists[iu].astype(np.float64)
-    series = series[np.isfinite(series)]
-    if series.size < 64 or float(series.std()) == 0.0:
-        return float("nan")
-
-    # Centre the series; MFDFA integrates internally via cumsum.
-    series = series - series.mean()
-
-    # Lag grid: geometric, bounded by [4, len(series) // 4] per MFDFA guidance.
-    lag_lo = 4
-    lag_hi = max(lag_lo + 1, series.size // 4)
-    lag = np.unique(np.geomspace(lag_lo, lag_hi, num=24).astype(int))
-    lag = lag[lag >= lag_lo]
-    if lag.size < 4:
-        return float("nan")
-
-    q = np.linspace(q_range[0], q_range[1], n_q)
-    q = q[np.abs(q) > 1e-8]  # MFDFA drops q == 0
-
-    try:
-        _, fluct = MFDFA(series, lag=lag, q=q, order=1)
-        alpha, _ = singularity_spectrum(lag, fluct, q=q, lim=[None, None])
-    except Exception:
-        return float("nan")
-
-    alpha = np.asarray(alpha, dtype=float)
-    alpha = alpha[np.isfinite(alpha)]
-    if alpha.size < 2:
-        return float("nan")
-    return float(alpha.max() - alpha.min())
+    del vectors, q_range, n_q, sample_size, rng
+    warnings.warn(
+        "multifractal_width was retired in v0.2.0 because it is not permutation-invariant; "
+        "use geometry.multiscale_lid_dispersion",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return float("nan")
 
 
 def hubness(
@@ -233,6 +246,7 @@ def hubness(
     k: int = 10,
     sample_size: int | None = 2000,
     rng: np.random.Generator | None = None,
+    metric: str = "euclidean",
 ) -> float:
     """Hubness skewness (Radovanović et al., 2010).
 
@@ -256,18 +270,22 @@ def hubness(
     """
     from scipy.stats import skew
 
+    matrix = _validate_vectors(vectors)
+    if metric not in {"euclidean", "cosine"}:
+        raise ValueError("metric must be 'euclidean' or 'cosine'")
     if rng is None:
         rng = np.random.default_rng(0)
-    n = len(vectors)
+    n = len(matrix)
     if sample_size is not None and n > sample_size:
         idx = rng.choice(n, size=sample_size, replace=False)
-        x = vectors[idx]
+        x = matrix[idx]
     else:
-        x = vectors
+        x = matrix
 
     n_eff = len(x)
-    knn = NearestNeighbors(n_neighbors=k + 1).fit(x)
-    _, indices = knn.kneighbors(x, n_neighbors=k + 1)
+    use_k = min(k, n_eff - 1)
+    knn = NearestNeighbors(n_neighbors=use_k + 1, metric=metric, algorithm="brute").fit(x)
+    _, indices = knn.kneighbors(x, n_neighbors=use_k + 1)
     # Drop self at column 0
     neighbour_ids = indices[:, 1:].ravel()
     counts = np.bincount(neighbour_ids, minlength=n_eff)

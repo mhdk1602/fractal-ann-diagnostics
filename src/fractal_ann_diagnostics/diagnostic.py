@@ -1,10 +1,12 @@
-"""Diagnostic recommender — the public face of the package.
+"""Legacy v0.1 rule diagnostic.
 
 Given a vector dataset, compute the descriptor panel and return a
 recommendation among HNSW / IVF / flat-NSW / DiskANN with a predicted
 recall-degradation estimate.
 
-The v0.1.0 recommender is rule-based. Rule sources:
+This API is preserved for reproducibility. Its index recommendations and
+recall-drop values were never calibrated against measured backend outcomes;
+the v0.2 governance controller does not use them. Rule sources:
 
 - High-D2 -> flat-NSW: the Hub Highway Hypothesis (2024) argues that the
   HNSW hierarchy stops helping once intrinsic dimension is a substantial
@@ -38,8 +40,8 @@ from .descriptors import (
     correlation_dimension,
     hubness,
     lid_mle,
-    multifractal_width,
 )
+from .geometry import multiscale_lid_dispersion
 
 IndexChoice = Literal["hnsw", "ivf", "flat-nsw", "diskann"]
 Workload = Literal["recall@1", "recall@10", "recall@100"]
@@ -61,6 +63,7 @@ def compute_descriptors(
     sample_size: int = 2000,
     rng: np.random.Generator | None = None,
     skip_multifractal: bool = False,
+    metric: str = "euclidean",
 ) -> DescriptorPanel:
     """Compute the full descriptor panel from a vector dataset.
 
@@ -68,13 +71,15 @@ def compute_descriptors(
     reasons; the descriptors are intrinsic properties and converge in N.
     """
     n, d = vectors.shape
-    d2 = correlation_dimension(vectors, sample_size=sample_size, rng=rng)
-    lid = lid_mle(vectors, sample_size=sample_size, rng=rng)
-    hub = hubness(vectors, sample_size=sample_size, rng=rng)
-    if skip_multifractal:
-        mfw = float("nan")
-    else:
-        mfw = multifractal_width(vectors, sample_size=sample_size, rng=rng)
+    d2 = correlation_dimension(vectors, sample_size=sample_size, rng=rng, metric=metric)
+    lid = lid_mle(vectors, sample_size=sample_size, rng=rng, metric=metric)
+    hub = hubness(vectors, sample_size=sample_size, rng=rng, metric=metric)
+    mfw = float("nan")
+    instability = multiscale_lid_dispersion(
+        vectors,
+        metric=metric,
+        sample_size=min(sample_size, 256),
+    )
     return DescriptorPanel(
         correlation_dimension=d2,
         lid_distribution=lid,
@@ -82,6 +87,8 @@ def compute_descriptors(
         hubness_skew=hub,
         ambient_dimension=d,
         n_points=n,
+        lid_scale_instability=instability,
+        metric=metric,
     )
 
 
@@ -162,6 +169,7 @@ def diagnose(
     vectors: np.ndarray,
     workload: Workload = "recall@10",
     sample_size: int = 2000,
+    metric: str = "euclidean",
 ) -> DiagnosticResult:
     """Compute descriptors and recommend an index.
 
@@ -181,7 +189,7 @@ def diagnose(
         (fixed at 0.5 in v0.1.0 since the rules are uncalibrated), and a
         one-sentence ``rationale``.
     """
-    panel = compute_descriptors(vectors, sample_size=sample_size)
+    panel = compute_descriptors(vectors, sample_size=sample_size, metric=metric)
     index, drop, rationale = _recommend(panel)
     return DiagnosticResult(
         descriptors=panel,

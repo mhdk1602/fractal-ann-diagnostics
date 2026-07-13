@@ -1,4 +1,10 @@
-"""v0.1.x calibration on 4-5 ANN-benchmark datasets.
+"""Historical v0.1.x descriptor run on 4-5 ANN-benchmark datasets.
+
+This is preserved as a falsified precursor, not as a current experiment. The
+run used Euclidean descriptors for angular datasets, compared rules with a
+handwritten default rather than measured backend regret, and included a row-
+order-dependent MFDFA statistic. In v0.2, ``multifractal_width`` warns and
+returns ``NaN``. Re-running this file cannot recreate a valid v0.1 claim.
 
 Extends the v0.1.0 two-dataset run (MNIST, Fashion-MNIST) to the canonical
 ANN-benchmarks quartet plus an optional fifth:
@@ -9,14 +15,12 @@ ANN-benchmarks quartet plus an optional fifth:
   - sift-128-euclidean
   - nytimes-256-angular           (optional; skipped if it 403s or times out)
 
-For each dataset we:
+The historical procedure:
   1. Download via ``load_ann_benchmark`` into ``./data/ann_cache`` (the loader
      sets a custom User-Agent to get past Cloudflare).
   2. Subsample the train split to 5000 vectors (deterministic seed).
-  3. Compute the full descriptor panel including ``multifractal_width``. If a
-     single dataset's descriptor pass exceeds ``MFW_SAMPLE_BUDGET_SECONDS``,
-     we fall back to a 1500-point subsample for the multifractal step only;
-     the other descriptors stay at 5000.
+  3. Computed the former descriptor panel, including the now-retired
+     ``multifractal_width`` statistic.
   4. Run ``diagnose()`` and record the recommendation + predicted recall drop.
 
 The script then writes ``experiments/calibration-v0.1.0.md`` containing:
@@ -30,8 +34,7 @@ Run::
 
     python experiments/calibrate_v0_1_0.py
 
-This script does **not** modify the rule cascade. Threshold tweaks belong to
-v0.2.0.
+Use ``experiments/run_governance_pilot.py`` for the current executable study.
 """
 from __future__ import annotations
 
@@ -71,13 +74,9 @@ CACHE_DIR = Path("./data/ann_cache").resolve()
 OUTPUT_PATH = Path(__file__).resolve().parent / "calibration-v0.1.0.md"
 
 SAMPLE_SIZE = 5000           # subsample for the descriptor pass
-# correlation_dimension and multifractal_width both materialise an
-# (n, n, d) broadcast for the pairwise-distance step. At n=5000, d=784 that
-# is ~78 GB. We cap those two descriptors at D2_MFW_SAMPLE_SIZE to keep the
-# script runnable on a 32 GB workstation. lid_mle and hubness avoid the
-# broadcast (they use sklearn NearestNeighbors) and so run at the full
-# SAMPLE_SIZE. v0.2.0 should rewrite the pairwise computation in chunks so
-# this distinction goes away.
+# These values reproduce the historical sampling protocol. Correlation
+# dimension no longer allocates the former (n, n, d) broadcast, while the
+# retired multifractal function returns NaN.
 D2_MFW_SAMPLE_SIZE = 2000
 MFW_FALLBACK_SIZE = 1500     # further fallback if mfw exceeds the budget
 MFW_SAMPLE_BUDGET_SECONDS = 300.0  # 5 min per dataset before we shrink mfw
@@ -114,16 +113,7 @@ def _descriptors_with_mfw_timeout(
     mfw_budget_seconds: float,
     rng_seed: int,
 ) -> tuple[DescriptorPanel, dict[str, float]]:
-    """Compute the descriptor panel.
-
-    correlation_dimension and multifractal_width are computed at
-    ``d2_mfw_sample_size`` because they allocate an (n, n, d) broadcast that
-    blows up beyond ~2000 in 784 dim. lid_mle and hubness use kd-tree
-    neighbours and run at the full ``sample_size``.
-
-    If the multifractal step exceeds ``mfw_budget_seconds`` we redo only that
-    step at ``mfw_fallback_size``.
-    """
+    """Re-run the historical panel with the retired statistic recorded as NaN."""
     n, d = vectors.shape
     timings: dict[str, float] = {}
 
@@ -203,6 +193,10 @@ def _load_one(name: str) -> np.ndarray | None:
 
 
 def main() -> None:
+    print(
+        "[historical only] v0.1 used invalid metric and row-order assumptions; "
+        "use run_governance_pilot.py for current evidence."
+    )
     rows: list[dict[str, str]] = []
     panels: dict[str, DescriptorPanel] = {}
     recs: dict[str, str] = {}

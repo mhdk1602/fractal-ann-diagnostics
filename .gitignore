@@ -37,3 +37,14 @@ htmlcov/
 *.secret
 data/ann_cache/
 data/**/*.hdf5
+
+# Private corpora, derived embeddings, and binary indexes never enter Git.
+data/corpora/
+data/embeddings/
+data/indexes/
+*.faiss
+*.index
+
+# Compact pilot evidence is tracked; larger runs and fitted artifacts are local.
+artifacts/runs/
+artifacts/models/

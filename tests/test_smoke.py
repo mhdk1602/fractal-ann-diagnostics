@@ -1,4 +1,4 @@
-"""Smoke tests for the v0.1.1 working recommender (IVF rule tightened to n<5e4)."""
+"""Compatibility tests for the retired v0.1 rule diagnostic."""
 from __future__ import annotations
 
 import numpy as np
@@ -18,7 +18,7 @@ from fractal_ann_diagnostics.diagnostic import (
 
 
 def test_version_pinned() -> None:
-    assert __version__ == "0.1.1"
+    assert __version__ == "0.2.0"
 
 
 def test_correlation_dimension_on_uniform_2d() -> None:
@@ -57,21 +57,25 @@ def test_hubness_returns_finite_float() -> None:
     assert np.isfinite(skew_value)
 
 
-def test_multifractal_width_finite_on_random() -> None:
+def test_multifractal_width_is_retired() -> None:
+    import pytest
+
     rng = np.random.default_rng(5)
     vectors = rng.standard_normal((200, 8))
-    width = multifractal_width(vectors, sample_size=200, rng=rng)
-    # Should be a finite, non-negative float on well-behaved random data.
+    with pytest.warns(DeprecationWarning, match="not permutation-invariant"):
+        width = multifractal_width(vectors, sample_size=200, rng=rng)
     assert isinstance(width, float)
-    assert np.isfinite(width)
-    assert width >= 0.0
+    assert np.isnan(width)
 
 
 def test_multifractal_width_handles_degenerate_input() -> None:
+    import pytest
+
     # A handful of identical points produces a constant distance series and
     # should yield NaN rather than crash.
     vectors = np.ones((10, 4))
-    width = multifractal_width(vectors, sample_size=10)
+    with pytest.warns(DeprecationWarning):
+        width = multifractal_width(vectors, sample_size=10)
     assert np.isnan(width)
 
 
@@ -85,6 +89,7 @@ def test_compute_descriptors_returns_panel() -> None:
     assert panel.lid_distribution.shape == (200,)
     # multifractal_width is now wired up; should be a finite float or NaN.
     assert isinstance(panel.multifractal_width, float)
+    assert np.isfinite(panel.lid_scale_instability)
 
 
 def test_diagnose_returns_recommended_index() -> None:
