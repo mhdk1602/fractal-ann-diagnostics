@@ -1,265 +1,418 @@
 <p align="center">
-  <img src="assets/readme/ann-diagnostics-hero.svg" alt="FractalGuard authorization-first retrieval control plane" width="100%">
+  <img src="https://raw.githubusercontent.com/mhdk1602/fractal-ann-diagnostics/master/assets/readme/ann-diagnostics-hero.svg" alt="FractalGuard authorization-first retrieval control plane" width="100%">
 </p>
 
 <h1 align="center">FractalGuard RAG</h1>
 
 <p align="center">
-  <strong>Authorization defines the evidence universe. Geometry decides how hard to search it.</strong>
+  <strong>Authorization defines the searchable universe. Multiscale geometry prices the effort required inside it.</strong>
 </p>
 
 <p align="center">
-  <img alt="Status v0.2 development pilot" src="https://img.shields.io/badge/status-v0.2_development_pilot-ffb454?style=for-the-badge">
+  <img alt="Status v0.3 draft confirmatory protocol" src="https://img.shields.io/badge/status-v0.3_draft_protocol-55d6be?style=for-the-badge">
   <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/python-3.10_--_3.14-3776ab?style=for-the-badge&logo=python&logoColor=white">
   <a href="https://github.com/mhdk1602/fractal-ann-diagnostics/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/mhdk1602/fractal-ann-diagnostics/ci.yml?branch=master&style=for-the-badge&label=tests"></a>
   <a href="https://orcid.org/0009-0003-1036-9477"><img alt="ORCID" src="https://img.shields.io/badge/ORCID-0009--0003--1036--9477-A6CE39?style=for-the-badge&logo=orcid&logoColor=white"></a>
-  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-55d6be?style=for-the-badge">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-667788?style=for-the-badge">
 </p>
 
 <p align="center">
-  <a href="#the-research-question">Question</a> ·
-  <a href="#the-security-contract">Security contract</a> ·
-  <a href="#working-reference-system">Run it</a> ·
-  <a href="#evidence-and-claim-boundaries">Evidence</a> ·
-  <a href="research/preregistration.md">Protocol</a> ·
-  <a href="research/literature.md">Sources</a>
+  <a href="#the-question">Question</a> ·
+  <a href="#security-contract">Security</a> ·
+  <a href="#the-line-between-a-pilot-and-a-finding">Confirmation</a> ·
+  <a href="#run-the-reference-path">Run it</a> ·
+  <a href="https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/preregistration.md">Draft protocol</a> ·
+  <a href="https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/study-manifest.json">Study lock</a>
 </p>
 
-## The research question
+## The question
 
-Can query-local intrinsic geometry predict failure in policy-constrained approximate retrieval,
-and can an adaptive controller meet an authorized-evidence target more cheaply than a cost-matched
-static search policy?
+Can query-local multiscale geometry add held-out predictive information about an intent-to-treat
+low-effort action-failure outcome beyond system, policy, and probe-telemetry variables? If it can,
+can a frozen controller reduce the equal-corpus mean of family-level relative end-to-end request
+latency without materially reducing authorized retrieval target attainment or complete-evidence
+sufficiency?
 
-This is the AI-governance pivot of the former ANN index recommender. The original project tried to
-choose HNSW, IVF, flat NSW, or DiskANN once from global dataset descriptors. That premise was not
-supported: no backend recall had been measured, the rules agreed with an HNSW default on only three
-of five datasets, angular corpora were measured with Euclidean geometry, and the MFDFA feature was
-not invariant to row order.
+The low-effort action fails when `hnsw-low` does not complete or when a completed action has
+authorized recall below 0.90. This is a service-and-retrieval composite, not a pure ANN-recall label.
+An empty authorized universe remains a valid governed no-result service outcome and is not excluded.
 
-Version 0.2 changes the decision. Fractal and multiscale measurements are now candidate risk signals
-for a live retrieval controller. The observable outcome is exact authorized recall, evidence
-sufficiency, abstention, latency, and policy compliance under corpus, embedding, and authorization
-drift.
+That is the v0.3 confirmatory question to be registered. It is narrower than “safe RAG.” The
+primary study ends at the controlled retrieval boundary. It does not test answer correctness,
+entailment, faithfulness, or prompt-based extraction.
 
-> **Current status:** the authorization plane, exact oracle, HNSW path, query-local geometry,
-> counterfactual action replay, rule controller, tests, and synthetic development pilot work. The
-> confirmatory corpus study has not run. No paper hypothesis is reported as established.
+> **Scientific status:** the apparatus, closed protocol schema, real-corpus adapters, label
+> separation, request-bound policy path, frozen model specifications, family-clustered inference,
+> an event-yield sensitivity simulator, fresh pre-run artifact admission, detached action-panel
+> provenance, and single-attempt result custody are implemented. The manifest is still a draft, no
+> external preregistration has been deposited, and the five-corpus sealed study has not run. The repository
+> contains no confirmatory finding yet.
 
-## The security contract
+## Security contract
 
 <p align="center">
-  <img src="assets/readme/governance-control-loop.svg" alt="Authorization-first retrieval and evidence control loop" width="100%">
+  <img src="https://raw.githubusercontent.com/mhdk1602/fractal-ann-diagnostics/master/assets/readme/governance-control-loop.svg" alt="Request-bound authorization-first retrieval loop" width="100%">
 </p>
 
-The controller cannot grant access.
+The controller cannot grant access. The governed path enforces this order:
 
-1. A live deterministic policy decision creates the authorized document universe.
-2. Query-local geometry is computed only inside that universe.
-3. The controller selects low-effort HNSW, widened HNSW, exact authorized scan, or abstention.
-4. A deterministic evidence gate decides whether generation may proceed.
-5. Policy version, geometry, action, evidence IDs, fallback reason, and violations enter the audit
-   record.
+1. The policy decision point receives subject, action, finite environment data, and the exact
+   document-universe digest.
+2. A fresh nonce and request digest bind the response to that call and to a pinned policy-bundle
+   revision. The built-in remote OPA transport requires HTTPS plus a bearer credential,
+   and it rejects redirects.
+3. Exact and HNSW indexes are built from authorized vector rows only.
+4. A bounded HNSW probe supplies LID at k=50, cross-scale LID variation, relative contrast, and
+   radius expansion. Probe latency and work are system telemetry, not geometry.
+5. The frozen controller selects `hnsw-low`, `hnsw-high`, `exact-authorized`, or `abstain`.
+6. A second fresh policy decision rechecks every returned ID immediately before emission.
 
-Unknown identity, unavailable policy service, version mismatch, empty grant, or failed evidence
-gate produces abstention. The reference HNSW index is physically built over authorized vectors, so
-a denied vector cannot enter a learned component by construction.
+Unknown identity, malformed policy data, replay, policy outage, version drift, corpus mismatch,
+empty grant, or final-mask change yields abstention. Exact and HNSW access remain inside the same
+authorized slice.
 
-This ordering follows
-[Authorization-First Retrieval](https://aclanthology.org/2026.trustnlp-main.15.pdf),
-[NIST SP 800-162 ABAC](https://doi.org/10.6028/NIST.SP.800-162), and
-[NIST Zero Trust Architecture](https://doi.org/10.6028/NIST.SP.800-207). The exact threat model is
-in [`research/threat-model.md`](research/threat-model.md).
+Authorization is point-of-emission. A downstream process that retains an ID or document after a
+later revocation must reauthorize at its own disclosure boundary. See the full
+[threat model](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/threat-model.md).
 
-## Working reference system
+The boundary follows the retrieval ordering in
+[Authorization-First Retrieval](https://aclanthology.org/2026.trustnlp-main.15/), the attribute
+model in [NIST SP 800-162](https://doi.org/10.6028/NIST.SP.800-162), and the resource-access rule in
+[NIST SP 800-207](https://doi.org/10.6028/NIST.SP.800-207). The
+[evidence ledger](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/literature.md)
+records what each source supports and where it stops.
 
-Install the package and measured HNSW backend:
+## The line between a pilot and a finding
+
+| Evidence level | What exists now | What it can support |
+|---|---|---|
+| Synthetic mechanism check | Fixed-seed mixtures, policy scrambling, embedding drift, every pilot search strategy replayed | Code-path behavior and accounting checks |
+| Engineering conformance | Authorized-only indexes, fresh final authorization, OPA behavior tests, artifact hashing, label isolation, audit chain | A testable security and execution contract |
+| Draft confirmatory protocol | Closed schema, draft manifest, action set, estimands, receipt types, and explicit freeze blockers | Prospective design only; it cannot authorize sealed access |
+| Externally registered frozen protocol | Not yet created | A confirmatory study only after every `tbd` is resolved, the artifacts are admitted, and the frozen digest is independently registered |
+| Confirmatory evidence | Not run | Only the untouched sealed run can produce this |
+
+The draft manifest deliberately fails frozen validation. It records the unresolved work rather than
+hiding it:
+
+- acquire and hash the five fixed corpus inputs, separately held labels, and corpus-specific policy
+  workloads;
+- pin development-fit and calibration data, the connected query-partition audit with exact and
+  near-duplicate edges, and the power report;
+- pin the embedding, backends, OPA bundle, controller, comparator, fitted models, and analysis
+  runner;
+- estimate nuisance parameters on development data, run the event-yield sensitivity grid and the
+  endpoint-specific joint-gate simulation, then lock the maximum required family count;
+- provision a custodian, a distinct online runner, fixed hardware, a digest-pinned image, and an
+  externally administered result anchor;
+- change status to `frozen`, write the manifest digest lock, then open the sealed run once.
+
+This is the practical answer to “how do synthetic mechanism results become confirmatory?” The code
+must stop changing before the labels become visible, and the result must be allowed to fail every
+prespecified gate.
+
+## Prespecified claim and gates
+
+The exact primary claim lives in both
+[`study.py`](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/src/fractal_ann_diagnostics/study.py)
+and the
+[`study manifest`](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/study-manifest.json).
+Validation rejects textual drift between them.
+
+H1 is a descriptive orientation diagnostic: it asks whether the frozen model assigns greater risk
+to the frozen high-geometry profile than to the low-geometry profile. It does not use sealed labels
+and has no role in primary success. The primary claim is the H2 and H3 intersection:
+
+- the H2 equal-corpus directional lower bounds for log-loss reduction, Brier-score reduction, and
+  AUPRC gain for `full` over `system-policy` each exceed their frozen thresholds, and the
+  corpus-specific point rule passes on at least four of five corpora. `system-policy` includes probe
+  latency and work; `full` adds only LID at k=50, LID-CV, relative contrast, and radius expansion;
+- the lower directional 95% family-bootstrap bound for the equal-corpus mean of family-level
+  relative end-to-end request-latency reductions exceeds 10%;
+- retrieval target attainment is noninferior within one percentage point;
+- complete-evidence sufficiency is noninferior within one percentage point on SciFact, HotpotQA
+  FullWiki, and T2-RAGBench;
+- the upper directional 95% bound for the equal-corpus mean of within-corpus proposed-to-comparator
+  p95 ratios of family-mean end-to-end request latency is below 1.25;
+- emitted entitlement violations equal zero, accompanied by a family-level exact upper bound.
+
+All five corpora use exact authorized top-k as the primary ANN-fidelity reference. BRIGHT and the
+fixed MIRACL transfer slice also supply relevance judgments for secondary IR reporting, but they do
+not supply complete evidence bundles and therefore do not enter the complete-evidence gate.
+
+## Run the reference path
+
+Install the measured HNSW backend and development dependencies:
 
 ```bash
 python -m pip install -e '.[hnsw,dev]'
 ```
 
-Create a policy and query the governed path:
+Query an immutable policy snapshot:
 
 ```python
 import numpy as np
 
-from fractal_ann_diagnostics import AuthorizationPolicy, GovernedRetriever
+from fractal_ann_diagnostics import (
+    AuthorizationPolicy,
+    GovernedRetriever,
+    policy_document_universe_sha256,
+)
 
 rng = np.random.default_rng(7)
 vectors = rng.normal(size=(1_000, 64)).astype("float32")
 
-# A production adapter would obtain these decisions from live IAM.
 visibility = np.zeros((2, len(vectors)), dtype=bool)
 visibility[0, :600] = True
 visibility[1, 400:] = True
+
+document_universe_sha256 = policy_document_universe_sha256(
+    f"synthetic-document-{document_id}|embedding-seed-7"
+    for document_id in range(len(vectors))
+)
+
 policy = AuthorizationPolicy(
     roles=("analyst", "reviewer"),
     visibility=visibility,
     version="iam-2026-07-13.4",
+    document_universe_sha256=document_universe_sha256,
 )
 
-retriever = GovernedRetriever(vectors, policy, role="analyst")
+retriever = GovernedRetriever(
+    vectors,
+    policy,
+    role="analyst",
+    expected_document_universe_sha256=document_universe_sha256,
+)
 result = retriever.query(
     vectors[17],
     k=10,
     expected_policy_version="iam-2026-07-13.4",
+    environment={"tenant": "research"},
 )
 
 print(result.decision.action)
-print(result.decision.risk_score)       # transparent development score, not a probability
-print(result.search.ids)                # every ID is authorized for analyst
-print(result.search.unauthorized_context)  # always 0 on governed paths
+print(result.search.ids if result.search is not None else "abstain")
+print(result.total_online_latency_ms)
 ```
 
-Run the frozen synthetic development pilot:
+For a live OPA decision point, query the bundled Rego rule through the OPA Data API and use
+`OpenPolicyAgentDecisionPoint`. Its constructor requires the ordered document-universe digest and
+the expected policy-bundle revision. The adapter denies malformed, stale, oversized, redirected,
+unbound, or unavailable responses.
+
+Run the synthetic development pilot:
 
 ```bash
 fractal-retrieval-governance pilot --output artifacts/pilot
 ```
 
-The command writes one row for every query-action counterfactual, aggregate metrics, execution
-metadata, and a compact report. The unsafe global comparator is isolated from the public governed
-API and exists to verify that violation accounting fires.
+Validate the draft protocol and print its canonical digest:
 
-### Development pilot snapshot
+```bash
+fractal-retrieval-governance validate-study \
+  --manifest research/study-manifest.json
 
-The fixed-seed run contains 240 query-policy trials and 960 replayed action outcomes. Across the
-720 governed action replays, no denied document reached context. The unsafe global comparator
-exposed 586 denied chunks in 80 scrambled-policy queries, which confirms that the accounting path
-detects a real breach rather than returning a constant zero.
+fractal-retrieval-governance study-digest \
+  --manifest research/study-manifest.json
+```
 
-The development controller kept all 80 aligned queries on low-effort HNSW. Under embedding drift,
-it widened 56 queries and left 24 at low effort; under policy scrambling, it widened 78 and sent 2
-to exact search. These are mechanism checks on synthetic mixtures. They neither establish external
-validity nor pass the registered controller gate.
+`--require-frozen` must fail while blockers remain. Once a reviewed frozen manifest has been
+registered in an independently administered registry, the pinned runner verifies that
+registration, the manifest lock, and every local artifact before it can open the digest-derived
+run receipt:
 
-Inspect the [compact report](artifacts/pilot/REPORT.md),
-[aggregate JSON](artifacts/pilot/summary.json), or
-[query-action records](artifacts/pilot/trials.csv). The report labels `efSearch` as an effort proxy;
-it is not a count of distance evaluations.
+```bash
+fractal-retrieval-governance verify-study-artifacts \
+  --manifest /approved/study-manifest.json \
+  --artifact-root /approved/artifacts \
+  --artifact-map /approved/artifact-map.json \
+  --receipt /approved/artifact-verification.json
+
+fractal-retrieval-governance begin-sealed-run \
+  --manifest /approved/study-manifest.json \
+  --lock /approved/study-manifest.sha256 \
+  --artifact-verification-receipt /approved/artifact-verification.json \
+  --artifact-root /approved/artifacts \
+  --artifact-map /approved/artifact-map.json \
+  --protocol-registration-receipt /approved/protocol-registration.json \
+  --protocol-registration-record /approved/protocol-registration-record.json \
+  --runner-identity github-actions:environment:confirmatory
+```
+
+Receipt parents must already exist and contain no symlink in their paths. The local map cannot
+override a manifest digest. The production `begin-sealed-run` command requires the artifact root and
+map again. It rereads every local artifact immediately before opening and requires the fresh
+verification receipt bytes to equal the previously admitted receipt. A stored verification receipt
+alone cannot authorize the run.
+
+The registration receipt identifies the external HTTPS record containing the exact frozen-manifest
+digest and binds a byte-exact local copy of that registry record. Both local files must be canonical
+JSON followed by one newline. The run receipt records both prerequisite receipt digests and URIs,
+and the command refuses a second opening.
+
+Immediately before opening the run, the CLI performs one fresh certificate-validated HTTPS fetch
+of the receipt's registry URI. It refuses redirects, a changed response URL, non-200 responses, and
+records larger than 64 KiB. The fetched digest and bytes must exactly match the secure local
+canonical record and its receipt. This admission preflight occurs before the runner enters the
+network-disabled sealed execution environment. It verifies prospective public availability, not
+who controls the registry; an independent reviewer must still establish registry ownership and
+preserve the registration evidence.
+
+After prediction anchoring and offline label admission, the sealed scorer calls
+`run_confirmatory_analysis_once`, not the repeatable analysis core. The built-in path accepts only a
+canonical local `file:` results directory. It first creates a manifest-derived analysis-attempt
+receipt with exclusive `O_EXCL` semantics, before the H1 orientation diagnostic or H2–H3
+confirmatory-gate computation. That receipt binds
+the manifest, run receipt, joined-input digest, model-suite digest, runner identity, and intended
+result URI. A prior attempt blocks computation. A failed process leaves the attempt receipt in
+place. After a result is computed, a detached result receipt binds its digest to the admitted
+attempt and is created before the canonical result file. All three paths are derived from the
+manifest digest; none is selected by the caller.
 
 ## What is implemented
 
-| Capability | State | Evidence |
+| Contract | Implementation | Adversarial check |
 |---|---|---|
-| Versioned role authorization masks | Working | Policy, unknown-role, immutability, and churn tests |
-| Exact authorized top-k | Working | Masked metric-aware oracle |
-| Authorization-first HNSW | Working | Real `hnswlib` backend over the permitted subset |
-| Euclidean and cosine retrieval | Working | Metric-conformance tests; angular corpora no longer use Euclidean geometry |
-| Query LID and cross-scale instability | Working | Computed after authorization; denied-vector perturbation test |
-| Relative contrast and radius expansion | Working | Query-local authorized-universe features |
-| Fail-closed rule controller | Working | Low/high HNSW, exact scan, policy failure, version mismatch, abstention |
-| Counterfactual action matrix | Working | Every action replayed against exact authorized truth |
-| MFDFA distance-sequence feature | Retired | Row permutation changed its value; API returns `NaN` with a warning |
-| Multi-corpus confirmatory study | Registered | Not yet run |
-| Learned cost-sensitive controller | Planned | Requires sealed calibration split |
-| Answer faithfulness and extraction evaluation | Planned | Requires annotated evidence and model stage |
+| Request-bound authorization | In-memory PDP and HTTPS OPA adapter | wrong subject/action/environment/corpus, stale nonce, outage, malformed response |
+| Strict read boundary | Authorized-only exact and HNSW indexes | denied-row access trap and paired-world perturbation |
+| Bounded online geometry | HNSW probe at prespecified scales | finite telemetry, fixed `probe_k`, no offline exact scan in serving path |
+| Measured request cost | authorization, refresh, probe, feature, controller, selected search, wall time | non-overlap and total-time checks |
+| Evidence truth | alternative complete bundles with URI, locator, and content hash | wrong query, wrong source, stale hash, partial route, unretrieved evidence |
+| Corpus normalization | SciFact, separate-corpus HotpotQA FullWiki, T2-RAGBench, qrels export for BRIGHT/MIRACL | candidate leakage, unknown IDs, bad locators, conflicting documents |
+| Label custody | opaque HMAC keys, disjoint online/label artifacts, canonical no-follow I/O, externally anchored action-panel and prediction completion | actual sealed-label bytes must match their manifest pins; joined label objects must equal those admitted payloads |
+| Action-panel admission | typed governed and failed outcomes plus a detached receipt for controller decisions, policy decisions, audit-chain position, failure timing, and query-partition binding | caller-supplied IDs, missing or duplicate actions, decision drift, audit mismatch, invented failure output |
+| Frozen modeling | four logistic specifications and prespecified LID×instability interaction | feature order, category drift, partition overlap, artifact digest |
+| Confirmatory inference | equal-corpus paired family bootstrap, exact zero-event bound, pre-compute attempt receipt, and detached result receipt | pair-key mismatch, single-family strata, repeated attempt, result or receipt substitution |
+| Design sensitivity | beta-binomial event-yield sensitivity plus a required endpoint-specific joint-gate simulation | deterministic grids, coverage checks, and a maximum required family count |
+| Study integrity | closed manifest, external protocol registration, exact artifact cardinalities, fresh local byte revalidation, no-follow traversal, and one-shot run receipt | extras, omissions, symlinks, hard links, post-verification mutation, wrong runner or manifest |
+| Audit | HMAC subject pseudonym, request bindings, component revisions, evidence hashes, chained records | tamper, reorder, delete, truncate, denied-evidence forgery |
 
-## Evidence and claim boundaries
+The audit chain and exclusive receipt need a trusted external head or write-once store. Local hashes
+cannot protect against an actor who can rewrite both the evidence and its anchor.
 
-The project sits after four bodies of work, not before them.
+## Corpus contract
 
-### Authorization already exists
+| Corpus | Prespecified use | Evidence status | Guardrail |
+|---|---|---|---|
+| SciFact | scientific claim retrieval | alternative rationale bundles | rationale sentence IDs must resolve against pinned abstracts |
+| HotpotQA FullWiki | multi-hop retrieval | one joint supporting-fact bundle | supplied per-question contexts are rejected for sealed retrieval |
+| T2-RAGBench | financial table-and-text retrieval | source-context bundle | repeated contexts are deduplicated by pinned context ID |
+| BRIGHT | difficult domain retrieval | qrels only | qrels never masquerade as complete evidence |
+| MIRACL transfer slice | multilingual transfer | qrels only | language, split, and source export must be pinned before freeze |
 
-[Permission-Aware RAG](https://doi.org/10.1109/ACCESS.2025.3628960) performs real-time IAM
-validation across heterogeneous resources. Authorization-First Retrieval formalizes the ordering
-invariant and reports leakage from retrieve-then-filter baselines. This project does not claim to be
-the first authorization-aware RAG system.
+Source-input bytes, canonical online-execution bytes, and label bytes occupy separate manifest
+roles for every corpus. The online artifact contains query text, documents, and opaque keys. It
+contains no source query IDs, family IDs, answers, relevance judgments, evidence bundles, or
+label-bearing metadata. Offline scoring joins predictions and labels only after an external anchor
+records a canonical prediction-completion receipt with the exact typed action-panel binding. The
+scorer loads the actual custody file through `load_sealed_label_artifact`; the analysis input then
+recomputes its canonical digest against the manifest pin and compares every joined label object with
+that admitted payload. A bare in-memory prediction object, reconstructed label object, or copied
+digest string cannot release labels into the primary analysis.
 
-### Filtered and adaptive ANN already exist
+## Statistical contract
 
-[Filtered-DiskANN](https://doi.org/10.1145/3543507.3583552) and
-[ACORN](https://doi.org/10.1145/3654923) search predicate-constrained graphs.
-[Global-Local Selectivity](https://arxiv.org/abs/2602.11443) measures vector-filter correlation,
-and [Ada-ef](https://doi.org/10.1145/3786639) assigns HNSW effort per query.
-[Fiber-Navigable Search](https://arxiv.org/abs/2604.00102) already connects local geometry to
-filtered-graph failure regimes.
+- The five corpora are fixed strata. The analysis makes a suite-conditional claim.
+- Query family is the independent resampling unit. Nested policies, actions, seeds, and drift rows
+  stay attached to their family.
+- Corpora receive equal weight. They are never bootstrap-resampled.
+- Proposed and comparator rows require exact pair-key agreement.
+- Primary intervals are directional one-sided 95% bounds. The two endpoints returned by the helper
+  are separate directional bounds, not a two-sided 95% interval.
+- The draft contract fixes 10,000 paired bootstrap replicates and base seed `20260713`.
+- `nested_rows_per_family` is a frozen trial-design cardinality for policy draws, seeds, drift rows,
+  or timing repeats. It is not a power-model parameter.
+- Relative request-latency reduction is computed within family before corpus aggregation.
+- The beta-binomial common-shock simulator measures low-effort action-success event yield only. It
+  does not establish 90% power for the H2+H3 conjunction.
+- Freeze requires a pinned endpoint-specific joint-gate simulation for H2 and every H3 gate. The
+  registered family count is the maximum requirement across those endpoints and the joint decision.
 
-The open test is their conjunction with deterministic IAM, exact authorized evidence truth,
-counterfactual controller evaluation, and drift.
-
-### Geometry is both diagnostic and adversarial
-
-LID and relative contrast distinguish ANN query difficulty
-([Aumüller and Ceccarello, 2021](https://doi.org/10.1016/j.is.2021.101807)); hubness describes skew
-in reverse-neighbor occurrence
-([Radovanović et al., 2010](https://jmlr.org/papers/v11/radovanovic10a.html)). Yet geometry can also
-aid RAG corpus reconstruction: [GeoEx](https://openreview.net/forum?id=x61zDYEZ91) treats embedding
-structure as an offensive signal.
-
-### Retrieval exposure reaches the model
-
-[Qi et al.](https://proceedings.iclr.cc/paper_files/paper/2025/file/79cafa874121a3435d8a54f454b646b4-Paper-Conference.pdf)
-extract private RAG material through prompt injection.
-[LeakDojo](https://doi.org/10.18653/v1/2026.findings-acl.287) shows that leakage changes across
-attacks, models, and datasets. The policy boundary must therefore precede the model; output
-filtering is too late.
-
-The full source-to-claim ledger is in [`research/literature.md`](research/literature.md).
-
-## Registered gates
-
-The word “fractal” remains in the eventual paper title only if geometry improves held-out log loss,
-Brier score, and AUPRC over a policy-and-system model across at least four of five sealed corpora.
-
-The adaptive-control claim requires a lower evidence-policy violation rate than the best
-cost-matched static action, with fixed coverage, compute, latency, and zero entitlement violations.
-Success must reproduce separately under corpus, embedding, and policy drift.
-
-If those gates fail, the release becomes a policy-aware retrieval benchmark and negative descriptor
-study. The [`preregistration`](research/preregistration.md) specifies the estimands, data tiers,
-actions, splits, uncertainty, ablations, and null interpretations before sealed evaluation.
+The [draft preregistration](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/preregistration.md)
+specifies the H1 orientation diagnostic,
+the H2–H3 primary gates, exclusions, gatekeeping, and null interpretations. The
+[execution protocol](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/confirmatory-execution.md)
+assigns the
+custodian, runner, and reviewer roles. Neither document is evidence that external registration has
+already occurred.
 
 ## Repository map
 
 ```text
 fractal-ann-diagnostics/
 ├── src/fractal_ann_diagnostics/
-│   ├── policy.py          # deterministic authorization and policy churn
-│   ├── retrieval.py       # exact, global HNSW, and authorization-first HNSW
-│   ├── geometry.py        # query LID, contrast, radius expansion, multiscale stability
-│   ├── controller.py      # fail-closed action selection
-│   ├── evaluation.py      # exact recall, evidence policy, counterfactual records
-│   ├── synthetic.py       # fixed geometry/policy/drift development scenarios
-│   ├── pilot.py           # replay and artifact generation
-│   ├── cli.py             # `fractal-retrieval-governance`
-│   ├── descriptors.py     # corrected legacy corpus descriptors
-│   └── diagnostic.py      # preserved, explicitly uncalibrated v0.1 API
+│   ├── policy.py                 # immutable policy decisions and request binding
+│   ├── policy_adapters.py        # fail-closed OPA Data API adapter
+│   ├── retrieval.py             # authorized exact/HNSW indexes and bounded probe
+│   ├── geometry.py              # multiscale query diagnostics
+│   ├── controller.py            # frozen action rule and final authorization
+│   ├── corpora.py               # evidence-aware corpus normalization
+│   ├── label_separation.py      # custodian split and post-receipt join
+│   ├── action_panel_admission.py  # governed result and audit admission
+│   ├── policy_workload.py       # label-independent authorization workload
+│   ├── partition_audit.py       # connected family and duplicate audit
+│   ├── evidence.py              # complete evidence bundles
+│   ├── evaluation.py            # trial outcomes and measured serving cost
+│   ├── confirmatory_analysis.py # anchored panel, H1 diagnostic, and H2–H3 gates
+│   ├── confirmatory_execution.py # one-attempt result and detached receipt custody
+│   ├── confirmatory_modeling.py # frozen H1/H2 specifications
+│   ├── confirmatory_stats.py    # family bootstrap, gates, and power simulation
+│   ├── artifact_integrity.py    # no-follow tree hashing and receipts
+│   ├── audit.py                 # privacy-minimized hash chain
+│   ├── drift.py                 # corpus, embedding, and policy revision checks
+│   └── study.py                 # closed manifest and one-shot sealed-run control
+├── examples/
+│   ├── opa_authorization.rego
+│   └── opa_authorization_test.rego
 ├── research/
+│   ├── study-manifest.json
 │   ├── preregistration.md
+│   ├── confirmatory-execution.md
 │   ├── threat-model.md
-│   ├── literature.md
-│   └── paper/outline.md
-├── experiments/
-│   └── run_governance_pilot.py
-├── artifacts/pilot/      # compact synthetic development evidence
+│   └── literature.md
+├── artifacts/pilot/             # synthetic development evidence only
 ├── tests/
 └── .github/workflows/ci.yml
 ```
 
-## Reproducibility
+## Scientific lineage
 
-- Python 3.10–3.14 is tested in CI.
-- Routine CI runs metric, policy, geometry, controller, backend, and pilot-smoke tests.
-- Large corpora, indexes, embeddings, traces, and model weights stay outside Git.
-- Confirmatory inputs will use versioned manifests, licenses, revisions, and SHA-256 hashes.
-- Every action is replayed for every trial, so controller regret is measured from observed outcomes.
-- Pilot results remain separate from sealed confirmation.
+The v0.1 project tried to recommend an ANN index from global descriptors. That result did not
+measure backend recall, mixed angular data with Euclidean geometry, and used an MFDFA statistic that
+changed under row permutation. The current compatibility function warns and returns `NaN`.
 
-## Integrity record
+v0.2 moved the experiment to query-local control inside an authorized universe. v0.3 adds the
+controls needed to test that idea without label access or protocol drift. The original negative
+result remains in Git because it explains why the research question changed.
 
-The v0.1 index-selection experiment remains in Git as a falsified precursor. Its 3/5 result compared
-handwritten rules with a handwritten practitioner default; it did not measure index-selection
-regret. The old MFDFA statistic is retained only as a deprecated API that returns `NaN`.
+The [evidence ledger](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/literature.md)
+states what each source may support and where its
+authority ends. The project sits after authorization-first retrieval, filtered ANN, adaptive
+`efSearch`, query-difficulty measurement, and RAG extraction research. The untested conjunction is
+the proposed contribution.
 
-That correction is part of the contribution. The project now has an observable policy outcome,
-exact counterfactual truth, and a place for a clean null result.
+## Reproducibility and release discipline
+
+- CI tests Python 3.10–3.14, builds and installs the wheel, validates the study manifest, verifies a
+  checksum-pinned OPA binary, and runs Rego behavior tests.
+- GitHub actions are pinned to immutable commit SHAs.
+- Large corpora, embeddings, indexes, model weights, private keys, and sealed outputs stay outside
+  Git.
+- Every frozen input, label set, normalizer, model, backend, policy workload, controller, runner,
+  image, development split, partition audit, power report, and source revision receives a manifest
+  role and digest.
+- Development, calibration, and sealed families cannot cross partitions.
+- A technical failure preserves its run, action-panel admission, analysis-attempt, detached-result,
+  and partial artifact evidence. A failed admitted analysis ends v0.3. Confirmatory reserve release
+  is forbidden; another attempt requires an amended protocol version and a new external registration.
 
 ## Citation and license
 
 Sole author: [mhdk1602](https://github.com/mhdk1602),
 [ORCID 0009-0003-1036-9477](https://orcid.org/0009-0003-1036-9477).
 
-Citation metadata is in [`CITATION.cff`](CITATION.cff). Code is released under the
-[`MIT License`](LICENSE).
+Citation metadata is in
+[`CITATION.cff`](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/CITATION.cff).
+Code is released under the
+[`MIT License`](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/LICENSE).

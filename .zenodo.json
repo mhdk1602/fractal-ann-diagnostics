@@ -1,6 +1,7 @@
 {
-  "title": "FractalGuard RAG: Authorization-first, geometry-aware retrieval governance",
-  "description": "A research implementation for authorization-filtered vector retrieval. Deterministic policy fixes the searchable document universe before query-local multiscale geometry selects search effort. The release includes exact authorized ground truth, HNSW counterfactual replay, fail-closed controls, drift scenarios, a preregistered evaluation protocol, and a synthetic pilot.",
+  "title": "FractalGuard RAG: Protocol apparatus for authorization-first retrieval governance",
+  "description": "Version 0.3.0 packages a draft confirmatory protocol and executable apparatus for a planned sealed study of authorization-first, geometry-aware vector retrieval. It includes policy-decision integration, physically authorized search, evidence scoring, corpus normalization, cluster-aware inference, frozen modeling contracts, drift controls, audit chaining, artifact verification, and custodian-separated labels. No external preregistration or sealed confirmatory run has occurred. Version 0.3.0 reports no confirmatory finding.",
+  "version": "0.3.0",
   "creators": [
     {
       "name": "mhdk1602",
@@ -15,7 +16,11 @@
     "retrieval-augmented-generation",
     "authorization",
     "filtered-vector-search",
-    "AI-governance"
+    "AI-governance",
+    "artifact-integrity",
+    "cluster-bootstrap",
+    "confirmatory-research",
+    "policy-as-code"
   ],
   "license": "MIT",
   "upload_type": "software",
@@ -26,11 +31,6 @@
       "identifier": "https://github.com/mhdk1602/fractal-ann-diagnostics",
       "relation": "isSupplementTo",
       "scheme": "url"
-    },
-    {
-      "identifier": "10.5281/zenodo.20188013",
-      "relation": "isPartOf",
-      "scheme": "doi"
     }
   ]
 }

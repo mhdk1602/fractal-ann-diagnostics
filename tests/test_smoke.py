@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
+import fractal_ann_diagnostics as fad
 from fractal_ann_diagnostics import __version__
 from fractal_ann_diagnostics.descriptors import (
     correlation_dimension,
@@ -18,7 +19,72 @@ from fractal_ann_diagnostics.diagnostic import (
 
 
 def test_version_pinned() -> None:
-    assert __version__ == "0.2.0"
+    assert __version__ == "0.3.0"
+
+
+def test_confirmatory_apparatus_is_public() -> None:
+    """Each v0.3 layer exposes a stable entry point without private helpers."""
+    representative_exports = {
+        "policy": (
+            "PolicyDecisionPoint",
+            "OpenPolicyAgentDecisionPoint",
+            "policy_request_sha256",
+        ),
+        "policy_workload": (
+            "PolicyWorkload",
+            "validate_policy_workload_suite",
+        ),
+        "controller": ("GovernedRetriever", "geometry_risk_score"),
+        "evidence": ("CompleteEvidenceBundle", "assess_evidence"),
+        "corpus": ("NormalizedCorpus", "normalize_scifact"),
+        "statistics": ("ClusterBootstrapResult", "paired_stratified_family_bootstrap"),
+        "study": (
+            "ProtocolRegistrationReceipt",
+            "SealedRunReceipt",
+            "begin_sealed_run",
+        ),
+        "audit": (
+            "AuditRecord",
+            "VerifiedProvenanceRegistry",
+            "verify_audit_chain",
+        ),
+        "artifact_integrity": ("LocalArtifactSpec", "verify_local_artifacts"),
+        "modeling": ("FrozenModelSuite", "evaluate_h2_by_corpus"),
+        "action_panel_admission": (
+            "FailedActionExecution",
+            "GovernedActionExecution",
+            "action_panel_from_governed_executions",
+        ),
+        "confirmatory_analysis": (
+            "ActionPanelArtifact",
+            "ActionPanelAdmissionReceipt",
+            "ConfirmatoryAnalysisConfig",
+            "ConfirmatoryInputArtifact",
+            "ConfirmatoryResultArtifact",
+            "run_confirmatory_analysis_once",
+        ),
+        "drift": ("CorpusSnapshotDiff", "diff_corpus_snapshots"),
+        "label_separation": (
+            "CustodianSplit",
+            "PredictionCompletionReceipt",
+            "join_predictions_after_receipt",
+        ),
+        "partition_audit": (
+            "QueryFamilyPartitionAudit",
+            "FROZEN_QUERY_PARTITION_CONFIG_SHA256",
+            "audit_query_partitions",
+        ),
+    }
+
+    exported = set(fad.__all__)
+    assert len(exported) == len(fad.__all__)
+    assert not any(name.startswith("_") for name in exported)
+    for layer_exports in representative_exports.values():
+        for name in layer_exports:
+            assert name in exported
+            assert hasattr(fad, name)
+    for name in exported:
+        assert hasattr(fad, name)
 
 
 def test_correlation_dimension_on_uniform_2d() -> None:

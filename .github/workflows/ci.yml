@@ -12,30 +12,186 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.12", "3.14"]
+  lint:
+    name: Ruff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
+          python-version: "3.14"
 
-      - name: Install package and test dependencies
-        run: python -m pip install --upgrade pip ".[hnsw,dev]"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Verify lockfile matches project metadata
+        run: uv lock --check
+
+      - name: Sync the hash-locked lint environment
+        run: uv sync --frozen --extra dev --no-install-project
 
       - name: Lint
-        run: ruff check .
+        run: uv run --frozen --extra dev --no-sync ruff check .
 
-      - name: Test
-        run: pytest -q
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      PYTHON_VERSION: ${{ matrix.python-version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync the hash-locked environment
+        run: >-
+          uv sync --frozen --extra hnsw --extra dev
+          --no-install-project
+          --python "${PYTHON_VERSION}"
+
+      - name: Run full test suite
+        run: >-
+          uv run --frozen --extra hnsw --extra dev
+          --no-sync
+          --python "${PYTHON_VERSION}"
+          pytest -q
+
+  package:
+    name: Build and install package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync the hash-locked build environment
+        run: uv sync --frozen --extra dev --no-install-project
+
+      - name: Build source and wheel distributions
+        run: >-
+          uv run --frozen --extra dev --no-sync
+          python -m hatchling build
+
+      - name: Install wheel in a clean environment
+        run: |
+          python -m venv "${RUNNER_TEMP}/package-smoke"
+          uv export --frozen --no-dev --no-emit-project \
+            --format requirements.txt \
+            --output-file "${RUNNER_TEMP}/runtime-requirements.txt"
+          "${RUNNER_TEMP}/package-smoke/bin/python" -m pip install \
+            --require-hashes \
+            --requirement "${RUNNER_TEMP}/runtime-requirements.txt"
+          "${RUNNER_TEMP}/package-smoke/bin/python" -m pip install \
+            --no-deps \
+            dist/*.whl
+          "${RUNNER_TEMP}/package-smoke/bin/python" -c "import fractal_ann_diagnostics"
+          "${RUNNER_TEMP}/package-smoke/bin/fractal-retrieval-governance" --help
+
+  governance-contracts:
+    name: Study manifest and OPA policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OPA_VERSION: "1.18.2"
+      OPA_LINUX_AMD64_STATIC_SHA256: "9903e5125ac281104f2c4b7371d10cc3b74a98933743fcbfc174f9bf0ab20de8"
+      PYTHONPATH: src
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync the hash-locked environment
+        run: uv sync --frozen --no-install-project
+
+      - name: Validate draft study manifest
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.cli validate-study
+          --manifest research/study-manifest.json
+
+      - name: Install checksum-pinned OPA
+        run: |
+          opa_path="${RUNNER_TEMP}/opa"
+          curl --proto '=https' --tlsv1.2 --fail --location --show-error --silent \
+            --output "${opa_path}" \
+            "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64_static"
+          printf '%s  %s\n' "${OPA_LINUX_AMD64_STATIC_SHA256}" "${opa_path}" \
+            | sha256sum --check --strict
+          chmod 0755 "${opa_path}"
+          "${opa_path}" version
+          printf 'OPA_BIN=%s\n' "${opa_path}" >> "${GITHUB_ENV}"
+
+      - name: Validate Rego policy
+        run: |
+          "${OPA_BIN}" check --strict \
+            examples/opa_authorization.rego \
+            examples/opa_authorization_test.rego
+          "${OPA_BIN}" test --fail-on-empty \
+            examples/opa_authorization.rego \
+            examples/opa_authorization_test.rego

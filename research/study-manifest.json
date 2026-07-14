@@ -1,0 +1,506 @@
+{
+  "schema_version": "1.0",
+  "protocol_version": "0.3.0-draft",
+  "status": "draft",
+  "claim_scope": "suite-conditional-retrieval-control",
+  "primary_claim": "On the fixed five-corpus suite, a frozen full model that adds LID at k=50, LID-CV, relative contrast, and radius expansion to the frozen system-policy baseline improves held-out prediction of intent-to-treat low-effort action failure beyond the frozen H2 thresholds; and a frozen adaptive controller achieves an equal-corpus mean family-level relative end-to-end request-latency reduction greater than 10% relative to a frozen static action while authorized retrieval-target attainment and complete-evidence sufficiency remain noninferior within one percentage point, the equal-corpus mean of within-corpus proposed-to-comparator p95 ratios of family-mean end-to-end request latency remains below 1.25, and no denied item is emitted at the controlled retrieval boundary.",
+  "freeze_blockers": [
+    "sealed input, online execution, and label revisions, hashes, and custodial locations remain tbd",
+    "normalizer revisions and hashes remain tbd",
+    "the five corpus-specific authorization workloads remain unpinned",
+    "development-fit, calibration, and connected query-partition audit artifacts remain tbd",
+    "the primary embedding, exact oracle, strict HNSW backend, and OPA bundle remain unpinned",
+    "the frozen controller and static comparator artifacts remain tbd",
+    "the H1 diagnostic model, H2 model suite, and one-sided analysis runner remain unpinned",
+    "geometry gain thresholds, low/high geometry profiles, nested trial rows per family, joint-gate dependence source and effect scenarios, selected maximum family count, joint-power lower bound, and design report remain tbd",
+    "runner identity, source commit, runner image, hardware, stores, and receipt URI remain tbd",
+    "the frozen manifest has not been deposited in an independent protocol registry"
+  ],
+  "analysis": {
+    "k": 10,
+    "nested_rows_per_family": "tbd",
+    "failure_recall_threshold": 0.9,
+    "alpha": 0.05,
+    "bootstrap_seed": 20260713,
+    "h1_minimum_risk_increase": 0.0,
+    "power_target": 0.9,
+    "retrieval_target_noninferiority_margin": 0.01,
+    "evidence_sufficiency_noninferiority_margin": 0.01,
+    "minimum_cost_reduction": 0.1,
+    "maximum_p95_latency_ratio": 1.25,
+    "maximum_entitlement_violations": 0,
+    "minimum_corpora_with_geometry_gain": 4,
+    "geometry_reference_model": "system-policy",
+    "geometry_candidate_model": "full",
+    "geometry_gain_metrics": [
+      "log_loss_reduction",
+      "brier_score_reduction",
+      "auprc_gain"
+    ],
+    "geometry_gain_thresholds": {
+      "log_loss_reduction": "tbd",
+      "brier_score_reduction": "tbd",
+      "auprc_gain": "tbd"
+    },
+    "low_geometry": "tbd",
+    "high_geometry": "tbd",
+    "cluster_unit": "query_family",
+    "corpus_weighting": "equal",
+    "interval_construction": "directional-one-sided-95",
+    "gatekeeping": "intersection-union-primary-gates",
+    "cost_estimand": "end-to-end-request-latency-family-relative-reduction",
+    "bootstrap_replicates": 10000,
+    "fixed_corpora": [
+      "scifact",
+      "hotpotqa-fullwiki",
+      "t2-ragbench",
+      "bright",
+      "miracl-transfer"
+    ],
+    "evidence_corpora": [
+      "scifact",
+      "hotpotqa-fullwiki",
+      "t2-ragbench"
+    ],
+    "action_set": [
+      "hnsw-low",
+      "hnsw-high",
+      "exact-authorized",
+      "abstain"
+    ],
+    "static_comparator_action": "tbd",
+    "power": {
+      "model": "development-family-cluster-resampling",
+      "joint_success_event": "h2-and-h3-all-gates-pass",
+      "registered_endpoints": [
+        "h2-log-loss-reduction",
+        "h2-brier-score-reduction",
+        "h2-auprc-gain",
+        "h2-four-of-five-consistency",
+        "h3-family-relative-latency-reduction",
+        "h3-retrieval-target-noninferiority",
+        "h3-complete-evidence-noninferiority",
+        "h3-family-mean-p95-latency-ratio",
+        "h3-zero-entitlement-violations"
+      ],
+      "dependence_source": "tbd",
+      "effect_scenarios": [
+        "tbd"
+      ],
+      "candidate_families_per_corpus": [
+        25,
+        50,
+        75,
+        100,
+        150,
+        200
+      ],
+      "selected_families_per_corpus": "tbd",
+      "simulation_seed": "tbd",
+      "simulation_count": 5000,
+      "selected_joint_power_lower_bound": "tbd"
+    }
+  },
+  "artifacts": [
+    {
+      "kind": "dataset",
+      "id": "scifact-sealed-inputs",
+      "uri": "https://github.com/allenai/scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "ODC-By-1.0 corpus",
+      "role": "sealed-inputs",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "dataset",
+      "id": "hotpotqa-fullwiki-sealed-inputs",
+      "uri": "https://hotpotqa.github.io/",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-SA-4.0 dataset",
+      "role": "sealed-inputs",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "dataset",
+      "id": "t2-ragbench-sealed-inputs",
+      "uri": "https://github.com/uhh-hcds/g4kmu-paper",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-inputs",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "dataset",
+      "id": "bright-sealed-inputs",
+      "uri": "https://github.com/xlang-ai/BRIGHT",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-inputs",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "dataset",
+      "id": "miracl-transfer-sealed-inputs",
+      "uri": "https://github.com/project-miracl/miracl",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "sealed-inputs",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "dataset",
+      "id": "scifact-sealed-labels",
+      "uri": "https://github.com/allenai/scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0 annotations",
+      "role": "sealed-labels",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "dataset",
+      "id": "hotpotqa-fullwiki-sealed-labels",
+      "uri": "https://hotpotqa.github.io/",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-SA-4.0 dataset",
+      "role": "sealed-labels",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "dataset",
+      "id": "t2-ragbench-sealed-labels",
+      "uri": "https://github.com/uhh-hcds/g4kmu-paper",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-labels",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "dataset",
+      "id": "bright-sealed-labels",
+      "uri": "https://github.com/xlang-ai/BRIGHT",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-labels",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "dataset",
+      "id": "miracl-transfer-sealed-labels",
+      "uri": "https://github.com/project-miracl/miracl",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "sealed-labels",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "execution",
+      "id": "scifact-online-execution",
+      "uri": "artifacts/custody/scifact-online-execution.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "online-execution",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "execution",
+      "id": "hotpotqa-fullwiki-online-execution",
+      "uri": "artifacts/custody/hotpotqa-fullwiki-online-execution.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "online-execution",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "execution",
+      "id": "t2-ragbench-online-execution",
+      "uri": "artifacts/custody/t2-ragbench-online-execution.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "online-execution",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "execution",
+      "id": "bright-online-execution",
+      "uri": "artifacts/custody/bright-online-execution.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "online-execution",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "execution",
+      "id": "miracl-transfer-online-execution",
+      "uri": "artifacts/custody/miracl-transfer-online-execution.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "online-execution",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "normalizer",
+      "id": "scifact-normalizer",
+      "uri": "src/fractal_ann_diagnostics/corpora.py#normalize_scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "corpus-normalizer",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "normalizer",
+      "id": "hotpotqa-fullwiki-normalizer",
+      "uri": "src/fractal_ann_diagnostics/corpora.py#normalize_hotpotqa_fullwiki",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "corpus-normalizer",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "normalizer",
+      "id": "t2-ragbench-normalizer",
+      "uri": "src/fractal_ann_diagnostics/corpora.py#normalize_t2_ragbench",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "corpus-normalizer",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "normalizer",
+      "id": "bright-normalizer",
+      "uri": "src/fractal_ann_diagnostics/corpora.py#normalize_qrels_corpus",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "corpus-normalizer",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "normalizer",
+      "id": "miracl-transfer-normalizer",
+      "uri": "src/fractal_ann_diagnostics/corpora.py#normalize_qrels_corpus",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "corpus-normalizer",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "policy-data",
+      "id": "scifact-policy-workload",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "policy-workload",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "policy-data",
+      "id": "hotpotqa-fullwiki-policy-workload",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "policy-workload",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "policy-data",
+      "id": "t2-ragbench-policy-workload",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "policy-workload",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "policy-data",
+      "id": "bright-policy-workload",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "policy-workload",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "policy-data",
+      "id": "miracl-transfer-policy-workload",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "policy-workload",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "dataset",
+      "id": "development-fit-data",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "development-fit-data"
+    },
+    {
+      "kind": "dataset",
+      "id": "development-calibration-data",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "development-calibration-data"
+    },
+    {
+      "kind": "partition-audit",
+      "id": "query-partition-audit",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "query-partition-audit"
+    },
+    {
+      "kind": "embedding",
+      "id": "qwen3-embedding-0.6b",
+      "uri": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "primary-embedding"
+    },
+    {
+      "kind": "backend",
+      "id": "exact-authorized-numpy",
+      "uri": "src/fractal_ann_diagnostics/retrieval.py#AuthorizedExactIndex",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "exact-authorized-oracle"
+    },
+    {
+      "kind": "backend",
+      "id": "physically-authorized-hnswlib",
+      "uri": "https://github.com/nmslib/hnswlib",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "strict-authorized-hnsw"
+    },
+    {
+      "kind": "policy",
+      "id": "open-policy-agent-bundle",
+      "uri": "examples/opa_authorization.rego",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "opa-pdp"
+    },
+    {
+      "kind": "controller",
+      "id": "geometry-informed-controller",
+      "uri": "src/fractal_ann_diagnostics/controller.py",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "frozen-controller"
+    },
+    {
+      "kind": "comparator",
+      "id": "calibration-selected-static-comparator",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "static-comparator"
+    },
+    {
+      "kind": "model",
+      "id": "h1-predictive-model",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "h1-predictive-model"
+    },
+    {
+      "kind": "model",
+      "id": "h2-model-suite",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "h2-model-suite"
+    },
+    {
+      "kind": "analysis",
+      "id": "registered-power-analysis-report",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "power-analysis-report"
+    },
+    {
+      "kind": "analysis",
+      "id": "registered-one-sided-analysis-runner",
+      "uri": "tbd",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "analysis-runner"
+    },
+    {
+      "kind": "source",
+      "id": "fractal-ann-diagnostics-source",
+      "uri": "https://github.com/mhdk1602/fractal-ann-diagnostics",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "source-code"
+    }
+  ],
+  "sealed_execution": {
+    "reserve_fraction": 0.0,
+    "custodian": "unassigned",
+    "approval_environment": "tbd",
+    "results_store": "tbd",
+    "runner_identity": "tbd",
+    "code_commit": "tbd",
+    "runner_image": "tbd",
+    "hardware": {
+      "provider": "tbd",
+      "instance_type": "tbd",
+      "cpu_model": "tbd",
+      "logical_cores": "tbd",
+      "memory_gib": "tbd",
+      "accelerator": "tbd",
+      "region": "tbd",
+      "operating_system": "tbd"
+    },
+    "receipt_uri_template": "tbd",
+    "label_artifacts_withheld_until_prediction_receipt": true,
+    "public_query_reidentification_risk": "accepted-public-benchmark-limitation",
+    "runner_network_access": "disabled",
+    "interactive_access": "disabled"
+  }
+}

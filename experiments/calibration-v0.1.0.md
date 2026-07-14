@@ -3,7 +3,7 @@
 > **Historical artifact, superseded by v0.2.** This run did not measure backend recall or regret,
 > used Euclidean descriptors on angular datasets, and reported an MFDFA statistic that changes
 > under row permutation. Its numeric table is retained as an integrity record, not current
-> evidence. See the [v0.2 protocol](../research/preregistration.md) and
+> evidence. See the [current draft protocol](../research/preregistration.md) and
 > [development pilot](../artifacts/pilot/REPORT.md).
 
 Descriptor panel and rule-based recommendation on the canonical ANN-benchmarks quartet plus one optional dataset (NYTimes). Produced by `experiments/calibrate_v0_1_0.py`. Train splits subsampled to 5000 points for lid_mle and hubness; `correlation_dimension` and `multifractal_width` use a tighter 2000-point cap because both materialise an (n, n, d) broadcast that exhausts RAM at d=784, n=5000. `multifractal_width` falls back to 1500 points if its pass exceeds 300 s.

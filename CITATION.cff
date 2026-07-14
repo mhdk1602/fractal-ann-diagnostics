@@ -1,20 +1,21 @@
 cff-version: 1.2.0
-message: "If you use this software, cite the archived release and the exact commit used."
-title: "FractalGuard RAG: Authorization-first, geometry-aware retrieval governance"
+message: "If you use this software, cite version 0.3.0 and the exact commit used."
+title: "FractalGuard RAG: Protocol apparatus for authorization-first retrieval governance"
 abstract: >-
-  A research implementation for authorization-filtered vector retrieval. A
-  deterministic policy fixes the searchable document universe before any
-  geometry is measured. Query-local multiscale geometry then selects search
-  effort inside that authorized universe. The repository includes exact
-  authorized ground truth, HNSW counterfactual replay, fail-closed controls,
-  drift scenarios, a preregistered evaluation protocol, and a synthetic pilot.
+  Version 0.3.0 packages a draft confirmatory protocol and executable apparatus
+  for a planned sealed study of authorization-first, geometry-aware vector
+  retrieval. It includes policy-decision integration, physically authorized
+  search, evidence scoring, corpus normalization, cluster-aware inference, frozen modeling
+  contracts, drift controls, audit chaining, artifact verification, and
+  custodian-separated labels. No external preregistration or sealed confirmatory
+  run has occurred. Version 0.3.0 reports no confirmatory finding.
 authors:
   - family-names: "mhdk1602"
     orcid: "https://orcid.org/0009-0003-1036-9477"
 license: MIT
 repository-code: "https://github.com/mhdk1602/fractal-ann-diagnostics"
 type: software
-version: "0.2.0"
+version: "0.3.0"
 keywords:
   - "approximate-nearest-neighbor"
   - "HNSW"
@@ -24,3 +25,7 @@ keywords:
   - "authorization"
   - "filtered-vector-search"
   - "AI-governance"
+  - "artifact-integrity"
+  - "cluster-bootstrap"
+  - "confirmatory-research"
+  - "policy-as-code"

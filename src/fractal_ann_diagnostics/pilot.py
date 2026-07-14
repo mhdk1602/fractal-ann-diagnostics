@@ -10,14 +10,16 @@ from pathlib import Path
 
 from .controller import ControllerConfig, ControllerDecision, RuleController
 from .evaluation import TrialRecord, make_trial_record, summarize_trials
-from .geometry import query_geometry
+from .geometry import query_geometry_from_probe
 from .policy import policy_churn
 from .retrieval import (
     AuthorizedHNSWIndex,
     ExactSearchIndex,
     HNSWSearchIndex,
+    authorized_hnsw_probe,
     authorized_hnsw_search,
     exact_authorized_search,
+    search_result_from_probe,
     unsafe_unfiltered_search,
 )
 from .synthetic import make_governed_scenarios
@@ -31,9 +33,10 @@ class PilotConfig:
     n_roles: int = 4
     n_queries_per_role: int = 20
     k: int = 10
-    low_ef: int = 10
-    high_ef: int = 96
-    hnsw_m: int = 8
+    low_ef: int = 128
+    high_ef: int = 512
+    probe_k: int = 101
+    hnsw_m: int = 3
     high_effort_threshold: float = 0.24
     exact_threshold: float = 0.36
     evidence_recall_threshold: float = 0.9
@@ -65,6 +68,7 @@ def run_pilot(config: PilotConfig | None = None) -> tuple[list[TrialRecord], lis
         ControllerConfig(
             low_ef=cfg.low_ef,
             high_ef=cfg.high_ef,
+            probe_k=cfg.probe_k,
             exact_scan_threshold=128,
             high_effort_threshold=cfg.high_effort_threshold,
             exact_threshold=cfg.exact_threshold,
@@ -95,10 +99,16 @@ def run_pilot(config: PilotConfig | None = None) -> tuple[list[TrialRecord], lis
         ):
             mask = scenario.policy.authorized_mask(role)
             churn = policy_churn(scenario.baseline_policy, scenario.policy, role)
-            geometry = query_geometry(
-                scenario.vectors,
+            probe = authorized_hnsw_probe(
+                role_indexes[role],
                 query,
                 mask,
+                probe_k=cfg.probe_k,
+                ef_search=cfg.low_ef,
+                max_neighbors=cfg.probe_k,
+            )
+            geometry = query_geometry_from_probe(
+                probe,
                 policy_churn=churn,
                 embedding_drift=scenario.embedding_drift,
             )
@@ -110,12 +120,9 @@ def run_pilot(config: PilotConfig | None = None) -> tuple[list[TrialRecord], lis
             )
             truth = exact_authorized_search(exact, query, mask, cfg.k)
             actions = [
-                authorized_hnsw_search(
-                    role_indexes[role],
-                    query,
-                    mask,
+                search_result_from_probe(
+                    probe,
                     cfg.k,
-                    ef_search=cfg.low_ef,
                     strategy="hnsw-low",
                 ),
                 authorized_hnsw_search(
@@ -135,7 +142,7 @@ def run_pilot(config: PilotConfig | None = None) -> tuple[list[TrialRecord], lis
                 records.append(
                     make_trial_record(
                         scenario=scenario.name,
-                        query_id=query_id,
+                        query_id=str(query_id),
                         role=role,
                         search=search,
                         ground_truth=truth.ids,
@@ -164,7 +171,14 @@ def run_pilot(config: PilotConfig | None = None) -> tuple[list[TrialRecord], lis
         "n_action_outcomes": len(records),
         "selected_summary": selected_summary,
         "security_invariant": "unauthorized_context == 0 for every governed action",
-        "effort_proxy_note": "HNSW effort is efSearch, not measured distance evaluations.",
+        "effort_proxy_note": (
+            "hnswlib exposes configured efSearch but not visited-node or distance counters; "
+            "the bounded probe is reused as the low action"
+        ),
+        "graph_stress_note": (
+            "M=3 is an intentionally sparse development graph used to exercise recall-failure "
+            "paths; it is not a production recommendation"
+        ),
     }
     return records, summaries, metadata
 
@@ -187,7 +201,12 @@ def write_pilot_artifacts(
         writer.writeheader()
         writer.writerows(record.to_dict() for record in records)
     with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
-        json.dump({"metadata": metadata, "summaries": summaries}, handle, indent=2)
+        json.dump(
+            {"metadata": metadata, "summaries": summaries},
+            handle,
+            allow_nan=False,
+            indent=2,
+        )
         handle.write("\n")
 
     lines = [
@@ -196,18 +215,22 @@ def write_pilot_artifacts(
         "> Status: synthetic development evidence only. These results do not confirm the "
         "paper hypotheses.",
         "",
-        "Every action was replayed for every query against exact authorized top-k ground truth. "
-        "The unsafe global baseline tests the security accounting. It is not a deployable "
-        "action.",
+        "Every pilot search strategy was replayed for every query against exact authorized "
+        "top-k ground truth. The unsafe global baseline tests the security accounting. It is "
+        "not a deployable action.",
         "",
-        "| scenario | strategy | n | recall@10 | evidence success | unauthorized context "
+        "The pilot fixes `M=3` as an intentionally sparse development graph so recall failures "
+        "remain observable despite the 101-neighbor geometry probe. It is not a production "
+        "recommendation.",
+        "",
+        "| scenario | strategy | n | recall@10 | recall target | unauthorized context "
         "| p95 ms | effort proxy |",
         "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summaries:
         lines.append(
             f"| {row['scenario']} | {row['strategy']} | {row['n']} | "
-            f"{row['mean_recall']:.3f} | {row['evidence_success_rate']:.3f} | "
+            f"{row['mean_recall']:.3f} | {row['recall_target_rate']:.3f} | "
             f"{row['unauthorized_context']} | {row['p95_latency_ms']:.3f} | "
             f"{row['mean_effort_proxy']:.1f} |"
         )
@@ -220,7 +243,7 @@ def write_pilot_artifacts(
             "synthetic engineering tier and cannot be carried into a confirmatory claim without "
             "the sealed calibration procedure.",
             "",
-            "| scenario | selected strategy | n | recall@10 | evidence success "
+            "| scenario | selected strategy | n | recall@10 | recall target "
             "| unauthorized context | effort proxy |",
             "|---|---|---:|---:|---:|---:|---:|",
         ]
@@ -228,7 +251,7 @@ def write_pilot_artifacts(
     for row in metadata["selected_summary"]:
         lines.append(
             f"| {row['scenario']} | {row['strategy']} | {row['n']} | "
-            f"{row['mean_recall']:.3f} | {row['evidence_success_rate']:.3f} | "
+            f"{row['mean_recall']:.3f} | {row['recall_target_rate']:.3f} | "
             f"{row['unauthorized_context']} | {row['mean_effort_proxy']:.1f} |"
         )
     lines.extend(

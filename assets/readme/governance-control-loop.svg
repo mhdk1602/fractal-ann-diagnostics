@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="430" viewBox="0 0 1280 430" role="img" aria-labelledby="title desc">
-  <title id="title">Authorization-first evidence control loop</title>
-  <desc id="desc">A query passes live policy before geometry and search effort control, then evidence validation permits generation or causes abstention.</desc>
+  <title id="title">Request-bound authorization-first retrieval loop</title>
+  <desc id="desc">A request passes live policy before authorized-only indexing, geometry, and search control, then a fresh policy decision permits ID emission or causes abstention.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07101e"/><stop offset="1" stop-color="#100b24"/></linearGradient>
     <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#59eed9"/><stop offset=".5" stop-color="#53b9ff"/><stop offset="1" stop-color="#a777ff"/></linearGradient>
@@ -15,18 +15,18 @@
     </style>
   </defs>
   <rect width="1280" height="430" rx="26" fill="url(#bg)"/><rect width="1280" height="430" rx="26" fill="url(#grid)"/>
-  <text class="eye" x="48" y="46">TWO-PLANE OPERATING MODEL</text><text class="title" x="48" y="86">The model never decides who may know.</text>
+  <text class="eye" x="48" y="46">REQUEST-BOUND CONTROL MODEL</text><text class="title" x="48" y="86">Policy owns access. Geometry prices retrieval.</text>
   <path d="M74 232H1190" fill="none" stroke="url(#flow)" stroke-width="3" opacity=".7"/>
 
   <g transform="translate(46 162)">
     <rect width="150" height="140" rx="20" fill="#0a1a29" stroke="#4bdac9"/>
     <circle cx="75" cy="46" r="19" fill="#12383d" stroke="#63efdc"/><path d="M75 36v20M65 46h20" fill="none" stroke="#63efdc" stroke-width="2"/>
-    <text class="node" x="48" y="85">Query</text><text class="sub" x="29" y="108">identity + purpose</text><text class="mono" x="31" y="126">SUBJECT / ENV</text>
+    <text class="node" x="39" y="85">Request</text><text class="sub" x="25" y="108">identity + query + env</text><text class="mono" x="31" y="126">SUBJECT / ACTION</text>
   </g>
   <g transform="translate(248 142)">
     <rect width="190" height="180" rx="22" fill="#09232d" stroke="#55e8d5" stroke-width="2"/>
     <path d="M78 43h34v30H78z" fill="#123039" stroke="#62f1de"/><path d="M86 43v-8c0-14 18-14 18 0v8" fill="none" stroke="#62f1de" stroke-width="3"/>
-    <text class="node" x="49" y="101">Live policy</text><text class="sub" x="31" y="124">allow IDs or fail closed</text><text class="mono" x="35" y="148">SECURITY PLANE</text><text class="mono" x="54" y="164">DETERMINISTIC</text>
+    <text class="node" x="49" y="101">Live policy</text><text class="sub" x="23" y="124">nonce + corpus-bound mask</text><text class="mono" x="35" y="148">SECURITY PLANE</text><text class="mono" x="54" y="164">DETERMINISTIC</text>
   </g>
   <g transform="translate(490 162)">
     <rect width="174" height="140" rx="20" fill="#0a1d32" stroke="#55bfff"/>
@@ -41,13 +41,13 @@
   <g transform="translate(958 162)">
     <rect width="150" height="140" rx="20" fill="#17172d" stroke="#ba78ff"/>
     <path d="m50 48 16 16 34-36" fill="none" stroke="#c286ff" stroke-width="3"/>
-    <text class="node" x="29" y="87">Evidence</text><text class="sub" x="24" y="108">complete + cited</text><text class="mono" x="28" y="126">FIXED GATE</text>
+    <text class="node" x="26" y="87">Final policy</text><text class="sub" x="23" y="108">recheck every ID</text><text class="mono" x="21" y="126">FRESH DECISION</text>
   </g>
   <g transform="translate(1156 162)">
-    <rect width="82" height="64" rx="18" fill="#102c29" stroke="#61eedb"/><text class="mono" x="15" y="28" fill="#8df8e8">ANSWER</text><text class="sub" x="20" y="47">allowed</text>
+    <rect width="82" height="64" rx="18" fill="#102c29" stroke="#61eedb"/><text class="mono" x="11" y="28" fill="#8df8e8">EMIT IDs</text><text class="sub" x="20" y="47">allowed</text>
     <rect y="78" width="82" height="64" rx="18" fill="#2a1723" stroke="#ff718d"/><text class="mono" x="13" y="106" fill="#ff9aae">ABSTAIN</text><text class="sub" x="14" y="125">otherwise</text>
   </g>
   <g fill="#6cebdc"><circle cx="222" cy="232" r="5"/><circle cx="464" cy="232" r="5"/><circle cx="690" cy="232" r="5"/><circle cx="932" cy="232" r="5"/><circle cx="1134" cy="232" r="5"/></g>
   <path d="M811 328C811 386 343 388 343 332" fill="none" stroke="#ffb85c" stroke-width="2" stroke-dasharray="6 8"/><path d="m337 342 6-12 6 12" fill="none" stroke="#ffb85c" stroke-width="2"/>
-  <text class="mono" x="510" y="402" fill="#ffc978">POLICY CHANGE INVALIDATES THE SEARCH UNIVERSE</text>
+  <text class="mono" x="470" y="402" fill="#ffc978">POLICY CHANGE OR REPLAY INVALIDATES THE SEARCH UNIVERSE</text>
 </svg>

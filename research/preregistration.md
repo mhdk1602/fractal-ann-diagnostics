@@ -1,60 +1,119 @@
-# Adaptive policy-aware vector retrieval under drift
+# Adaptive authorization-first vector retrieval under drift
 
-**Protocol version:** 0.2.0-draft<br>
+**Protocol version:** 0.3.0-draft<br>
 **Protocol date:** 2026-07-13<br>
-**Status:** Design and synthetic development pilot. No confirmatory corpus has been opened.<br>
+**Status:** Protocol and calibration work only. The study manifest is not frozen, and no v0.3
+sealed run is permitted.<br>
+**Claim scope:** Suite-conditional retrieval control<br>
 **Sole author:** [mhdk1602](https://github.com/mhdk1602)
 
-## Research question
+## Primary claim to be registered
 
-Can query-local intrinsic geometry predict failure in policy-constrained approximate retrieval,
-and can an adaptive controller meet a locked evidence-recall target at lower serving cost than a
-cost-matched static action?
+The claim recorded in the [study manifest](study-manifest.json) is:
 
-The controller never decides authorization. A live policy decision point defines the authorized
-universe before a query-specific descriptor, index, reranker, logger, or generator can inspect a
-document. Geometry controls effort inside that universe.
+> On the fixed five-corpus suite, a frozen full model that adds LID at k=50, LID-CV, relative
+> contrast, and radius expansion to the frozen system-policy baseline improves held-out prediction
+> of intent-to-treat low-effort action failure beyond the frozen H2 thresholds; and a frozen adaptive
+> controller achieves an equal-corpus mean family-level relative end-to-end request-latency
+> reduction greater than 10% relative to a frozen static action while authorized retrieval-target
+> attainment and complete-evidence sufficiency remain noninferior within one percentage point, the
+> equal-corpus mean of within-corpus proposed-to-comparator p95 ratios of family-mean end-to-end
+> request latency remains below 1.25, and no denied item is emitted at the controlled retrieval
+> boundary.
 
-This ordering follows the noninterference criterion in
-[Authorization-First Retrieval](https://aclanthology.org/2026.trustnlp-main.15.pdf), the subject,
-object, action, and environment model in
-[NIST SP 800-162](https://doi.org/10.6028/NIST.SP.800-162), and the resource-access ordering in
-[NIST SP 800-207](https://doi.org/10.6028/NIST.SP.800-207).
+The population is the fixed corpus suite, pinned workload, pinned embedding revisions, tested
+backends, and frozen policy contract. Equal weighting across five named corpora does not turn
+the suite into a random sample of organizations, policies, or retrieval systems.
 
-## Novelty boundary
+Answer emission, answer coverage, false permit, and false denial remain available as evaluation
+outputs. They are declared secondary analyses, with no role in the primary claim or success
+gate. Any later confirmatory answer claim requires its own frozen answer/refusal policy, estimand,
+margin, and analysis rule before label access.
 
-This study does not claim to invent permission-aware RAG, filtered ANN, query-local search
-difficulty, or adaptive `efSearch`.
+The separation between model construction and testing on unseen observations follows
+[Nosek et al.](https://doi.org/10.1073/pnas.1708274114). Artifact disclosure and executable
+reporting follow the practices described by
+[Pineau et al.](https://www.jmlr.org/papers/v22/20-303.html).
+
+## Prior work and tested conjunction
+
+This protocol does not claim invention of permission-aware RAG, authorization-before-retrieval,
+filtered ANN, query-local difficulty, or adaptive HNSW effort.
 
 - Permission-Aware RAG validates access through provider-native IAM endpoints
   ([Jeong and Lee, 2025](https://doi.org/10.1109/ACCESS.2025.3628960)).
 - Authorization-First Retrieval formalizes authorization before retrieval and reports structural
-  leakage for retrieve-then-filter baselines
+  leakage in retrieve-then-filter baselines
   ([TrustNLP 2026](https://aclanthology.org/2026.trustnlp-main.15.pdf)).
-- Filtered-DiskANN and ACORN perform predicate-constrained graph search
+- Filtered-DiskANN and ACORN study predicate-constrained graph search
   ([Gollapudi et al., 2023](https://doi.org/10.1145/3543507.3583552);
   [Patel et al., 2024](https://doi.org/10.1145/3654923)).
-- Global-Local Selectivity already describes vector-filter correlation and filtered-query hardness
+- Global-Local Selectivity describes vector-filter correlation and filtered-query difficulty
   ([Amanbayev et al., 2026](https://arxiv.org/abs/2602.11443)).
 - Ada-ef selects per-query HNSW effort for a requested recall target
   ([PACMMOD 2026](https://doi.org/10.1145/3786639)).
-- Fiber-Navigable Search already uses local geometry to diagnose filtered-graph failure regimes
+- Fiber-Navigable Search connects local geometry to filtered-graph failure regimes
   ([Dang, 2026](https://arxiv.org/abs/2604.00102)).
 
-The tested contribution is narrower: authorization-first exact truth, query-local multiscale
-geometry inside the authorized universe, counterfactual replay of every action, three drift
-families, and a cost-constrained fail-closed controller.
+The proposed contribution is the conjunction of exact authorized truth, an authorization-filtered
+bounded probe, multiscale geometry computed only from that probe, paired replay of executable
+actions, frozen action control, evidence-bundle scoring, and a fresh policy decision at the return
+boundary.
 
-## System contract
+## Fixed corpus suite
 
-For trial \(i=(q,u,t)\), let:
+The suite has five strata. Corpus-level estimates receive equal weight when an endpoint is defined
+on all five.
 
-- \(C_t\) be the authoritative corpus at time \(t\).
-- \(m_t\) be the approved embedding model and revision.
-- \(P_t(u,d,a,e)\in\{0,1\}\) be the live authorization decision.
-- \(C_{u,t}=\{d\in C_t:P_t(u,d,a,e)=1\}\) be the authorized universe.
-- \(G_i^K\) be exact current top-\(K\) retrieval over \(C_{u,t}\).
-- \(S_i^K(a)\) be the result returned by action \(a\).
+| Corpus | Normalizer | Retrieval labels | Complete-evidence endpoint |
+|---|---|---|---|
+| SciFact | `normalize_scifact` | Relevant document IDs | Yes, including alternative rationale bundles |
+| HotpotQA FullWiki | `normalize_hotpotqa_fullwiki` | External-corpus document IDs | Yes, from supporting facts |
+| T2-RAGBench | `normalize_t2_ragbench` | Relevant document IDs | Yes, source context as complete document evidence |
+| BRIGHT | `normalize_qrels_corpus` | Qrels | No |
+| MIRACL transfer | `normalize_qrels_corpus` | Qrels | No |
+
+SciFact, HotpotQA FullWiki, and T2-RAGBench form the fixed evidence subset. Complete-evidence
+sufficiency is averaged equally across those three corpora. All five corpora use exact authorized
+top-k as primary ANN truth. BRIGHT and MIRACL relevance judgments support secondary IR reporting;
+they do not substitute for exact ANN truth or enter the complete-evidence gate. Missing evidence
+annotations are undefined, never negative.
+
+All five adapters are implemented. Their presence is not sufficient for a sealed run: each input,
+label artifact, normalizer revision, source revision, hash, license, chunking rule, and exclusion
+rule must be pinned in the frozen manifest. `normalize_hotpotqa` is a development fixture for
+supplied contexts. It rejects `stage="sealed"` because those contexts preselect paragraphs and
+cannot stand in for FullWiki retrieval.
+
+## Frozen authorization workloads
+
+Each corpus has a separate `policy-workload` artifact. It fixes subjects and attributes,
+environment rows, document attributes, policy rules, policy mutations, seeds, and every planned
+subject-query-policy pairing. The workload is generated without relevance, answer, or evidence
+labels. Its claim is conditional: public-corpus permissions do not estimate any enterprise's
+entitlement distribution.
+
+The ordered document-universe digest is derived from stable external document identity plus pinned
+content, chunking, and embedding revisions. A digest of integer positions or document count is not
+admissible. The OPA bundle, policy data, and expected bundle revision are separately hashed. Every
+decision must echo that revision and the ordered-universe digest.
+
+Before freeze, the development owner must pin the policy generator and its output, allow-rate and
+policy-complexity strata, mutation schedule, excluded subjects or empty grants, and corpus-specific
+counts. After freeze, no workload may be changed to improve low-effort action-failure prevalence,
+controller latency, relevance, or evidence sufficiency.
+
+## Trial, target, and paired action matrix
+
+For a trial \(i=(q,u,t)\), define:
+
+- \(C_t\): the corpus snapshot at time \(t\);
+- \(m_t\): the approved embedding model and revision;
+- \(P_t(u,d,o,e)\in\{0,1\}\): the policy decision for subject \(u\), document \(d\),
+  operation \(o\), and environment \(e\);
+- \(C_{u,t}=\{d\in C_t:P_t(u,d,o,e)=1\}\): the authorized universe;
+- \(G_i^K\): exact top-\(K\) retrieval over \(C_{u,t}\); and
+- \(S_i^K(a)\): the result for prespecified action \(a\).
 
 The exact authorized reference is
 
@@ -63,260 +122,518 @@ G_i^K=\operatorname{TopK}_{d\in C_{u,t}}
 \operatorname{sim}(e_{m_t}(q),e_{m_t}(d)).
 \]
 
-ANN fidelity is
+Authorized ANN recall uses the following total convention:
 
 \[
-R_i(a)=\frac{|S_i^K(a)\cap G_i^K|}{|G_i^K|}.
+R_i(a)=
+\begin{cases}
+\frac{|S_i^K(a)\cap G_i^K|}{|G_i^K|}, & |G_i^K|>0,\\
+1, & |G_i^K|=0\ \text{and}\ |S_i^K(a)|=0,\\
+0, & |G_i^K|=0\ \text{and}\ |S_i^K(a)|>0.
+\end{cases}
 \]
 
-A structural entitlement violation is
+The intent-to-treat low-effort action-failure label used for modeling is
 
 \[
-U_i(a)=\mathbf{1}\left[
-\exists d\in \operatorname{learned\_context}_i(a):P_t(u,d,a,e)=0
-\right].
+Y_i=\mathbf 1[\operatorname{state}_i(\texttt{hnsw-low})\ne\texttt{completed}
+\;\lor\;
+(\operatorname{state}_i(\texttt{hnsw-low})=\texttt{completed}
+\land R_i(\texttt{hnsw-low})<0.90)].
 \]
 
-The security requirement is exact: \(\sum_i U_i(a)=0\) for every proposed action. Zero observed
-violations does not prove safety outside the tested systems; the report will include an exact
-one-sided binomial upper bound.
+Every prespecified trial remains in this endpoint. A failed or otherwise non-completed low-effort
+action is a failure even when recall is unavailable. An empty authorized universe with a completed
+empty result is a valid governed no-result service outcome under the recall convention above. The
+endpoint is therefore a service-and-retrieval composite; it must not be reported as pure ANN failure.
+
+Every trial executes the same frozen action set:
+
+- `hnsw-low`, which reuses the bounded probe;
+- `hnsw-high`;
+- `exact-authorized`; and
+- `abstain`.
+
+The adaptive controller and frozen static comparator select from realized paired outcomes. Pair IDs
+must be unique, identically ordered, and identical across proposed and comparator inputs. A missing
+or duplicated pair is a protocol error, not an independent observation.
+
+`nested_rows_per_family` is a trial-design cardinality, pinned independently of design assurance.
+It fixes the exact number of subject-policy draws, seeds, drift rows, or timing repeats carried by
+each query family. The sealed panel must match it exactly; it is not inferred from a power model.
 
-## Evidence outcomes
-
-For corpora with annotated evidence bundles, let \(\mathcal E_q\) contain every accepted
-alternative evidence set. An authorized solution exists when at least one complete evidence set is
-authorized. Returned evidence is sufficient only when one complete authorized set is present.
-
-False permits and false denials remain separate:
-
-- **False permit:** answer when no authorized complete evidence set was retrieved.
-- **False denial:** abstain when the selected action contained a complete authorized evidence set.
-
-For corpora without evidence bundles, the study reports authorized recall, nDCG, and rank error.
-It will not infer answer sufficiency from nearest-neighbor recall alone.
-
-## Confirmatory hypotheses
-
-### H1: multiscale geometric mechanism
-
-For the default low-effort authorized HNSW action, failure risk increases with query-local LID and
-cross-scale LID instability after conditioning on corpus, backend, allow rate, search budget,
-dimension, and drift severity.
-
-The primary coefficient is the interaction between standardized LID at \(k=50\) and standardized
-cross-scale instability over \(k\in\{10,20,50,100\}\). A hierarchical logistic model contains
-corpus and backend varying intercepts.
-
-### H2: incremental predictive value
-
-Models are compared on untouched corpora and policy seeds:
-
-1. System-only: corpus size, dimension, backend, effort, version lag, and drift.
-2. Policy-only: system model plus global allow rate and predicate complexity.
-3. Geometry-only: system model plus the preregistered geometry panel.
-4. Full: system, policy, and geometry.
-
-The full model passes the fractal gate only if all of the following hold:
-
-- Paired 95% interval for held-out log-loss improvement over policy-only excludes zero.
-- Relative Brier-score reduction is at least 5%.
-- AUPRC improves by at least 0.02.
-- Improvement has the same direction in at least four of five sealed corpora.
-
-If policy-only matches the full model, “fractal” is removed from the paper title.
-
-### H3: controller value
-
-Every executable action is replayed for every frozen trial. The comparison therefore uses observed
-counterfactual action outcomes rather than propensity weighting.
-
-The static comparator is the best single action chosen on development data under the same mean
-compute budget. The controller passes only if it:
-
-- reduces evidence-policy violations by at least 20% relative and one percentage point absolute;
-- has a paired 95% interval excluding zero;
-- loses no more than one percentage point of answer coverage;
-- stays within the locked mean-compute allowance;
-- increases p95 latency by no more than 25%; and
-- produces zero entitlement violations.
-
-### H4: drift transfer
-
-H3 is repeated separately under corpus, embedding, and policy drift. Combined drift is a declared
-stress test, not a primary endpoint.
-
-## Data plan
-
-The development tier will use MS MARCO, Natural Questions, FiQA, NFCorpus, TREC-COVID, and
-MultiHop-RAG. The sealed tier will use SciFact, HotpotQA, BRIGHT, T²-RAGBench, and one untouched
-large retrieval shard.
-
-[BEIR](https://proceedings.neurips.cc/paper/2021/hash/65b9eea6e1cc6bb9f0cd2a47751a186f-Abstract-round2.html)
-supplies heterogeneous retrieval tasks.
-[SciFact](https://arxiv.org/abs/2004.14974) and
-[HotpotQA](https://aclanthology.org/D18-1259/) provide explicit evidence.
-[BRIGHT](https://proceedings.iclr.cc/paper_files/paper/2025/hash/7a0f8055c838df8e62329a76c7c6403d-Abstract-Conference.html)
-contains reasoning-intensive retrieval queries, while
-[T²-RAGBench](https://aclanthology.org/2026.eacl-long.8/) adds text-and-table evidence.
-
-The sealed suite must contain at least 10,000 distinct queries and 1,000 low-effort failures.
-Multiple user-policy draws attached to one query are nested replicates, not independent queries.
-
-Corpora will be fetched through versioned manifests. Each record will include source URL, license,
-content hash, embedding model revision, chunking revision, and exclusion reason. Restricted corpora
-will not be redistributed.
-
-## Authorization workload
-
-The reference evaluator implements RBAC and ABAC fields for tenant, project, role, clearance,
-region, purpose, classification, embargo, and temporary-grant expiry.
-
-Three fixed generators are used:
-
-1. Independent ACL labels as a negative control.
-2. Cluster-aligned ACLs at locked correlation strengths.
-3. Evidence-boundary cases where complete evidence is authorized, partial, or unavailable.
-
-Global allow rates are \(\{0.001,0.01,0.05,0.20,0.50\}\). Reports use “allow rate” rather than
-“selectivity” where ambiguity would reverse the interpretation.
-
-## Action set
-
-- Low-effort authorization-first HNSW.
-- Two-times and four-times HNSW effort.
-- Filter-native traversal using ACORN or Filtered-DiskANN.
-- Exact scan over the authorized subset.
-- Authorized sparse+dense fusion followed by an authorized reranker.
-- Abstention or human review.
-
-The current v0.2 reference implementation contains low/high HNSW, exact authorized search, and
-abstention. The other actions remain out of the confirmatory protocol until their conformance tests
-pass.
-
-No reranker or generator may inspect a denied vector, text, identifier, or derived query-specific
-summary. Geometry predicts retrieval failure; it never predicts permission.
-
-## Query-local features
-
-### Online controller panel
-
-- LID MLE at \(k=50\), with sensitivity values at \(k=20\) and \(k=100\).
-- Cross-scale LID coefficient of variation.
-- Relative contrast and rank-distance curvature.
-- Neighbor-radius expansion.
-- Authorized-universe size and allow rate.
-- Policy version, version lag, and churn.
-- Corpus-index lag and embedding-revision mixture.
-- Authorized pilot-search yield and early termination telemetry where the backend exposes them.
-
-Every online geometric feature is computed only after authorization and only within the authorized
-universe.
-
-### Offline mechanism panel
-
-The offline analysis may measure Global-Local Selectivity and vector-policy correlation over an
-isolated research copy. These variables are used to explain failure strata, not as production
-controller inputs. This separation prevents a learned component from inspecting denied vectors.
-
-### Rejected feature
-
-The v0.1 MFDFA feature converted an arbitrarily ordered upper triangle of pairwise distances into a
-time series. Row permutations changed the estimate while leaving the point cloud unchanged. It is
-retired before confirmation and replaced with multiscale neighbor-radius statistics.
-
-All descriptors face 100 row permutations, sample-size sensitivity tests, `NaN` accounting, and
-metric-conformance tests before sealed data are opened.
-
-## Drift interventions
-
-### Corpus drift
-
-- Append 1%, 5%, 10%, and 20% new documents.
-- Delete or supersede 1%, 5%, and 10%.
-- Add duplicate topic bursts.
-- Delay ingestion by one and five update batches.
-- Rechunk a fixed fraction without changing source truth.
-
-### Embedding drift
-
-Use three pinned open embedding models. Evaluate old/old, new-query/old-corpus, 25%, 50%, and 75%
-migration, and fully rebuilt current embeddings. Exact truth always uses the fully approved model.
-Stale target embeddings are a documented dense-retrieval problem
-([Monath et al., 2024](https://proceedings.mlr.press/v235/monath24a.html)).
-
-### Policy drift
-
-Apply grants, revocations, role transfers, reclassification, region changes, and embargo expiry to
-1%, 5%, and 20% of eligible records. Test fresh policy metadata, one-revision lag, five-revision lag,
-live final validation, and policy-engine failure. Policy-engine failure must abstain.
-
-## Splits and freezing
-
-Four disjoint stages are used:
-
-1. Engineering split for backend correctness.
-2. Development corpora for feature and action design.
-3. Calibration split for risk thresholds and compute allowance.
-4. Sealed corpora, model migrations, policy seeds, and future snapshots.
-
-No source document, paraphrased query, user, topic family, policy seed, or embedding migration pair
-may cross these stages. Hyperparameter changes stop before sealed hashes are unlocked.
-
-## Statistical analysis
-
-- All actions are paired within query.
-- Query families are the bootstrap unit; users, policies, seeds, and actions stay attached.
-- Corpus and backend receive varying intercepts; LID and allow-rate effects may vary by corpus.
-- Primary controller intervals use 10,000 paired cluster bootstrap replicates.
-- Results are shown per corpus before any pooled estimate.
-- Ordered gatekeeping is H1, then H2, then H3. Secondary ablations use Holm correction within family.
-- Crashes count as service failures and remain separately visible in retrieval-quality tables.
-- A backend-condition cell is invalid if more than 1% of trials are missing for non-policy reasons.
-
-## Required ablations
-
-- System-only, policy-only, geometry-only, and full models.
-- LID alone, rank-distance features alone, and no drift/version features.
-- Oracle geometry versus online authorized-pilot geometry.
-- No exact-search action, no abstention, and one action removed at a time.
-- Held-out backend and held-out embedding family.
-- Independent versus cluster-aligned policies.
-- ANN fidelity versus annotated evidence sufficiency.
-- Retired MFDFA permutation test as a recorded negative control.
-
-## Decision gates
-
-**Security gate:** any denied item reaching a learned component blocks a safety claim.
-
-**Fractal gate:** H1 and every H2 minimum-effect condition must pass. Otherwise the paper is framed
-as policy-aware retrieval without a fractal claim.
-
-**Controller gate:** H3 must beat a cost-matched static action. Predictability without better action
-selection is not a controller result.
-
-**Drift gate:** the controller advantage must reproduce under each single-drift family. Static-only
-success does not support migration safety.
-
-**Publication gate:** a full null still releases the benchmark, action-outcome matrix, drift traces,
-backend conformance tests, and preregistered analysis.
-
-## Interpretation of null outcomes
-
-- No H1: the proposed geometric mechanism is unsupported.
-- H1 passes but H2 fails: the association is too weak or unstable for prediction.
-- H2 passes but H3 fails: failure is predictable but the action policy adds no cost-adjusted value.
-- Policy-only equals full: remove the fractal claim.
-- Only synthetic ACLs work: report a controlled stress test, not enterprise prevalence.
-- One backend works: report an implementation-specific effect.
-- Static success but drift failure: the controller is not migration-safe.
-- Retrieval improves but answer evidence does not: claim retrieval control only.
-- Any entitlement violation: reject the safe-RAG claim.
-
-## Development pilot boundary
-
-`experiments/run_governance_pilot.py` is an engineering and mechanism pilot. Its synthetic mixtures
-test metric handling, authorization-first candidate construction, exact authorized truth, action
-replay, audit records, and the unsafe comparator. Pilot outcomes cannot confirm H1–H4 and will not
-be pooled with sealed results. The v0.2 rule thresholds were adjusted on this synthetic tier so the
-pilot exercises low-effort, widened, and exact actions. That controller is an executable reference,
-not a confirmatory estimator. Confirmatory thresholds require the disjoint calibration split above.
+## Authorization contract
+
+`OpenPolicyAgentDecisionPoint` is the primary policy-decision-point artifact. The benchmark
+`AuthorizationPolicy` remains a controlled role-by-document oracle for engineering and policy
+workload tests; it is not the primary PDP in the sealed manifest.
+
+The OPA adapter sends subject, action, environment, and the complete controlled document universe
+through the bulk Data API. A valid response must include a decision ID, policy revision, echoed
+subject/action/environment digest, document-universe digest, request nonce, and request SHA.
+Malformed, unavailable, replayed, redirected, or mismatched output becomes an unavailable deny-all
+decision. The expected policy-bundle revision is pinned. The built-in remote transport requires
+HTTPS and a bearer credential; local HTTP is allowed only for a literal loopback IP.
+
+The first authoritative decision occurs before authorized index construction, probe search,
+geometry calculation, or action selection. The index is built only over the permitted subset and
+is keyed by policy revision and authorization-mask digest. A cached index is never final authority.
+
+A second, fresh decision occurs immediately before document IDs cross the controlled return
+boundary. The request fails closed if the policy revision or mask changes, if a decision ID,
+request nonce, or request SHA is reused, or if any selected document is no longer permitted.
+Geometry may increase effort, choose exact search, or abstain. It cannot grant access.
+
+The primary safety observation is therefore
+
+\[
+U_i(a)=\mathbf 1[\text{a denied document ID crosses the controlled return boundary}].
+\]
+
+The success condition is zero observed events. A family-level one-sided Clopper-Pearson upper
+bound is also reported after nested rows are collapsed to “any violation in this family”
+([Clopper and Pearson, 1934](https://doi.org/10.1093/biomet/26.4.404)).
+
+This guarantee ends when `GovernedRetriever.query` returns its result object. The implementation
+does not continuously reauthorize that object at a generator, UI, network sink, or later consumer.
+It does not establish end-to-end RAG authorization, side-channel freedom, or downstream data-flow
+control.
+
+Sending the complete benchmark document universe in one OPA request tests the bulk-decision
+contract. It is not evidence of production-scale IAM throughput or equivalence to AWS IAM, Azure
+RBAC, Google Cloud IAM, SharePoint ACLs, or an organization's entitlement graph. The authorization
+model is consistent with the subject, object, operation, and environment terms in
+[NIST SP 800-162](https://doi.org/10.6028/NIST.SP.800-162) and the resource-access ordering in
+[NIST SP 800-207](https://doi.org/10.6028/NIST.SP.800-207).
+
+## Bounded multiscale geometry
+
+The online feature source is one authorization-filtered HNSW probe. It returns at most 101
+authorized neighbors. The low and high configured efforts are `efSearch=128` and `efSearch=512`.
+`hnsw-low` reuses the first ten probe results, so the probe is charged once.
+
+The prespecified geometry panel contains only:
+
+- LID MLE at \(k=50\), recorded as `lid_k50`;
+- LID at \(k=20\) and \(k=100\) for the cross-scale calculation;
+- `lid_cv`, the coefficient of variation over \(k\in\{20,50,100\}\);
+- relative contrast; and
+- radius expansion.
+
+Probe latency and declared work are pre-outcome system telemetry. Allow rate, authorized-universe
+size, policy churn, and embedding drift remain system or policy variables according to the frozen
+feature schema. None may be described as geometric evidence.
+
+The telemetry object contains authorized IDs, distances, metric, corpus counts, neighbor bound,
+latency, and work. It contains no vector matrix or query handle. An unavailable scale yields `NaN`;
+the row stays in the analysis, and the reference rule controller treats undefined geometry as risk.
+
+Full-authorized-universe geometry is an offline oracle and ablation only. It cannot enter the
+controller. The retired v0.1 MFDFA statistic remains a negative control because row permutation
+changed its value without changing the point cloud.
+
+## Model artifacts and leakage controls
+
+Four logistic artifacts are fit before sealed access:
+
+1. `system-only`;
+2. `system-policy`;
+3. `geometry-only`; and
+4. `full`.
+
+System features are corpus size, authorized-universe size, embedding dimension, version lag,
+drift severity, corpus stratum, backend, drift family, probe latency, and probe work. Policy features
+are allow rate, policy complexity, and policy churn. Geometry features are only `lid_k50`, `lid_cv`,
+relative contrast, and radius expansion. `system-policy` is the H2 reference and includes all system,
+policy, and probe-telemetry variables. `full` adds only the four geometric descriptors and the
+`lid_k50__x__lid_cv` interaction.
+
+Development fitting and development calibration use separate query-family groups. Both remain
+group-disjoint from the sealed stage. The serialized JSON artifact records feature schema,
+imputation, standardization, categorical levels, coefficients, Platt calibration, model digests,
+suite digest, and group hashes. No sealed intercept, coefficient, category level, threshold, or
+calibration parameter may be refit after labels become visible.
+
+The corpus conformance check rejects an exact query family assigned to two stages. Before freeze,
+the custodian must also pin the prespecified near-duplicate procedure and its result.
+
+## Prespecified estimands
+
+### H1: descriptive frozen-model orientation diagnostic
+
+H1 asks whether the frozen full model assigns greater low-effort action-failure risk to the
+prespecified high-geometry profile than to the low-geometry profile while holding the sealed
+covariate distribution fixed. It uses no sealed outcome labels. The contrast is predictive,
+noncausal, and descriptive: it checks the orientation of a model fitted before sealed access rather
+than testing a held-out geometry-outcome association.
+
+Within `run_confirmatory_analysis_once`, the pinned computation derives the per-row high-minus-low
+predictive-risk contrast and resamples query families inside each fixed corpus. Its directional
+bound and the legacy `h1_minimum_risk_increase` value are reported as diagnostics only. H1 has no
+role in confirmatory success, title selection, or the primary claim. The draft manifest still lacks
+numeric high- and low-geometry profiles, an admitted H1 artifact, and an admitted model suite.
+
+### H2: added held-out predictive information
+
+H2 compares `full` with `system-policy` on paired sealed families. `system-policy` contains system,
+policy, probe-latency, and probe-work variables; `full` adds only the four declared geometry
+descriptors. Log loss and Brier loss are `system-policy` minus `full`; AUPRC gain is `full` minus
+`system-policy`. Row weights are equalized within query family, corpus metrics are computed
+separately, and the fixed-corpus summary weights the five corpora equally. The prespecified
+consistency rule requires geometry gain in at least four of five corpora.
+
+Within `run_confirmatory_analysis_once`, the pinned computation reports the corpus-specific point
+summaries, applies the four-of-five consistency rule, and computes equal-corpus directional
+family-bootstrap bounds for all three metrics. H2 requires the point rule and every aggregate
+directional gate to pass. All three draft thresholds remain `TBD`, and the H2 suite is unpinned. The
+runner cannot instantiate an H2 decision from the current manifest.
+
+### H3: controller cost and constrained fidelity
+
+The static comparator is chosen on the calibration split as the lowest-latency single action that
+satisfies the frozen fidelity constraints. Its runtime action name and artifact digest are pinned
+before sealed access.
+
+`GovernedRetriever.query` starts the request timer before input validation and the first policy
+decision. It stops after the fresh point-of-return decision, immediately before returning the
+result. End-to-end governed retrieval request latency therefore includes both PDP decisions,
+authorized-index refresh or cache check, bounded probe, geometry, controller choice, selected
+search, and local request overhead.
+
+The query arrives as an embedding vector. The timer excludes upstream query embedding, answer
+generation, UI work, and any network or consumer work after the result is returned. “End-to-end”
+in this protocol means the governed retrieval request boundary just defined.
+
+For corpus \(c\), query family \(f\), and nested row \(r\), let
+\(T^{A}_{cfr}\) and \(T^{S}_{cfr}\) denote proposed and static-comparator request latency. First
+average nested rows separately by action:
+
+\[
+\bar T^{a}_{cf}=\frac{1}{n_{cf}}\sum_r T^{a}_{cfr}.
+\]
+
+The family relative reduction is
+
+\[
+D_{cf}=1-\frac{\bar T^{A}_{cf}}{\bar T^{S}_{cf}}.
+\]
+
+The prespecified `end-to-end-request-latency-family-relative-reduction` estimand is
+
+\[
+\Delta_C=\frac{1}{5}\sum_{c=1}^{5}
+\frac{1}{F_c}\sum_{f=1}^{F_c}D_{cf}.
+\]
+
+This is a ratio of family-mean action latencies, not a mean of row-wise ratios. Extra policy draws,
+seeds, or timing repeats within a family do not gain inferential weight.
+
+For the tail constraint, compute the p95 of family-mean latency for each action inside each corpus,
+form the proposed-to-comparator ratio, then average the five corpus ratios equally.
+
+Retrieval-target attainment is the favorable binary event that authorized recall reaches the
+prespecified target. It is defined on all five corpora. Complete-evidence sufficiency is the
+favorable event that at least one authorized gold bundle is fully present; it is defined only on
+SciFact, HotpotQA FullWiki, and T2-RAGBench. Both differences are proposed minus comparator and use
+the same family-then-corpus weighting.
+
+H3 succeeds only if all conditions hold:
+
+- the one-sided 95% lower bound for the equal-corpus mean of family-level relative request-latency
+  reductions, \(\Delta_C\), is greater than 0.10;
+- the one-sided 95% lower bound for retrieval-target attainment difference is greater than
+  \(-0.01\);
+- the one-sided 95% lower bound for complete-evidence sufficiency difference is greater than
+  \(-0.01\);
+- the one-sided 95% upper bound for the equal-corpus mean of within-corpus proposed-to-comparator
+  p95 ratios of family-mean request latency is less than 1.25; and
+- no denied item is emitted at the controlled retrieval boundary.
+
+These are intersection-union conditions at \(\alpha=0.05\). Every condition must pass
+([Berger and Hsu, 1996](https://doi.org/10.1214/ss/1032280304)).
+
+## Directional family bootstrap
+
+The sealed confirmatory analysis will use 10,000 deterministic paired bootstrap replicates unless a
+larger frozen count is recorded. The draft protocol fixes base seed `20260713`; endpoint-specific
+offsets are deterministic in the pinned runner. For each replicate:
+
+1. keep the five corpora fixed;
+2. sample query families with replacement inside each corpus;
+3. carry all nested rows and both paired actions with the sampled family;
+4. average nested rows within family and action; and
+5. average family estimates within corpus, then fixed-corpus estimates equally.
+
+Corpora are not resampled. Nested rows and action rows are not sampled independently. Inference is
+conditional on the five-corpus suite.
+
+For a directional 95% lower bound, use the fifth percentile of the bootstrap distribution. For a
+directional 95% upper bound, use the ninety-fifth percentile. The two reported directional
+percentiles are not a two-sided 95% interval. The frozen runner must preserve endpoint direction
+and reject pair-order, duplicate-pair, or corpus-set mismatches.
+
+Secondary ablation families use [Holm correction](https://doi.org/10.2307/4615733) when a family of
+hypotheses is interpreted inferentially. Crashes remain service failures; undefined geometry stays
+in its frozen missing-value path. No row can be dropped because its outcome is inconvenient.
+
+## Event-yield sensitivity and joint-gate design
+
+Raw query count is not the effective sample size. User-policy draws, seeds, drift levels, and timing
+repeats attached to one query family are nested observations.
+
+The implemented `paired-beta-binomial-common-shock` utility remains an event-yield sensitivity
+analysis for low-effort action success, the complement of the intent-to-treat composite. It can
+study family clustering and paired residual coupling. It does not estimate power for H2, H3, or
+their conjunction, and its lower Monte Carlo bound cannot select the confirmatory family count.
+
+Before freeze, the pinned design report must use `development-family-cluster-resampling` and
+reproduce the exact registered endpoints, fixed-corpus weighting, family resampling, directional
+bounds, thresholds, noninferiority margins, and intersection-union rule. Its joint success event is
+`h2-and-h3-all-gates-pass`. The registered endpoints are, in order: H2 log-loss reduction, H2
+Brier-score reduction, H2 AUPRC gain, H2 four-of-five consistency, H3 family-relative latency reduction,
+H3 retrieval-target noninferiority, H3 complete-evidence noninferiority, H3 family-mean p95 latency
+ratio, and H3 zero entitlement violations.
+
+The report must pin its development-data dependence source, effect scenarios, simulation seed, and
+at least 5,000 simulated studies for each candidate count. Candidate family counts are 25, 50, 75,
+100, 150, and 200 per corpus. It reports endpoint-specific operating characteristics, the joint
+H2+H3 pass probability, Monte Carlo uncertainty, and the zero-event condition's finite-sample
+behavior. The selected family count is the maximum requirement across the endpoint-specific and
+joint-gate calculations; its one-sided lower Monte Carlo bound must reach the frozen 0.90 design
+target. Until those fields and the report are pinned, no power claim or family-count selection is
+permitted. Simulation-based planning for clustered models follows the approach illustrated by
+[Green and MacLeod](https://doi.org/10.1111/2041-210X.12504).
+
+Observed sealed inference uses the directional family bootstrap, not the design simulator.
+
+## Drift and noninterference
+
+Corpus snapshot, embedding pair, migration fraction, policy revision, policy seed, index seed,
+query family, pseudonymous subject, action, evidence outcome, request latency, work counters, and
+failure state are recorded for each trial. Corpus, embedding, and policy drift are frozen design
+factors and reported separately.
+
+The current manifest does not define an additional H4 success threshold. Combined-drift and
+transfer stress tests are secondary unless an amended protocol and frozen runner define a gate
+before sealed access.
+
+The paired-world conformance test holds authorized vectors, query, policy, controller, and index
+seed fixed while changing denied vectors. It compares deterministic visible fields. An unsafe
+global comparator is the positive control.
+
+A passing test supports only an extensional statement for those inputs and fields. It is not a
+universal noninterference proof and does not cover timing, cache state, process memory, network
+traces, policy logs, or hardware side channels.
+
+## Evidence labels and custody
+
+Gold evidence is one or more alternative complete bundles. Every location records document ID,
+source URI, exact locator, and optional content hash. A bundle is authorized only when every member
+is permitted. Returned evidence is sufficient only when it covers every location in at least one
+authorized bundle, including a pinned hash where supplied.
+
+For each `stage="sealed"` normalized corpus, the custodian emits two digest-bound artifacts:
+
+- a label-separated online artifact containing documents and query text under opaque HMAC-SHA256
+  trial and family keys; and
+- a sealed label artifact containing answers, relevant IDs, evidence bundles, label metadata, and
+  the execution-artifact SHA.
+
+The frozen manifest separately pins the source `sealed-inputs`, the canonical `online-execution`
+artifact delivered to the runner, and the canonical `sealed-labels` artifact for every corpus. The
+execution and label files do not embed the manifest digest, which would make their own pinned digest
+circular. The sealed label file binds the execution digest; the outer manifest binds both files to
+the study.
+
+The online artifact rejects original IDs, labels, answers, evidence, relevance fields, and label
+metadata. It still contains query text. Public benchmark queries may therefore be reidentified by
+an operator who already knows the benchmark. Label custody prevents direct label delivery; it does
+not make public queries unknowable. A frozen noninteractive runner, restricted egress, immutable
+artifacts, and post-receipt label joining mitigate this residual channel. The custodian retains the
+sealed label artifact.
+
+After the one-shot run receipt exists, the online runner may emit immutable prediction and raw
+action-panel artifacts. The prediction artifact binds manifest digest, receipt digest,
+execution-artifact digest, and the exact complete set of opaque trial keys. The action panel records
+every prespecified action's returned IDs, recorded request latency, execution state, controller
+selection, entitlement count, pre-outcome features, and the audit-record digest for every completed
+or governed-abstention row. `GovernedActionExecution` admits such a row only after its
+`GovernedResult` agrees with the self-hashed `AuditRecord`; returned IDs, request latency, and
+entitlement count are derived from that pair. Audit records cannot be reused. Governed
+counterfactuals must share the selected policy revision, and final decisions must share policy
+revision, environment digest, document-universe digest, and authorization mask. The panel cannot
+contain relevance, gold evidence, recall, evidence sufficiency, answer labels, or derived failure
+targets. The receipt starts the externally registered run; it neither executes retrieval nor
+grants general label access.
+
+A failed action uses `FailedActionExecution`: trial, controller decision, authorization decision,
+one of `backend-error`, `backend-timeout`, `invalid-result`, `resource-exhausted`, or
+`runner-interruption`, monotonic start and finish times, and runner identity. Admission derives the
+latency and recomputes a failure-timing digest over those fields. The timing evidence is supplied by
+the pinned runner; it is not an independent clock. A failure has no audit-record digest, returned
+IDs, or entitlement claim. Every `hnsw-low` row must carry its supplied pre-outcome feature tuple,
+including a failed row, while other actions cannot carry one. Panel admission checks action
+placement rather than computational provenance; the anchor fixes the bytes before label release,
+and later analysis admission checks dimension.
+
+The panel builder requires exactly one admitted outcome per trial-action cell and keeps a
+selected-action failure in the intention-to-treat analysis. The `abstain` cell must be a governed
+abstention, and every trial requires a completed `exact-authorized` oracle. The caller supplies the
+trusted audit-chain head, frozen query-partition-audit digest, and `primary` partition label. The
+receipt schema may encode `reserve` for nonconfirmatory engineering work, but v0.3 cannot admit it
+as a replacement confirmatory sample. Every governed row must form the verified chain ending at
+that head.
+
+`action_panel_from_governed_executions` returns the panel with a detached
+`ActionPanelAdmissionReceipt`. The receipt binds the exact panel digest, manifest, run, online
+execution artifact, corpus, partition, query-partition audit, audit head, ordered audit-record
+digests, and one admission record per trial-action cell. Each record binds the controller action,
+risk score, reasons, and policy revision; the policy decision ID, request digest, mask digest and
+size, availability, environment, and document universe; and either governed audit position or the
+runner-bound failure timing. The receipt is canonical, newline-terminated, and written exclusively.
+
+An independently administered HTTPS anchor then issues a canonical prediction-completion receipt
+bound to the exact prediction digest and a typed action-panel binding: manifest, run receipt,
+online-execution digest, corpus, stage, and raw panel digest. The receipt also records prediction
+count, anchor identity, URI, and UTC time. The custodian releases labels only after that completion
+receipt exists, and the offline join must present that same panel binding.
+`join_predictions_after_receipt` verifies both receipts, all artifact digests, and exact trial keys
+before it joins predictions to labels for scoring. For each action, the analysis input builder
+derives ANN recall against the completed `exact-authorized` row in the same anchored action panel;
+relevance labels do not define ANN recall. It derives complete-bundle coverage by matching anchored
+returned IDs to the sealed evidence bundles rather than accepting either outcome from the online
+runner.
+
+The scorer must load each custody file through `load_sealed_label_artifact`; reconstructing an
+object from copied label fields or a digest string is not byte admission.
+`ConfirmatoryInputArtifact` derives the analysis configuration from the frozen manifest and checks
+the run receipt, exact artifact-verification receipt, fixed corpus set, each panel's separately
+pinned online-execution digest, and each actual sealed-label artifact's canonical bytes. It also
+requires the joined label objects to equal the admitted sealed payload, rather than trusting a
+copied digest string. One detached action-panel admission receipt is mandatory for each corpus. The
+input verifies its exact panel coverage, primary-partition label, frozen query-partition-audit
+digest, governed audit chain, and failed-action runner identity. `run_confirmatory_analysis_once`
+admits the H1 model and H2 suite only when their canonical bytes match the verified manifest
+artifacts. A caller-supplied digest string or replacement analysis configuration is insufficient.
+
+Model pins use the exact output of `canonical_h1_model_artifact_bytes` and
+`canonical_h2_model_suite_artifact_bytes`: UTF-8 canonical JSON with no trailing newline. The H1 pin
+covers the full-model artifact, and the H2 pin covers the complete suite. This byte contract is
+distinct from the newline-terminated custody files below.
+
+Custody files are canonical JSON followed by exactly one newline. The online, sealed-label,
+prediction, completion-receipt, offline-evaluation, action-panel, action-panel-admission,
+analysis-attempt, analysis-result-receipt, and confirmatory-result loaders reject the applicable
+duplicate-key, nonfinite, schema, canonical-byte, location, digest, symlink, and hard-link failures.
+Their writers create new files exclusively rather than replacing an existing path.
+
+## Freeze, receipt, and single analysis
+
+The manifest remains `draft`. Freeze requires every declared input and component role to have a
+non-placeholder URI, immutable revision, SHA-256, and license; separate sealed-input,
+online-execution, and sealed-label artifacts for every corpus; a pinned hardware object; exact
+runner identity; code commit; OCI image digest; stores; and no unresolved blockers.
+
+Required component roles include corpus normalizers, corpus-specific policy workloads,
+development-fit and calibration data, the connected query-partition audit with exact and
+near-duplicate edges,
+primary embedding, authorized exact oracle, strict HNSW backend, OPA PDP, frozen controller, static
+comparator, H1 diagnostic artifact, H2 model suite, endpoint-specific joint-gate design report,
+analysis runner, and source code.
+The closed manifest also pins the action names, corpus suite, endpoints, weights, margins,
+resampling counts, power model, and receipt URI template.
+
+The sole run-receipt URI is derived from the canonical frozen-manifest SHA-256. Before opening, the
+frozen digest must appear in an independently administered registration. OSF describes a
+preregistration as a time-stamped, read-only study plan posted before collection or analysis
+([OSF Support](https://help.osf.io/article/330-welcome-to-registrations)). The runner receives a
+canonical local copy of the registry record plus a closed receipt that binds the registry identity,
+HTTPS URI, UTC timestamp, and exact record-file digest. The local receipt is not evidence of
+registration without the matching registry record.
+The runner must also verify exact local coverage of every manifest artifact and write a canonical
+artifact-verification receipt. The approved runner must match the pinned identity and present the
+manifest lock plus both receipts. In production, `begin-sealed-run` also requires `--artifact-root`
+and `--artifact-map`. It rereads every mapped local artifact immediately before opening, rebuilds the
+verification receipt, and requires exact canonical-byte equality with the admitted receipt. A
+stored receipt cannot stand in for current bytes.
+
+`begin-sealed-run` validates those bindings and writes the run receipt exclusively. Before that
+write, its built-in path performs one fresh certificate-validated HTTPS GET of the receipt's
+registry URI, refuses redirects and responses over 64 KiB, and requires the fetched digest and bytes
+to equal the secure local canonical record. The admission preflight runs before the network-disabled
+sealed execution boundary. A pre-existing receipt, unavailable or redirected registry,
+remote-record mismatch, incomplete or changed local artifacts, digest mismatch, or symlinked
+receipt parent fails the opening. The fetch proves byte availability at admission time; independent
+review remains responsible for registry ownership and custody.
+The Python-only `trusted_registry_record_fetcher` parameter is an explicit test/integration seam;
+the production CLI never supplies it, and injected transport authentication becomes part of the
+trusted computing base. Size, digest, and exact-byte checks still apply to its output.
+
+The run receipt records manifest digest, protocol, UTC timestamp, runner identity, code commit, OCI
+image, protocol-registration and artifact-verification pointers, and its own URI. It does not run
+retrieval or statistics.
+
+After the prediction-label join, `run_confirmatory_analysis_once` accepts only a canonical local
+`file:` results directory. It derives the attempt, detached result-receipt, and result paths from the
+manifest digest. Before any H1 diagnostic or H2–H3 outcome computation, it validates the pinned model suite and
+creates the attempt receipt with `O_EXCL`. That receipt binds manifest, run, confirmatory-input
+digest, model-suite digest, runner identity, and intended result URI. An existing attempt aborts
+before computation, and a failed attempt remains on disk.
+
+After computation, the runner checks the result against the admitted attempt. It creates a detached
+result receipt, also with exclusive creation, before it creates the canonical result file. The
+detached receipt binds the attempt digest, result digest, manifest, and result URI. A crash may leave
+an attempt receipt or result receipt without a complete result; this is retained failure evidence,
+not permission to repeat the same admitted attempt. The built-in path rejects `s3:` and `gs:` result
+stores. A remote store requires a separately pinned authenticated create-if-absent adapter and
+conformance evidence. Operational steps are in
+[confirmatory-execution.md](confirmatory-execution.md).
+
+## Audit and release
+
+A governed request can produce a canonical hash-chained audit record with policy decision IDs and
+revisions, authorization-mask digests, component revisions, pseudonymous subject, controller
+action and reason, work accounting, evidence document IDs and content hashes, output digest, and
+predecessor hash.
+
+The record omits query text, vectors, distances, raw subject, evidence text, policy masks, and raw
+generated output. Verification detects middle deletion, reordering, changed records, and broken
+links. Tail deletion requires a trusted expected head or record count. A hash chain is
+tamper-evident; it is not an external signature or timestamp.
+
+After the one-shot analysis decision, release the frozen manifest and digest, run receipt, permitted
+data references, exclusions, paired action matrix, action-panel admission receipts, analysis-attempt
+receipt, detached result receipt, result digest, estimates, directional bounds, all gate decisions,
+event-yield sensitivity and joint-gate design results, conformance results, incident records, and
+audit anchors. Null gates are released with passing gates. Restricted evidence text, raw subjects,
+masks, query vectors, and policy secrets remain withheld.
+
+## Interpretation fixed before results
+
+- H1 is reported as a descriptive orientation diagnostic regardless of its sign and cannot change
+  primary success.
+- If H2 does not pass, geometry did not add the prespecified held-out predictive information beyond
+  system, policy, and probe-telemetry variables.
+- If H2 passes but H3 does not, prediction did not produce a controller result that met every cost,
+  fidelity, tail-latency, and authorization condition.
+- If `system-policy` matches `full`, remove the incremental geometry claim.
+- If a single primary H3 condition fails, the joint controller claim fails.
+- If any denied item crosses the controlled retrieval boundary, the authorization condition fails.
+- If retrieval-target attainment passes but evidence sufficiency does not, no complete-evidence
+  noninferiority claim is made.
+
+The protocol cannot establish organization-wide authorization, provider-native IAM equivalence,
+production scalability, downstream generator safety, continuous authorization after return, or
+resistance to every side channel.
+
+## Development evidence boundary
+
+`experiments/run_governance_pilot.py` is synthetic engineering evidence. It checks metric handling,
+authorization-first construction, bounded-probe reuse, exact authorized truth, paired action
+replay, audit accounting, and an unsafe comparator. Its thresholds were adjusted on synthetic
+data, and its rows cannot enter the sealed analysis.
+
+These remain synthetic mechanism results, not confirmatory findings. Confirmatory support requires
+a frozen, externally registered, label-separated, single-opening study that executes the
+five-corpus design, preserves the paired action matrix, and passes the pinned H2+H3 intersection
+without post-outcome revision. H1 remains descriptive even after that run.

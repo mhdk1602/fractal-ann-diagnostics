@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fractal-ann-diagnostics"
-version = "0.2.0"
-description = "Geometry-aware governance controls for authorization-filtered vector retrieval"
+version = "0.3.0"
+description = "Protocol apparatus for authorization-first, geometry-aware retrieval governance"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -25,9 +25,13 @@ keywords = [
     "authorization",
     "filtered-vector-search",
     "AI-governance",
+    "artifact-integrity",
+    "cluster-bootstrap",
+    "confirmatory-research",
+    "policy-as-code",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Topic :: Database",
@@ -50,14 +54,14 @@ dependencies = [
 hnsw = ["hnswlib>=0.8.0"]
 faiss = ["faiss-cpu>=1.7"]
 benchmarks = ["h5py>=3.10", "pyarrow>=14.0"]
-dev = ["pytest>=7.0", "ruff>=0.3", "pre-commit>=3.0"]
+dev = ["hatchling>=1.27", "pytest>=7.0", "ruff>=0.3", "pre-commit>=3.0"]
 
 [project.scripts]
 fractal-retrieval-governance = "fractal_ann_diagnostics.cli:main"
 
 [project.urls]
 Repository = "https://github.com/mhdk1602/fractal-ann-diagnostics"
-"Evaluation protocol" = "https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/preregistration.md"
+"Confirmatory protocol" = "https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/preregistration.md"
 "Evidence ledger" = "https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/literature.md"
 
 [tool.hatch.build.targets.wheel]

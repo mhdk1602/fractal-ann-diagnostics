@@ -12,7 +12,9 @@ Reference
 """
 from __future__ import annotations
 
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +51,32 @@ ANN_BENCHMARKS_BASE_URL = "https://ann-benchmarks.com"
 
 
 _USER_AGENT = "fractal-ann-diagnostics/0.1.0 (+https://github.com/mhdk1602/fractal-ann-diagnostics)"
+_DATASET_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _validated_https_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("benchmark download URL must be absolute HTTPS")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("benchmark download URL cannot contain credentials")
+    if parsed.fragment:
+        raise ValueError("benchmark download URL cannot contain a fragment")
+    return url
+
+
+class _HttpsOnlyRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(  # type: ignore[no-untyped-def]
+        self,
+        req,
+        fp,
+        code,
+        msg,
+        headers,
+        newurl,
+    ):
+        _validated_https_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def _download(url: str, dst: Path) -> None:
@@ -57,11 +85,14 @@ def _download(url: str, dst: Path) -> None:
     Sends a non-default User-Agent because ann-benchmarks.com sits behind
     Cloudflare and 403s the stock Python urllib UA.
     """
+    _validated_https_url(url)
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_suffix(dst.suffix + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    opener = urllib.request.build_opener(_HttpsOnlyRedirectHandler())
     try:
-        with urllib.request.urlopen(req) as resp, open(tmp, "wb") as f:  # noqa: S310
+        with opener.open(req, timeout=30) as resp, open(tmp, "wb") as f:
+            _validated_https_url(resp.geturl())
             while True:
                 chunk = resp.read(1 << 20)
                 if not chunk:
@@ -94,6 +125,9 @@ def load_ann_benchmark(name: str, cache_dir: Path) -> AnnDataset:
         Parsed contents (``train``, ``test``, ``neighbors``, ``distances``,
         ``distance_metric``).
     """
+    if not isinstance(name, str) or _DATASET_SLUG.fullmatch(name) is None:
+        raise ValueError("ANN-benchmarks name must be a single safe dataset slug")
+
     try:
         import h5py
     except ImportError as e:

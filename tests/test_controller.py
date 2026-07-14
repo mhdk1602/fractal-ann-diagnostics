@@ -21,8 +21,9 @@ def _features(*, drift: float = 0.0, churn: float = 0.0) -> QueryGeometry:
 def test_controller_exercises_low_high_exact_and_abstain_paths() -> None:
     controller = RuleController(
         ControllerConfig(
-            low_ef=10,
-            high_ef=40,
+            low_ef=128,
+            high_ef=256,
+            probe_k=101,
             exact_scan_threshold=10,
             high_effort_threshold=0.15,
             exact_threshold=0.25,
@@ -54,6 +55,7 @@ def test_controller_exercises_low_high_exact_and_abstain_paths() -> None:
     [
         {"low_ef": 0},
         {"low_ef": 40, "high_ef": 10},
+        {"low_ef": 100, "high_ef": 200, "probe_k": 101},
         {"exact_scan_threshold": -1},
         {"high_effort_threshold": 0.4, "exact_threshold": 0.3},
     ],
