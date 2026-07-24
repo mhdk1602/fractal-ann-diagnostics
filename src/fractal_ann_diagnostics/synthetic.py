@@ -1,4 +1,5 @@
 """Deterministic governed-vector scenarios for the development pilot."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

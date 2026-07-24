@@ -31,6 +31,8 @@ from fractal_ann_diagnostics.label_separation import (
 MANIFEST_SHA256 = "a" * 64
 TRIAL_KEY = "b" * 64
 FAMILY_KEY = "c" * 64
+ONLINE_RESULT_SHA256 = "f" * 64
+TIMELOCK_DECRYPTION_SHA256 = "1" * 64
 
 
 def _artifact_set() -> dict[str, Any]:
@@ -107,6 +109,7 @@ def _artifact_set() -> dict[str, Any]:
         run_receipt_sha256=predictions.run_receipt_sha256,
         execution_artifact_sha256=execution.artifact_sha256,
         prediction_artifact_sha256=predictions.artifact_sha256,
+        online_execution_result_receipt_sha256=ONLINE_RESULT_SHA256,
         action_panel_binding=ActionPanelBinding(
             manifest_sha256=MANIFEST_SHA256,
             run_receipt_sha256=predictions.run_receipt_sha256,
@@ -128,6 +131,8 @@ def _artifact_set() -> dict[str, Any]:
         execution_artifact_sha256=execution.artifact_sha256,
         prediction_artifact_sha256=predictions.artifact_sha256,
         prediction_completion_receipt_sha256=completion.receipt_sha256,
+        online_execution_result_receipt_sha256=ONLINE_RESULT_SHA256,
+        timelock_decryption_receipt_sha256=TIMELOCK_DECRYPTION_SHA256,
         sealed_label_artifact_sha256=sealed_labels.artifact_sha256,
         corpus=execution.corpus,
         stage=execution.stage,
@@ -200,9 +205,7 @@ def test_from_dict_recursively_restores_typed_rows() -> None:
     execution = OnlineExecutionArtifact.from_dict(artifacts["execution"].to_dict())
     sealed = SealedLabelArtifact.from_dict(artifacts["sealed_labels"].to_dict())
     predictions = PredictionArtifact.from_dict(artifacts["predictions"].to_dict())
-    completion = PredictionCompletionReceipt.from_dict(
-        artifacts["completion"].to_dict()
-    )
+    completion = PredictionCompletionReceipt.from_dict(artifacts["completion"].to_dict())
     offline = OfflineEvaluationArtifact.from_dict(artifacts["offline"].to_dict())
 
     assert execution == artifacts["execution"]
@@ -263,9 +266,9 @@ def test_from_dict_rejects_unknown_and_missing_top_level_fields(
         (
             "sealed_labels",
             SealedLabelArtifact,
-            lambda payload: payload["labels"][0]["evidence_bundles"][0][
-                "locations"
-            ][0].__setitem__("undeclared", 1),
+            lambda payload: payload["labels"][0]["evidence_bundles"][0]["locations"][0].__setitem__(
+                "undeclared", 1
+            ),
         ),
         (
             "predictions",
@@ -275,9 +278,7 @@ def test_from_dict_rejects_unknown_and_missing_top_level_fields(
         (
             "offline",
             OfflineEvaluationArtifact,
-            lambda payload: payload["trials"][0]["labels"].__setitem__(
-                "undeclared", 1
-            ),
+            lambda payload: payload["trials"][0]["labels"].__setitem__("undeclared", 1),
         ),
     ),
 )
@@ -299,12 +300,14 @@ def test_from_dict_rejects_unknown_nested_fields(
         lambda canonical: canonical,
         lambda canonical: canonical + b"\n\n",
         lambda canonical: canonical + b"\r\n",
-        lambda canonical: json.dumps(
-            json.loads(canonical),
-            indent=2,
-            ensure_ascii=False,
-        ).encode("utf-8")
-        + b"\n",
+        lambda canonical: (
+            json.dumps(
+                json.loads(canonical),
+                indent=2,
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n"
+        ),
     ),
 )
 def test_loader_requires_canonical_bytes_and_one_newline(

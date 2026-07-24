@@ -1,4 +1,5 @@
 """Normalization adapters for evidence-bearing confirmatory corpora."""
+
 from __future__ import annotations
 
 import hashlib
@@ -93,9 +94,7 @@ class EvidenceQuery:
             if not getattr(self, name):
                 raise ValueError(f"{name} must be non-empty")
         relevant = tuple(int(document_id) for document_id in self.relevant_document_ids)
-        if any(document_id < 0 for document_id in relevant) or len(set(relevant)) != len(
-            relevant
-        ):
+        if any(document_id < 0 for document_id in relevant) or len(set(relevant)) != len(relevant):
             raise ValueError("relevant_document_ids must be unique and non-negative")
         object.__setattr__(self, "relevant_document_ids", relevant)
         object.__setattr__(
@@ -133,10 +132,7 @@ class NormalizedCorpus:
         for query in queries:
             if query.corpus != self.name or query.stage != self.stage:
                 raise ValueError("every query must match the normalized corpus and stage")
-            if any(
-                document_id >= len(documents)
-                for document_id in query.relevant_document_ids
-            ):
+            if any(document_id >= len(documents) for document_id in query.relevant_document_ids):
                 raise ValueError("query relevance judgment names an unknown document")
             gold = query.gold_evidence
             if gold is None:
@@ -200,8 +196,10 @@ def normalize_scifact(
         external_id = str(row["doc_id"])
         title = row.get("title")
         abstract = row.get("abstract")
-        if not isinstance(title, str) or not isinstance(abstract, list) or not all(
-            isinstance(sentence, str) for sentence in abstract
+        if (
+            not isinstance(title, str)
+            or not isinstance(abstract, list)
+            or not all(isinstance(sentence, str) for sentence in abstract)
         ):
             raise CorpusFormatError(f"SciFact document {external_id} has invalid text fields")
         source_uri = f"scifact://document/{quote(external_id, safe='')}"
@@ -232,16 +230,16 @@ def normalize_scifact(
                 raise CorpusFormatError(f"claim {claim_id} has invalid rationale list")
             document = by_external.get(str(external_id))
             if document is None:
-                raise CorpusFormatError(
-                    f"claim {claim_id} names unknown document {external_id!r}"
-                )
+                raise CorpusFormatError(f"claim {claim_id} names unknown document {external_id!r}")
             for rationale_index, rationale in enumerate(rationales):
                 if not isinstance(rationale, dict):
                     raise CorpusFormatError(f"claim {claim_id} has invalid rationale")
                 sentences = rationale.get("sentences")
                 label = rationale.get("label")
-                if not isinstance(sentences, list) or not sentences or not all(
-                    type(sentence) is int and sentence >= 0 for sentence in sentences
+                if (
+                    not isinstance(sentences, list)
+                    or not sentences
+                    or not all(type(sentence) is int and sentence >= 0 for sentence in sentences)
                 ):
                     raise CorpusFormatError(
                         f"claim {claim_id} rationale must name non-negative sentences"
@@ -249,9 +247,7 @@ def normalize_scifact(
                 if label not in {"SUPPORT", "CONTRADICT"}:
                     raise CorpusFormatError(f"claim {claim_id} has unknown evidence label")
                 if any(sentence >= len(document.text.splitlines()) for sentence in sentences):
-                    raise CorpusFormatError(
-                        f"claim {claim_id} rationale sentence is out of range"
-                    )
+                    raise CorpusFormatError(f"claim {claim_id} rationale sentence is out of range")
                 labels.add(str(label))
                 locations = tuple(
                     EvidenceLocation(
@@ -264,9 +260,7 @@ def normalize_scifact(
                 )
                 alternatives.append(
                     CompleteEvidenceBundle(
-                        bundle_id=(
-                            f"document-{external_id}-rationale-{rationale_index}"
-                        ),
+                        bundle_id=(f"document-{external_id}-rationale-{rationale_index}"),
                         locations=locations,
                     )
                 )
@@ -437,8 +431,10 @@ def _text_from_document_row(row: Mapping[str, Any]) -> tuple[str, str, str]:
     text_value = row.get("text", row.get("contents", row.get("sentences")))
     if isinstance(text_value, list) and all(isinstance(item, str) for item in text_value):
         text_value = "\n".join(text_value)
-    if external_id_value is None or not isinstance(title_value, str) or not isinstance(
-        text_value, str
+    if (
+        external_id_value is None
+        or not isinstance(title_value, str)
+        or not isinstance(text_value, str)
     ):
         raise CorpusFormatError("document rows need an ID, title, and text")
     return str(external_id_value), title_value, text_value
@@ -642,9 +638,7 @@ def normalize_qrels_corpus(
             external_id=external_id,
             title=title,
             text=text,
-            source_uri=(
-                f"{quote(corpus_name, safe='')}://document/{quote(external_id, safe='')}"
-            ),
+            source_uri=(f"{quote(corpus_name, safe='')}://document/{quote(external_id, safe='')}"),
             content_hash=_content_hash(title, text),
         )
         for external_id, title, text in sorted(
@@ -664,13 +658,9 @@ def normalize_qrels_corpus(
             or not isinstance(score, (int, float))
             or not math.isfinite(float(score))
         ):
-            raise CorpusFormatError(
-                "qrels rows need query_id, document_id, and numeric relevance"
-            )
+            raise CorpusFormatError("qrels rows need query_id, document_id, and numeric relevance")
         if score > 0:
-            relevance.setdefault(str(query_id), set()).add(
-                registry.id_for(str(document_id))
-            )
+            relevance.setdefault(str(query_id), set()).add(registry.id_for(str(document_id)))
 
     queries: list[EvidenceQuery] = []
     for row in _jsonl(queries_path):
@@ -689,15 +679,11 @@ def normalize_qrels_corpus(
                 stage=stage,
                 answer=None,
                 gold_evidence=None,
-                relevant_document_ids=tuple(
-                    sorted(relevance.get(external_query_id, set()))
-                ),
+                relevant_document_ids=tuple(sorted(relevance.get(external_query_id, set()))),
                 metadata={},
             )
         )
-    known_query_ids = {
-        query.query_id.removeprefix(f"{corpus_name}:") for query in queries
-    }
+    known_query_ids = {query.query_id.removeprefix(f"{corpus_name}:") for query in queries}
     unknown_queries = set(relevance) - known_query_ids
     if unknown_queries:
         raise CorpusFormatError(f"qrels name unknown queries: {sorted(unknown_queries)}")

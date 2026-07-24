@@ -172,12 +172,9 @@ def test_invalid_allowed_document_ids_fail_closed(allowed_ids: object) -> None:
         b"{}",
         b'{"decision_id":"d","result":false}',
         b'{"decision_id":"d","result":{"allowed_document_ids":[]}}',
-        b'{"decision_id":"d","result":{"allowed_document_ids":{},'
-        b'"policy_revision":"v1"}}',
-        b'{"decision_id":"","result":{"allowed_document_ids":[],'
-        b'"policy_revision":"v1"}}',
-        b'{"decision_id":"d","result":{"allowed_document_ids":[],'
-        b'"policy_revision":""}}',
+        b'{"decision_id":"d","result":{"allowed_document_ids":{},"policy_revision":"v1"}}',
+        b'{"decision_id":"","result":{"allowed_document_ids":[],"policy_revision":"v1"}}',
+        b'{"decision_id":"d","result":{"allowed_document_ids":[],"policy_revision":""}}',
     ],
 )
 def test_invalid_json_or_schema_fails_closed(body: bytes) -> None:

@@ -59,6 +59,5 @@ def test_committed_pilot_exercises_low_effort_recall_failure() -> None:
     artifact = Path(__file__).parents[1] / "artifacts" / "pilot" / "summary.json"
     payload = json.loads(artifact.read_text(encoding="utf-8"))
     assert any(
-        row["strategy"] == "hnsw-low" and row["mean_recall"] < 1.0
-        for row in payload["summaries"]
+        row["strategy"] == "hnsw-low" and row["mean_recall"] < 1.0 for row in payload["summaries"]
     )

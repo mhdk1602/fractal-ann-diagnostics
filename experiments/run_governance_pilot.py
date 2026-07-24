@@ -1,4 +1,5 @@
 """Run the v0.2 authorization-first synthetic development pilot."""
+
 from __future__ import annotations
 
 import sys

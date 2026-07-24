@@ -218,10 +218,7 @@ def test_artifact_and_predictions_are_deterministic_and_digest_checked(
     np.testing.assert_array_equal(first.predict_proba(sealed), restored.predict_proba(sealed))
     assert restored.model("full").model_digest == first.model("full").model_digest
     assert first.model("full").engineered_numeric_features[-1] == "lid_k50__x__lid_cv"
-    assert (
-        "lid_k50__x__lid_cv"
-        not in first.model("system-policy").transformed_feature_names
-    )
+    assert "lid_k50__x__lid_cv" not in first.model("system-policy").transformed_feature_names
     assert "standardization" in first.to_json()
     assert "feature_schema_digest" in first.to_json()
 
@@ -259,12 +256,14 @@ def test_model_pin_bytes_have_one_canonical_round_trip_without_trailing_lf(
     assert restored_h1 == frozen_suite.model("full")
     restored_h2 = FrozenModelSuite.from_json(h2_bytes.decode("utf-8"))
     assert canonical_h2_model_suite_artifact_bytes(restored_h2) == h2_bytes
-    assert hashlib.sha256(
-        canonical_h1_model_artifact_bytes(restored_h2)
-    ).hexdigest() == hashlib.sha256(h1_bytes).hexdigest()
-    assert hashlib.sha256(
-        canonical_h2_model_suite_artifact_bytes(restored_h2)
-    ).hexdigest() == hashlib.sha256(h2_bytes).hexdigest()
+    assert (
+        hashlib.sha256(canonical_h1_model_artifact_bytes(restored_h2)).hexdigest()
+        == hashlib.sha256(h1_bytes).hexdigest()
+    )
+    assert (
+        hashlib.sha256(canonical_h2_model_suite_artifact_bytes(restored_h2)).hexdigest()
+        == hashlib.sha256(h2_bytes).hexdigest()
+    )
 
 
 def test_h2_metrics_are_paired_and_equal_family_weighted_by_fixed_corpus(
@@ -295,17 +294,10 @@ def test_h2_metrics_are_paired_and_equal_family_weighted_by_fixed_corpus(
         )
         assert np.isclose(
             corpus.for_model("system-policy").brier_score,
-            np.mean(
-                [
-                    family.system_policy_brier_score
-                    for family in corpus.family_paired_losses
-                ]
-            ),
+            np.mean([family.system_policy_brier_score for family in corpus.family_paired_losses]),
         )
         for _, metrics in corpus.model_metrics:
-            assert np.all(
-                np.isfinite((metrics.log_loss, metrics.brier_score, metrics.auprc))
-            )
+            assert np.all(np.isfinite((metrics.log_loss, metrics.brier_score, metrics.auprc)))
 
     equal_full = result.equal_corpus_for_model("full")
     assert np.isclose(

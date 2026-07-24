@@ -1,4 +1,5 @@
 """Paired-world observations for authorization noninterference tests."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -81,14 +82,10 @@ def observe_governed_result(result: GovernedResult) -> GovernedObservation:
         initial_mask_sha256=(
             _mask_digest(initial.authorized_mask) if initial is not None else None
         ),
-        final_mask_sha256=(
-            _mask_digest(final.authorized_mask) if final is not None else None
-        ),
+        final_mask_sha256=(_mask_digest(final.authorized_mask) if final is not None else None),
         geometry_source=(geometry.source if geometry is not None else None),
         geometry_values=(
-            tuple(float(value) for value in geometry.as_array())
-            if geometry is not None
-            else ()
+            tuple(float(value) for value in geometry.as_array()) if geometry is not None else ()
         ),
         lid_by_scale=(geometry.lid_by_scale if geometry is not None else ()),
         search=observe_search(result.search),

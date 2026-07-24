@@ -6,6 +6,7 @@ and evaluates every model on the same identified rows.  H1 output is a
 predictive marginal contrast; no causal or hierarchical-inference claim is
 made here.
 """
+
 from __future__ import annotations
 
 import json
@@ -172,17 +173,11 @@ class FeatureSchema:
         try:
             return cls(
                 system_numeric=tuple(str(item) for item in payload["system_numeric"]),
-                system_categorical=tuple(
-                    str(item) for item in payload["system_categorical"]
-                ),
+                system_categorical=tuple(str(item) for item in payload["system_categorical"]),
                 policy_numeric=tuple(str(item) for item in payload["policy_numeric"]),
-                policy_categorical=tuple(
-                    str(item) for item in payload["policy_categorical"]
-                ),
+                policy_categorical=tuple(str(item) for item in payload["policy_categorical"]),
                 geometry_numeric=tuple(str(item) for item in payload["geometry_numeric"]),
-                geometry_categorical=tuple(
-                    str(item) for item in payload["geometry_categorical"]
-                ),
+                geometry_categorical=tuple(str(item) for item in payload["geometry_categorical"]),
                 lid_feature=str(payload["lid_feature"]),
                 instability_feature=str(payload["instability_feature"]),
                 label_name=str(payload["label_name"]),
@@ -382,8 +377,7 @@ def _engineer_numeric(
         return numeric, names
     lookup = {name: index for index, name in enumerate(names)}
     interaction = (
-        numeric[:, lookup[schema.lid_feature]]
-        * numeric[:, lookup[schema.instability_feature]]
+        numeric[:, lookup[schema.lid_feature]] * numeric[:, lookup[schema.instability_feature]]
     )
     return np.column_stack((numeric, interaction)), names + (schema.interaction_name,)
 
@@ -517,7 +511,8 @@ class FrozenBinaryModel:
                 name=str(payload["name"]),  # type: ignore[arg-type]
                 blocks=tuple(str(item) for item in payload["blocks"]),  # type: ignore[arg-type]
                 numeric_features=tuple(
-                    str(item) for item in payload["numeric_features"]  # type: ignore[union-attr]
+                    str(item)
+                    for item in payload["numeric_features"]  # type: ignore[union-attr]
                 ),
                 categorical_features=tuple(
                     str(item)
@@ -528,24 +523,28 @@ class FrozenBinaryModel:
                     for levels in payload["categorical_levels"]  # type: ignore[union-attr]
                 ),
                 imputation_values=tuple(
-                    float(item) for item in payload["imputation_values"]  # type: ignore[union-attr]
+                    float(item)
+                    for item in payload["imputation_values"]  # type: ignore[union-attr]
                 ),
                 engineered_numeric_features=tuple(
                     str(item)
                     for item in payload["engineered_numeric_features"]  # type: ignore[union-attr]
                 ),
                 standardization_mean=tuple(
-                    float(item) for item in standardization["mean"]  # type: ignore[union-attr]
+                    float(item)
+                    for item in standardization["mean"]  # type: ignore[union-attr]
                 ),
                 standardization_scale=tuple(
-                    float(item) for item in standardization["scale"]  # type: ignore[union-attr]
+                    float(item)
+                    for item in standardization["scale"]  # type: ignore[union-attr]
                 ),
                 transformed_feature_names=tuple(
                     str(item)
                     for item in payload["transformed_feature_names"]  # type: ignore[union-attr]
                 ),
                 coefficients=tuple(
-                    float(item) for item in payload["coefficients"]  # type: ignore[union-attr]
+                    float(item)
+                    for item in payload["coefficients"]  # type: ignore[union-attr]
                 ),
                 intercept=float(payload["intercept"]),
                 calibration_slope=float(calibration["slope"]),
@@ -846,9 +845,7 @@ def fit_frozen_model_suite(
     training_groups = set(_group_hashes(validated_training))
     calibration_groups = set(_group_hashes(validated_calibration))
     if training_groups.intersection(calibration_groups):
-        raise DataLeakageError(
-            "development fit and calibration query families must be disjoint"
-        )
+        raise DataLeakageError("development fit and calibration query families must be disjoint")
 
     models = tuple(
         _fit_preprocessor_and_model(
@@ -886,9 +883,9 @@ def _predict_model(
     )
     if engineered_names != model.engineered_numeric_features:
         raise FeatureSchemaError("engineered feature order no longer matches the artifact")
-    scaled = (
-        engineered - np.asarray(model.standardization_mean, dtype=np.float64)
-    ) / np.asarray(model.standardization_scale, dtype=np.float64)
+    scaled = (engineered - np.asarray(model.standardization_mean, dtype=np.float64)) / np.asarray(
+        model.standardization_scale, dtype=np.float64
+    )
 
     categorical = _categorical_matrix(features, schema, model.categorical_features)
     encoded_columns: list[np.ndarray] = []
@@ -1023,16 +1020,13 @@ def evaluate_geometry_gain_gate(
         or not isinstance(minimum_corpora, int)
         or not 1 <= minimum_corpora <= len(evaluation.fixed_corpora)
     ):
-        raise ModelingContractError(
-            "minimum_corpora must be an integer inside the fixed suite"
-        )
+        raise ModelingContractError("minimum_corpora must be an integer inside the fixed suite")
     decisions = tuple(
         CorpusGeometryGainDecision(
             corpus_id=corpus.corpus_id,
             observed=corpus.system_policy_to_full,
             passed=(
-                corpus.system_policy_to_full.log_loss_reduction
-                > thresholds.log_loss_reduction
+                corpus.system_policy_to_full.log_loss_reduction > thresholds.log_loss_reduction
                 and corpus.system_policy_to_full.brier_score_reduction
                 > thresholds.brier_score_reduction
                 and corpus.system_policy_to_full.auprc_gain is not None
@@ -1094,9 +1088,7 @@ def _improvement(
         brier_score_reduction=reference.brier_score - full.brier_score,
         relative_brier_reduction=1.0 - full.brier_score / reference.brier_score,
         auprc_gain=(
-            None
-            if reference.auprc is None or full.auprc is None
-            else full.auprc - reference.auprc
+            None if reference.auprc is None or full.auprc is None else full.auprc - reference.auprc
         ),
     )
 
@@ -1183,9 +1175,7 @@ def evaluate_h2_by_corpus(
                     system_policy_log_loss=float(
                         log_loss(family_labels, reference_probability, labels=(0, 1))
                     ),
-                    full_log_loss=float(
-                        log_loss(family_labels, full_probability, labels=(0, 1))
-                    ),
+                    full_log_loss=float(log_loss(family_labels, full_probability, labels=(0, 1))),
                     system_policy_brier_score=float(
                         brier_score_loss(family_labels, reference_probability)
                     ),
@@ -1214,9 +1204,7 @@ def evaluate_h2_by_corpus(
                     np.mean([result.for_model(model_name).log_loss for result in corpus_results])
                 ),
                 brier_score=float(
-                    np.mean(
-                        [result.for_model(model_name).brier_score for result in corpus_results]
-                    )
+                    np.mean([result.for_model(model_name).brier_score for result in corpus_results])
                 ),
                 auprc=_mean_if_defined(
                     [result.for_model(model_name).auprc for result in corpus_results]

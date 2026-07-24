@@ -1,0 +1,167 @@
+name: Attest one confirmatory suite transition
+
+on:
+  workflow_dispatch:
+    inputs:
+      ledger_commit:
+        description: Full Git object ID at the protected manifest-derived ledger tip
+        required: true
+        type: string
+
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+
+concurrency:
+  group: confirmatory-state-${{ inputs.ledger_commit }}
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONPATH: src
+
+jobs:
+  attest:
+    environment: confirmatory
+    name: Validate protected ledger tip and attest exact state
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Admit only the fixed C0 tag, repository, event, and actor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_REF" = 'refs/tags/confirmatory-apparatus-c0'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-state-attestation.yml@${GITHUB_REF}"
+
+      - name: Check out the exact C0 workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the C0 verifier environment
+        run: uv sync --frozen --no-install-project
+
+      - name: Reject every subject except the current protected ledger tip
+        id: validate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          LEDGER_COMMIT: ${{ inputs.ledger_commit }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          validate-workflow-transition
+          --ledger-commit "$LEDGER_COMMIT"
+          --repository "$REPOSITORY"
+          --github-ref "$GITHUB_REF_VALUE"
+          --github-sha "$GITHUB_SHA_VALUE"
+          --workflow-ref "$WORKFLOW_REF"
+          --workflow-sha "$WORKFLOW_SHA"
+          --output-dir "${RUNNER_TEMP}/validated-ledger-tip"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the validated state-record digest
+        id: attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ${{ steps.validate.outputs.state_name }}
+          subject-digest: sha256:${{ steps.validate.outputs.state_digest }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/confirmatory-state/v1
+          predicate-path: ${{ steps.validate.outputs.predicate_path }}
+          create-storage-record: false
+
+      - name: Materialize typed provider evidence
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attestation.outputs.bundle-path }}
+          RECEIPT_PATH: ${{ steps.validate.outputs.receipt_path }}
+          STATE_SEQUENCE: ${{ steps.validate.outputs.state_sequence }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          emit-evidence
+          --bundle "$ATTESTATION_BUNDLE"
+          --receipt "$RECEIPT_PATH"
+          --output "${RUNNER_TEMP}/validated-ledger-tip/${STATE_SEQUENCE}.attestation.json"
+
+      - name: Assemble the retained evidence package
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attestation.outputs.bundle-path }}
+          ATTESTATION_ID: ${{ steps.attestation.outputs.attestation-id }}
+          ATTESTATION_URL: ${{ steps.attestation.outputs.attestation-url }}
+          STATE_SEQUENCE: ${{ steps.validate.outputs.state_sequence }}
+        run: |
+          set -euo pipefail
+          package="${RUNNER_TEMP}/confirmatory-state-evidence"
+          install -d -m 0700 "$package"
+          test -f "$ATTESTATION_BUNDLE"
+          test -n "$ATTESTATION_ID"
+          test -n "$ATTESTATION_URL"
+          cp -- "$ATTESTATION_BUNDLE" \
+            "$package/${STATE_SEQUENCE}.sigstore.bundle.json"
+          cp -- "${RUNNER_TEMP}/validated-ledger-tip/${STATE_SEQUENCE}.state.json" \
+            "$package/${STATE_SEQUENCE}.state.json"
+          cp -- "${RUNNER_TEMP}/validated-ledger-tip/${STATE_SEQUENCE}.attestation.json" \
+            "$package/${STATE_SEQUENCE}.attestation.json"
+          cp -- "${RUNNER_TEMP}/validated-ledger-tip/ledger-validation.json" \
+            "$package/ledger-validation.json"
+          cp -- "${RUNNER_TEMP}/validated-ledger-tip/predicate.json" \
+            "$package/predicate.json"
+          test -d "${RUNNER_TEMP}/validated-ledger-tip/ledger-controls"
+          cp -R -- "${RUNNER_TEMP}/validated-ledger-tip/ledger-controls" \
+            "$package/ledger-controls"
+          printf '%s\n' "$ATTESTATION_ID" > "$package/github-attestation-id.txt"
+          printf '%s\n' "$ATTESTATION_URL" > "$package/github-attestation-url.txt"
+          printf '%s/%s/actions/runs/%s/attempts/%s\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" > "$package/workflow-run.txt"
+          checksum_tmp="${RUNNER_TEMP}/confirmatory-state-evidence.SHA256SUMS.tmp"
+          test ! -e "$checksum_tmp"
+          (
+            cd "$package"
+            find . -type f ! -name SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 -r sha256sum
+          ) > "$checksum_tmp"
+          test -s "$checksum_tmp"
+          (
+            cd "$package"
+            sha256sum --check "$checksum_tmp"
+          )
+          install -m 0600 -- "$checksum_tmp" "$package/SHA256SUMS"
+
+      - name: Upload the provider evidence package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-state-${{ steps.validate.outputs.suite_attempt_id }}-${{ steps.validate.outputs.state_sequence }}-${{ steps.validate.outputs.transition_id }}
+          path: ${{ runner.temp }}/confirmatory-state-evidence
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90

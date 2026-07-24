@@ -25,6 +25,7 @@ def _row(
     action: str = "hnsw-low",
     action_order: int = 0,
     *,
+    execution_position: int | None = None,
     controller_selected: bool = True,
 ) -> PreLabelActionRow:
     abstained = action == "abstain"
@@ -33,6 +34,7 @@ def _row(
         family_key="b" * 64,
         action=action,
         action_order=action_order,
+        execution_position=(action_order if execution_position is None else execution_position),
         audit_record_sha256="f" * 64,
         execution_state="abstained" if abstained else "completed",
         failure_state="registered-abstention" if abstained else None,
@@ -71,9 +73,7 @@ def test_prelabel_row_round_trips_through_closed_memory_and_file_apis(
     row = _row()
     assert PreLabelActionRow.from_dict(row.to_dict()) == row
     assert loads_prelabel_action_row(row.canonical_bytes() + b"\n") == row
-    assert loads_prelabel_action_row(
-        (row.canonical_bytes() + b"\n").decode("utf-8")
-    ) == row
+    assert loads_prelabel_action_row((row.canonical_bytes() + b"\n").decode("utf-8")) == row
 
     target = (tmp_path / "row.json").resolve()
     write_prelabel_action_row(row, target)
@@ -90,9 +90,7 @@ def test_action_panel_round_trips_through_closed_memory_and_file_apis(
     panel = _panel()
     assert ActionPanelArtifact.from_dict(panel.to_dict()) == panel
     assert loads_action_panel_artifact(panel.canonical_bytes() + b"\n") == panel
-    assert loads_action_panel_artifact(
-        (panel.canonical_bytes() + b"\n").decode("utf-8")
-    ) == panel
+    assert loads_action_panel_artifact((panel.canonical_bytes() + b"\n").decode("utf-8")) == panel
 
     target = (tmp_path / "panel.json").resolve()
     write_action_panel_artifact(panel, target)

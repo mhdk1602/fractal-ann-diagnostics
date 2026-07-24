@@ -1,0 +1,392 @@
+# C0 production artifact factory
+
+The production artifact factory turns the five verified paired-embedding stores into the exact
+label-free packages cited by C1. Before A exists, it runs inside the digest-qualified candidate
+scientific image built from bootstrap source P on `linux/arm64`. The candidate and production
+locators share the same OCI index digest D; production later promotes those exact index bytes.
+It does not bind a runtime preflight receipt. Runtime preflight occurs after the factory has
+finished and the final artifact trees exist, which avoids a digest cycle between construction
+and sealed execution.
+
+The command has no label, qrel, evidence, custody-release, plugin, callback, network, or generic
+subprocess argument. Its sole secret input is an ephemeral HMAC key on standard input. That key
+creates opaque query-family and trial identifiers; it does not score an outcome.
+
+## Closed inputs
+
+The module's `write-config` command takes only the artifact root, the externally pinned
+embedding config, the verified post-embedding development operator root and receipt, the
+partition audit, candidate scientific image, HMAC secret on descriptor 0, and an output path. It derives the
+materialization, design seed, joint-power report, selected family count, and every downstream
+randomized value. Duplicate caller values are rejected. The config records:
+
+- the empty writable artifact root;
+- the production embedding config path and digest;
+- an absolute read-only embedding-source root, its complete tree digest, and the production
+  embedding-suite receipt digest;
+- the development materialization, query-partition audit, and joint-power report pins;
+- the post-embedding development root, terminal receipt, and joint-power tree pin;
+- the digest-qualified candidate scientific image and the sole admitted platform, `linux/arm64`;
+- the fixed corpus order: `scifact`, `hotpotqa-fullwiki`, `t2-ragbench`, `bright`, and
+  `miracl-transfer`;
+- the fixed stage order: `fit`, `calibration`, then `sealed`;
+- the design seed and its domain-separated policy, family-selection, permutation, and revision
+  values;
+- the installed hnswlib version and extension digest plus the fixed cosine, `M=16`,
+  `efConstruction=128`, seed `20260714`, batch `512`, verification `ef=64`, one-thread index
+  parameters;
+- three replicas for every authorized-index stage and for the deployed full-active HNSW in the
+  distinct roots `replicate-01`, `replicate-02`, and `replicate-03`, with replica 1 as the selected
+  copy;
+- the HMAC commitment and its derived public identifier.
+
+The public identifier has one valid form:
+
+```text
+hmac_secret_sha256 = sha256(secret_bytes)
+hmac_key_id = "sealed-online-ephemeral-sha256-" + hmac_secret_sha256
+```
+
+The config and receipts contain both values above, but never `secret_bytes`. A different key ID,
+a different commitment, another platform, a reordered corpus or stage, a second selected
+replica, or an undeclared JSON field fails during config admission.
+
+The embedding config's `output_root` must equal the factory's `embedding_source_root`. The source
+root must be a real read-only filesystem mount. The factory verifies the canonical production
+embedding config, hashes the whole source tree, reproduces the embedding-suite receipt, checks all
+five typed embedding stores, and joins their inventory to the development materialization,
+partition audit, online projection, and power decision.
+
+The post-embedding receipt closes the development-to-production provenance join. Its typed
+verifier must reproduce the same embedding-suite receipt, materialization receipt, design seed,
+partition-audit file and semantic digest, joint-power report and tree, fixed index config, and
+selected family count. The factory derives the materialization root and report path from that
+verified operator package. It does not accept parallel caller values for those fields.
+
+The candidate image contract guarantees `/opt/venv/bin/python`; it does not promise that the
+`fractal-production-artifacts` console script is installed. Every invocation therefore uses the
+module entry point explicitly. Create the empty private artifact root first, then write the config:
+
+```bash
+IMAGE='ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-candidate@sha256:<scientific-index-digest>'
+
+docker run --rm -i \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  write-config \
+  --artifact-root /output/production-artifacts \
+  --embedding-config /input/production-embedding-config.json \
+  --embedding-config-sha256 <embedding-config-sha256> \
+  --development-operator-root /input/post-embedding-development \
+  --development-operator-receipt-sha256 <post-embedding-receipt-sha256> \
+  --partition-audit /input/query-partition-audit.json \
+  --partition-audit-sha256 <partition-audit-file-sha256> \
+  --runner-image "$IMAGE" \
+  --hmac-secret-fd 0 \
+  --output /output/production-artifact-factory.json \
+  < /host/secret/query-id-hmac.bin
+```
+
+## Copy boundary
+
+The writable artifact root must already exist, be owned by the runner, have no group or other
+write bit, and contain no entries when `build` starts. The factory copies the admitted embedding
+tree into `.embedding-stores.partial` with exclusive file creation. Source files must be regular,
+singly linked files; source directories may not contain symlinks, devices, sockets, or FIFOs.
+Each source file is checked before and after its copy.
+
+After the copy, the factory hashes the source tree again, hashes the destination tree, and
+requires both digests to equal the admitted source pin. It then publishes the destination as
+`embedding-stores/` with a no-replace directory rename. An existing partial tree is terminal for
+that artifact root. The operator must retain it for inspection and start with a new empty root;
+the factory never guesses which partial bytes are safe to keep.
+
+## Fixed build sequence
+
+For each corpus in protocol order, the factory performs these operations:
+
+1. reproduce the `fit` and `calibration` development plans;
+2. create or verify the matching compiled-policy package;
+3. build the authorized-index store three times in distinct roots with the fixed one-thread
+   hnswlib config;
+4. compare every HNSW digest, row-map digest, build-binding digest, store receipt, and tree digest;
+5. byte-copy replica 1 into the selected authorized-index root and rehash that copy;
+6. create the sealed query package with the committed HMAC key, then assert that its receipt
+   carries the exact derived key ID;
+7. create the label-free online execution package, the sealed policy package, three sealed index
+   replicas, the stage bundles, and the runtime-admission receipt;
+8. write one exclusive corpus evidence receipt.
+
+Before the online package is published, the factory also builds its full-active HNSW three times in
+`authorized-index-reproducibility/<corpus>/full-active/`. A typed receipt binds the source-vector
+digest, document count, dimension, backend extension, format revision, all three byte digests, and
+replica 1 as the selected copy. Only that exact copy enters `custody/online/<corpus>/`; the other two
+copies remain reproducibility evidence rather than deployable inputs.
+
+The complete suite contains 60 isolated HNSW builds: 45 authorized-index builds (five corpora times
+three stages times three replicas) plus 15 full-active builds (five corpora times three replicas). A
+resumed run verifies every existing whole-artifact boundary before moving forward. It never
+overwrites a receipt or silently rebuilds an object whose registered path is already present.
+
+## Development HNSW feasibility measurement
+
+A 2026-07-17 development measurement tested the registered HNSW numerical settings before C0. The
+host was the Apple M4 Max used for the embedding feasibility work. The environment used hnswlib
+`0.8.0` with extension SHA-256
+`5132b1579ee553977a4a8b46c4a04c73e38146a0bba24c67d37f0096a863cf86`, NumPy `2.5.1`, macOS
+`26.3.1`, and arm64. Each input was a seed-`20260714` matrix of normalized random float32 vectors;
+the timed interval covered only `add_items`. Every index used cosine distance, dimension 256,
+`M=16`, `efConstruction=128`, HNSW seed `20260714`, integer labels `0..N-1`, and one thread.
+
+| Rows | Build time | Throughput | Serialized bytes/row | Peak RSS |
+| ---: | ---: | ---: | ---: | ---: |
+| 20,000 | 11.832 s | 1,690.36 rows/s | 1,172.551 | 139.1 MiB |
+| 100,000 | 87.493 s | 1,142.95 rows/s | 1,172.663 | 540.8 MiB |
+| 250,000 | 249.634 s | 1,001.47 rows/s | 1,172.577 | 1,285.5 MiB |
+
+The serialized files contained 23,451,012, 117,266,304, and 293,144,196 bytes. Their SHA-256
+values, in ascending row-count order, were
+`8d64711c6fb7ddaf7870e99a0a616e47dc0232c1edb75679348fb042f7c8f5d8`,
+`fd5599493f1b7c09de1a372a1d30763235d1c64cbe2e5c16686690ac6519d7d5`, and
+`61e2a7f230d42cae6ed7ec2caeebd551ce1611afea9d0270936d072e4e0d0c70`.
+
+A linear fit of seconds per row against `ln(N)` projects 665 rows/s and 2.18 hours for one
+5.23-million-row build. Applying that rate to the deliberately conservative ceiling of twelve
+full-corpus build equivalents per corpus gives 32.7 build-hours for 78,220,668 indexed-row
+equivalents. Corpus-lane scheduling can reduce wall time because the five lanes are disjoint. The
+projection excludes vector preparation, artifact copies, hashing, admission passes, and any change
+caused by the real embedding geometry, so it does not turn the 12–36 hour planning interval into a
+guarantee. Terminal receipts remain the authority for elapsed time and resource use.
+
+The same measurement serialized between 1,172.551 and 1,172.663 bytes per indexed row. Even if all
+authorized stages contained every document and all sixteen retained HNSW files per corpus reached
+that size, the indexes would occupy about 113.9 GiB. The original and factory-copied paired
+float32 embedding stores add about 24.9 GiB. This synthetic calculation is a capacity check, not a
+claim about production bytes; the operator must still measure free space and retain a material
+margin before construction.
+
+If a process is killed during an authorized-index build, the kernel releases its advisory lock but
+the exclusive lock file and tokenized staging directory may remain. `resume` or `resume-shard`
+acquires the corpus lane first, proves that the old builder lock is no longer held, checks the exact
+owner, mode, link count, name, and member types of the unpublished staging tree, and removes only
+those temporary names. Cleanup first renames the checked inode to a fresh recovery-only name through
+the pinned parent descriptor, proves that the renamed inode is still the open staging tree, and only
+then deletes it. The interrupted replica is then rebuilt. A published replica, selected copy,
+online package, reproducibility receipt, or corpus evidence file is never deleted or repaired. The
+same corpus-locked rule discards an unpublished selected-copy, full-active-replica, or online-package
+staging directory after a power interruption. A live lock, missing lock, malformed name, link,
+special file, ownership change, or permissive mode fails closed.
+
+The sequential `build` command remains the reference construction path. The sharded path below
+calls the same corpus builder and the same terminal assembler. It changes scheduling, not the
+policy, query, index, runtime, receipt, or final package semantics.
+
+The final suite receipt binds the source and destination embedding-tree digests, embedding-suite
+receipt, candidate image, platform, HMAC key ID and secret commitment, online inventory, index
+reproducibility suite, artifact-pipeline receipt, and five corpus evidence rows. Verification
+reproduces that receipt without writing.
+
+## Five-corpus shard and aggregate path
+
+Corpus construction can run as five independent C0 processes after one sequential preparation
+step. Preparation admits the full factory config, rehashes the entire read-only embedding source,
+copies that source once, creates the declared corpus roots, checks the installed HNSW binary, and
+publishes exactly five canonical request files. Each request is derived from the full config. It
+contains no caller-selected seed, stage, replica, model, family count, backend parameter, or output
+redirect.
+
+Each request binds:
+
+- the factory-config digest and absolute artifact root;
+- one member of `FIXED_CORPORA`;
+- the candidate image and `linux/arm64` platform;
+- the embedding source-tree and suite-receipt digests;
+- both the HMAC secret commitment and its derived key ID;
+- the exact six corpus-owned destinations for policy, index, runtime, online, reproducibility, and
+  corpus-evidence artifacts.
+
+The six destination sets are pairwise disjoint. A worker takes a nonblocking advisory lock on its
+precreated reproducibility directory and never writes a suite receipt, aggregate reproducibility
+receipt, or artifact-pipeline receipt. A second worker for the same corpus fails before it can
+write. Workers for different corpora may run at the same time. They read the shared immutable
+embedding copy and upstream source mounts, then write only corpus-namespaced entries.
+All workers must see one filesystem with coherent POSIX `flock` behavior. Do not distribute these
+lanes across clients whose advisory locks are host-local.
+
+Run preparation once, with the request directory outside `artifact_root`:
+
+```bash
+docker run --rm \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  prepare-shards \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256> \
+  --request-directory /output/factory-shard-control/requests
+```
+
+Preparation emits these files in protocol order:
+
+```text
+01-scifact.json
+02-hotpotqa-fullwiki.json
+03-t2-ragbench.json
+04-bright.json
+05-miracl-transfer.json
+```
+
+Launch one worker per request. The request digest is an external byte pin, not a corpus selector.
+The same private HMAC bytes go to descriptor 0 for every worker. Give each worker a distinct
+receipt output outside `artifact_root`:
+
+```bash
+docker run --rm -i \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  build-shard \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256> \
+  --request /output/factory-shard-control/requests/01-scifact.json \
+  --request-sha256 <scifact-request-sha256> \
+  --hmac-secret-fd 0 \
+  --receipt-output /output/factory-shard-control/receipts/01-scifact.json \
+  < /secret/query-id-hmac.bin
+```
+
+Use `resume-shard` with the same request, request digest, secret bytes, and receipt destination if a
+worker stops at a verified whole-artifact boundary. A completed receipt is deterministic over the
+current corpus tree. It pins the request, config, runner, HMAC commitment and key ID, canonical
+corpus evidence, and all six owned artifact digests. It contains no secret bytes.
+
+After all workers exit, aggregate once. Receipt arguments may arrive in any order. Aggregation
+requires exactly one receipt for each fixed corpus, acquires all five locks, re-admits the entire
+upstream suite, rehashes the embedding copy, reproduces every corpus artifact, compares every
+owned-tree digest, and only then writes the three shared terminal receipts:
+
+```bash
+docker run --rm \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  aggregate-shards \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256> \
+  --shard-receipt /output/factory-shard-control/receipts/05-miracl-transfer.json \
+  --shard-receipt /output/factory-shard-control/receipts/02-hotpotqa-fullwiki.json \
+  --shard-receipt /output/factory-shard-control/receipts/01-scifact.json \
+  --shard-receipt /output/factory-shard-control/receipts/04-bright.json \
+  --shard-receipt /output/factory-shard-control/receipts/03-t2-ragbench.json
+```
+
+Missing, duplicate, extra, replayed, wrong-config, wrong-secret, and partial-tree evidence fails
+before terminal publication. The aggregator orders verified evidence by `FIXED_CORPORA` and calls
+the sequential builder's terminal assembler, so equal corpus bytes produce the same terminal suite
+receipt regardless of worker completion order.
+
+The three replicas of each HNSW artifact inside one corpus remain sequential. Their one-thread
+numerical contract, per-replica peak-memory evidence, and selected-replica comparison are defined
+inside one process. Concurrent child processes would need a separately frozen scheduler,
+memory-isolation rule, and resource-evidence model. That extra mechanism is not part of C0.
+Parallelizing the five closed corpus lanes captures the safe scheduling gain: the factory duration
+becomes approximately the slowest corpus lane plus preparation and aggregation, rather than the sum
+of all five lanes.
+
+## Secret transport
+
+For a new build, pass 32–4096 raw bytes only on file descriptor 0. The CLI rejects every other
+descriptor. It reads to EOF before admitting an upstream input or creating an output, hashes the
+bytes, and compares the digest with `hmac_secret_sha256`.
+
+```bash
+docker run --rm -i \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  build \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256> \
+  --hmac-secret-fd 0 \
+  < /secret/query-id-hmac.bin
+```
+
+Do not place the secret in an argument, environment variable, config, receipt, log, image layer,
+Git tree, or shell history. Retain the original bytes in the private C1 custody set because the
+sealed online runner must reproduce the same opaque identifiers.
+
+`resume` may omit standard input only when all five query packages already exist and verify. If
+even one is absent, supply the same secret through descriptor 0. The command checks its
+commitment before any further write.
+
+```bash
+docker run --rm -i \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  resume \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256> \
+  --hmac-secret-fd 0 \
+  < /secret/query-id-hmac.bin
+
+docker run --rm \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output,readonly \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  verify \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256>
+
+docker run --rm \
+  --platform linux/arm64 \
+  --entrypoint /opt/venv/bin/python \
+  --mount type=bind,src=/host/input,dst=/input,readonly \
+  --mount type=bind,src=/host/output,dst=/output,readonly \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.production_artifact_factory \
+  status \
+  --config /input/production-artifact-factory.json \
+  --config-sha256 <factory-config-sha256>
+```
+
+`status` only inventories declared phase paths. It does not admit inputs, open the secret, repair
+an interrupted tree, or imply that an artifact passed verification.
+
+## P, C0, and C1 boundary
+
+Bootstrap source commit P fixes this factory, the numerical stack, hnswlib extension, policy engine,
+and candidate container identity. The factory config cites the published candidate OCI digest and
+admits no alternate platform. The factory may run only after candidate publication and its
+anonymous digest-read gate have passed. Its outputs help close the raw candidate manifest later
+committed at apparatus commit A; they therefore cannot depend on A.
+
+C1 can cite a factory output only after `verify` succeeds from the candidate image, the exact OCI
+index D is promoted without rebuilding into the production repository at C0, and an independent
+artifact inventory pins every resulting tree and receipt. The later runtime-preflight transition
+may observe host facts and bind the final execution plan. It may not change a factory artifact,
+query key identity, corpus order, policy stage, selected HNSW bytes, or embedding source. C0 alone
+does not authorize a sealed attempt, and a complete factory receipt is not evidence that labels
+were released or that an analysis ran.

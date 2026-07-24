@@ -4,6 +4,7 @@ The record chain detects changes relative to a trusted chain head or expected
 length. It does not provide immutable storage, signatures, or protection when
 an attacker can rewrite the full chain and its external anchor.
 """
+
 from __future__ import annotations
 
 import hmac
@@ -14,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
@@ -41,6 +42,20 @@ _ALLOWED_COMPONENTS = _REQUIRED_COMPONENTS | {
     "normalizer",
     "runner",
 }
+
+
+@runtime_checkable
+class AdmittedProvenanceRegistry(Protocol):
+    """Digest-only registry surface admitted by the sealed orchestrator."""
+
+    corpus_name: str
+    corpus_stage: str
+    document_count: int
+    document_universe_sha256: str
+    verification_receipt_sha256: str
+    component_revisions: tuple[tuple[str, str], ...]
+
+    def content_sha256(self, document_id: int) -> str: ...
 
 
 def _require_nonempty(name: str, value: str) -> str:
@@ -90,8 +105,8 @@ def _normalize_timestamp(value: datetime | str | None) -> str:
             raise ValueError("occurred_at must be an ISO 8601 timestamp") from exc
     if instant.tzinfo is None or instant.utcoffset() is None:
         raise ValueError("occurred_at must include a timezone")
-    return instant.astimezone(timezone.utc).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
+    return (
+        instant.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     )
 
 
@@ -126,9 +141,7 @@ class AuthorizationAudit:
         _require_nonempty("policy_revision", self.policy_revision)
         _require_sha256("mask_sha256", self.mask_sha256)
         _require_sha256("environment_sha256", self.environment_sha256)
-        _require_sha256(
-            "document_universe_sha256", self.document_universe_sha256
-        )
+        _require_sha256("document_universe_sha256", self.document_universe_sha256)
         _require_nonempty("request_nonce", self.request_nonce)
         _require_sha256("request_sha256", self.request_sha256)
         if self.mask_size < 0:
@@ -255,42 +268,37 @@ class VerifiedProvenanceRegistry:
         if not isinstance(corpus, NormalizedCorpus):
             raise TypeError("corpus must be a NormalizedCorpus")
         if not isinstance(verification_receipt, ArtifactVerificationReceipt):
-            raise TypeError(
-                "verification_receipt must be an ArtifactVerificationReceipt"
-            )
+            raise TypeError("verification_receipt must be an ArtifactVerificationReceipt")
         if not isinstance(component_artifact_ids, Mapping):
             raise TypeError("component_artifact_ids must be a mapping")
 
         binding = dict(component_artifact_ids)
         if any(not isinstance(name, str) for name in binding):
             raise ValueError("component names must be strings")
-        if any(not isinstance(artifact_id, str) or not artifact_id.strip()
-               for artifact_id in binding.values()):
+        if any(
+            not isinstance(artifact_id, str) or not artifact_id.strip()
+            for artifact_id in binding.values()
+        ):
             raise ValueError("component artifact IDs must be non-empty strings")
         component_names = set(binding)
         missing_components = _REQUIRED_COMPONENTS - component_names
         unknown_components = component_names - _ALLOWED_COMPONENTS
         if missing_components:
-            raise ValueError(
-                f"component_artifact_ids are missing {sorted(missing_components)}"
-            )
+            raise ValueError(f"component_artifact_ids are missing {sorted(missing_components)}")
         if unknown_components:
             raise ValueError(
-                "component_artifact_ids contain unknown names "
-                f"{sorted(unknown_components)}"
+                f"component_artifact_ids contain unknown names {sorted(unknown_components)}"
             )
         if len(set(binding.values())) != len(binding):
             raise ValueError("each component must bind a distinct artifact ID")
 
         artifacts_by_id = {
-            artifact.artifact_id: artifact
-            for artifact in verification_receipt.artifacts
+            artifact.artifact_id: artifact for artifact in verification_receipt.artifacts
         }
         unknown_artifacts = set(binding.values()) - set(artifacts_by_id)
         if unknown_artifacts:
             raise ValueError(
-                "component_artifact_ids name unverified artifacts "
-                f"{sorted(unknown_artifacts)}"
+                f"component_artifact_ids name unverified artifacts {sorted(unknown_artifacts)}"
             )
         non_exact = sorted(
             artifact_id
@@ -299,8 +307,7 @@ class VerifiedProvenanceRegistry:
         )
         if non_exact:
             raise ValueError(
-                "audit components require exact verified artifacts; non-exact IDs "
-                f"are {non_exact}"
+                f"audit components require exact verified artifacts; non-exact IDs are {non_exact}"
             )
 
         document_identities = tuple(
@@ -314,12 +321,9 @@ class VerifiedProvenanceRegistry:
             ).decode("utf-8")
             for document in corpus.documents
         )
-        document_universe_sha256 = policy_document_universe_sha256(
-            document_identities
-        )
+        document_universe_sha256 = policy_document_universe_sha256(document_identities)
         content_digests = tuple(
-            document.content_hash.removeprefix("sha256:")
-            for document in corpus.documents
+            document.content_hash.removeprefix("sha256:") for document in corpus.documents
         )
         component_revisions = tuple(
             sorted(
@@ -334,9 +338,7 @@ class VerifiedProvenanceRegistry:
         object.__setattr__(self, "corpus_name", corpus.name)
         object.__setattr__(self, "corpus_stage", corpus.stage)
         object.__setattr__(self, "document_count", len(corpus.documents))
-        object.__setattr__(
-            self, "document_universe_sha256", document_universe_sha256
-        )
+        object.__setattr__(self, "document_universe_sha256", document_universe_sha256)
         object.__setattr__(
             self,
             "verification_receipt_sha256",
@@ -398,9 +400,7 @@ class AuditRecord:
         _require_sha256("trial_sha256", self.trial_sha256)
         _require_sha256("subject_pseudonym", self.subject_pseudonym)
         _require_nonempty("pseudonym_key_id", self.pseudonym_key_id)
-        _require_sha256(
-            "provenance_receipt_sha256", self.provenance_receipt_sha256
-        )
+        _require_sha256("provenance_receipt_sha256", self.provenance_receipt_sha256)
         _require_nonempty("controller_action", self.controller_action)
         _require_nonempty("controller_policy_revision", self.controller_policy_revision)
         reasons_are_empty = any(not reason.strip() for reason in self.controller_reasons)
@@ -408,9 +408,7 @@ class AuditRecord:
             raise ValueError("controller_reasons must contain non-empty strings")
         if not math.isfinite(self.controller_risk_score):
             raise ValueError("controller_risk_score must be finite")
-        _require_nonnegative_finite(
-            "authorization_latency_ms", self.authorization_latency_ms
-        )
+        _require_nonnegative_finite("authorization_latency_ms", self.authorization_latency_ms)
         _require_nonnegative_finite("controller_latency_ms", self.controller_latency_ms)
         _require_nonnegative_finite("total_online_latency_ms", self.total_online_latency_ms)
         if self.geometry_feature_latency_ms is not None:
@@ -428,9 +426,7 @@ class AuditRecord:
         missing_components = _REQUIRED_COMPONENTS - component_name_set
         unknown_components = component_name_set - _ALLOWED_COMPONENTS
         if missing_components:
-            raise ValueError(
-                f"component_revisions are missing {sorted(missing_components)}"
-            )
+            raise ValueError(f"component_revisions are missing {sorted(missing_components)}")
         if unknown_components:
             raise ValueError(
                 f"component_revisions contain unknown names {sorted(unknown_components)}"
@@ -485,9 +481,7 @@ class AuditRecord:
             "geometry_feature_latency_ms": self.geometry_feature_latency_ms,
             "index_refresh": None if self.index_refresh is None else self.index_refresh.to_dict(),
             "initial_authorization": (
-                None
-                if self.initial_authorization is None
-                else self.initial_authorization.to_dict()
+                None if self.initial_authorization is None else self.initial_authorization.to_dict()
             ),
             "occurred_at": self.occurred_at,
             "output_emitted": self.output_emitted,
@@ -552,7 +546,7 @@ def _work_audit(latency_ms: float, work: SearchWork | None, returned: int) -> Wo
 
 def _evidence_audit(
     result: GovernedResult,
-    provenance_registry: VerifiedProvenanceRegistry,
+    provenance_registry: AdmittedProvenanceRegistry,
 ) -> tuple[EvidenceAudit, ...]:
     if result.search is None:
         return ()
@@ -578,7 +572,7 @@ def audit_record_from_governed_result(
     subject: str,
     pseudonym_key: bytes,
     pseudonym_key_id: str,
-    provenance_registry: VerifiedProvenanceRegistry,
+    provenance_registry: AdmittedProvenanceRegistry,
     output: str | bytes | None = None,
     occurred_at: datetime | str | None = None,
     previous_record: AuditRecord | None = None,
@@ -594,25 +588,18 @@ def audit_record_from_governed_result(
     _require_sha256("trial_sha256", trial_sha256)
     _require_nonempty("subject", subject)
     _require_nonempty("pseudonym_key_id", pseudonym_key_id)
-    if not isinstance(provenance_registry, VerifiedProvenanceRegistry):
-        raise TypeError("provenance_registry must be a VerifiedProvenanceRegistry")
+    if not isinstance(provenance_registry, AdmittedProvenanceRegistry):
+        raise TypeError("provenance_registry lacks the admitted digest-only interface")
 
     for authorization in (result.initial_authorization, result.final_authorization):
         if authorization is None:
             continue
         if authorization.subject != subject:
             raise ValueError("policy decision subject does not match the audited subject")
-        if (
-            authorization.document_universe_sha256
-            != provenance_registry.document_universe_sha256
-        ):
-            raise ValueError(
-                "policy decision document universe does not match verified provenance"
-            )
+        if authorization.document_universe_sha256 != provenance_registry.document_universe_sha256:
+            raise ValueError("policy decision document universe does not match verified provenance")
         if authorization.authorized_mask.size != provenance_registry.document_count:
-            raise ValueError(
-                "policy decision mask size does not match the verified corpus"
-            )
+            raise ValueError("policy decision mask size does not match the verified corpus")
 
     abstained = result.decision.action == "abstain"
     if abstained and result.search is not None:
@@ -704,9 +691,7 @@ def audit_record_from_governed_result(
             key_id=pseudonym_key_id,
         ),
         pseudonym_key_id=pseudonym_key_id,
-        provenance_receipt_sha256=(
-            provenance_registry.verification_receipt_sha256
-        ),
+        provenance_receipt_sha256=(provenance_registry.verification_receipt_sha256),
         initial_authorization=initial_authorization,
         final_authorization=final_authorization,
         component_revisions=provenance_registry.component_revisions,
@@ -752,18 +737,14 @@ def verify_audit_chain(
     """
     if expected_head_sha256 is not None:
         _require_sha256("expected_head_sha256", expected_head_sha256)
-    if expected_length is not None and (
-        type(expected_length) is not int or expected_length < 0
-    ):
+    if expected_length is not None and (type(expected_length) is not int or expected_length < 0):
         raise ValueError("expected_length must be a non-negative integer")
 
     errors: list[str] = []
     previous_hash = GENESIS_RECORD_SHA256
     for position, record in enumerate(records):
         if record.sequence != position:
-            errors.append(
-                f"record {position}: sequence is {record.sequence}, expected {position}"
-            )
+            errors.append(f"record {position}: sequence is {record.sequence}, expected {position}")
         if record.previous_record_sha256 != previous_hash:
             errors.append(f"record {position}: previous-record hash mismatch")
         computed_hash = record.computed_record_sha256()

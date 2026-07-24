@@ -103,8 +103,7 @@ def _receipt(
     return ArtifactVerificationReceipt(
         manifest_sha256=_digest("study-manifest"),
         artifacts=tuple(
-            _verified_artifact(artifact_id)
-            for artifact_id in component_artifact_ids.values()
+            _verified_artifact(artifact_id) for artifact_id in component_artifact_ids.values()
         ),
     )
 
@@ -243,8 +242,7 @@ def test_factory_binds_required_fields_without_persisting_sensitive_payloads() -
     assert record.final_authorization.decision_id == "pdp-final-1"
     assert record.initial_authorization.request_nonce == "request-1-initial-policy-nonce"
     assert (
-        record.initial_authorization.request_sha256
-        == result.initial_authorization.request_sha256
+        record.initial_authorization.request_sha256 == result.initial_authorization.request_sha256
     )
     assert record.initial_authorization.mask_sha256 == result.index_refresh.mask_sha256
     assert record.provenance_receipt_sha256 == registry.verification_receipt_sha256

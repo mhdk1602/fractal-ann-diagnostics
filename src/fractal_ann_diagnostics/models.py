@@ -5,6 +5,7 @@ module isolates the actual library calls so the rest of the package is
 library-agnostic. HNSW is implemented in v0.2.0; the other index-selection
 stubs remain part of the retired v0.1 research path.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

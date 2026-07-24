@@ -113,9 +113,7 @@ def test_mutable_pdp_rejects_same_sized_document_universe_substitution() -> None
         roles=("reader",),
         visibility=initial.visibility,
         version="v2",
-        document_universe_sha256=policy_document_universe_sha256(
-            ("other-a", "other-b", "other-c")
-        ),
+        document_universe_sha256=policy_document_universe_sha256(("other-a", "other-b", "other-c")),
     )
 
     with pytest.raises(ValueError, match="preserve document universe identity"):

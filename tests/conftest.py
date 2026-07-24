@@ -3,6 +3,7 @@
 Adds the repo's ``src/`` directory to ``sys.path`` so tests run from a clean
 checkout without requiring ``pip install -e .`` first.
 """
+
 from __future__ import annotations
 
 import sys

@@ -3,6 +3,7 @@
 The verifier has no network code. Callers must download remote artifacts into an
 isolated local root before constructing :class:`LocalArtifactSpec` records.
 """
+
 from __future__ import annotations
 
 import errno
@@ -255,9 +256,7 @@ class DirectoryDigest:
         if self.file_count > self.observed_file_count:
             raise ArtifactIntegrityError("file_count cannot exceed observed_file_count")
         if self.directory_count > self.observed_directory_count:
-            raise ArtifactIntegrityError(
-                "directory_count cannot exceed observed_directory_count"
-            )
+            raise ArtifactIntegrityError("directory_count cannot exceed observed_directory_count")
         if self.byte_count > self.observed_byte_count:
             raise ArtifactIntegrityError("byte_count cannot exceed observed_byte_count")
         if len(entries) != self.file_count + self.directory_count:
@@ -314,9 +313,7 @@ class VerifiedArtifact:
         if self.file_count > self.observed_file_count:
             raise ArtifactIntegrityError("file_count cannot exceed observed_file_count")
         if self.directory_count > self.observed_directory_count:
-            raise ArtifactIntegrityError(
-                "directory_count cannot exceed observed_directory_count"
-            )
+            raise ArtifactIntegrityError("directory_count cannot exceed observed_directory_count")
         if self.byte_count > self.observed_byte_count:
             raise ArtifactIntegrityError("byte_count cannot exceed observed_byte_count")
         if self.kind == "file" and (
@@ -380,9 +377,7 @@ class ArtifactVerificationReceipt:
     def __post_init__(self) -> None:
         _require_sha256("manifest_sha256", self.manifest_sha256)
         if self.schema_version != ARTIFACT_RECEIPT_SCHEMA:
-            raise ArtifactIntegrityError(
-                f"schema_version must equal {ARTIFACT_RECEIPT_SCHEMA!r}"
-            )
+            raise ArtifactIntegrityError(f"schema_version must equal {ARTIFACT_RECEIPT_SCHEMA!r}")
         artifacts = tuple(self.artifacts)
         if not artifacts:
             raise ArtifactIntegrityError("a verification receipt needs at least one artifact")
@@ -435,12 +430,8 @@ class ArtifactVerificationReceipt:
             label="artifact verification receipt",
         )
         artifact_values = root["artifacts"]
-        if isinstance(artifact_values, (str, bytes)) or not isinstance(
-            artifact_values, Sequence
-        ):
-            raise ArtifactIntegrityError(
-                "artifact verification receipt artifacts must be an array"
-            )
+        if isinstance(artifact_values, (str, bytes)) or not isinstance(artifact_values, Sequence):
+            raise ArtifactIntegrityError("artifact verification receipt artifacts must be an array")
         return cls(
             manifest_sha256=root["manifest_sha256"],
             artifacts=tuple(VerifiedArtifact.from_dict(row) for row in artifact_values),
@@ -561,9 +552,7 @@ def _read_secure_control_file(
             if before.st_nlink != 1:
                 raise ArtifactIntegrityError(f"hard-linked {label} is forbidden")
             if before.st_size > max_bytes:
-                raise ArtifactIntegrityError(
-                    f"{label} exceeds {max_bytes} bytes"
-                )
+                raise ArtifactIntegrityError(f"{label} exceeds {max_bytes} bytes")
             chunks: list[bytes] = []
             byte_count = 0
             while True:
@@ -572,9 +561,7 @@ def _read_secure_control_file(
                     break
                 byte_count += len(chunk)
                 if byte_count > max_bytes:
-                    raise ArtifactIntegrityError(
-                        f"{label} exceeds {max_bytes} bytes"
-                    )
+                    raise ArtifactIntegrityError(f"{label} exceeds {max_bytes} bytes")
                 chunks.append(chunk)
             after = os.fstat(descriptor)
             if (
@@ -759,12 +746,8 @@ def _scan_directory(
             try:
                 opened = os.fstat(child)
                 if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
-                    raise ArtifactIntegrityError(
-                        f"{relative_path} changed during verification"
-                    )
-                records.append(
-                    _TreeEntry(relative_path=relative_path, kind="directory")
-                )
+                    raise ArtifactIntegrityError(f"{relative_path} changed during verification")
+                records.append(_TreeEntry(relative_path=relative_path, kind="directory"))
                 records.extend(_scan_directory(child, prefix=relative_parts))
             finally:
                 os.close(child)
@@ -825,9 +808,7 @@ def _directory_digest_from_snapshot(
     byte_count = sum(entry.size_bytes for entry in selected if entry.kind == "file")
     observed_file_count = sum(entry.kind == "file" for entry in snapshot)
     observed_directory_count = sum(entry.kind == "directory" for entry in snapshot)
-    observed_byte_count = sum(
-        entry.size_bytes for entry in snapshot if entry.kind == "file"
-    )
+    observed_byte_count = sum(entry.size_bytes for entry in snapshot if entry.kind == "file")
     return DirectoryDigest(
         sha256=hashlib.sha256(_canonical_bytes(digest_payload)).hexdigest(),
         entries=selected_paths,
@@ -1079,9 +1060,7 @@ def artifact_specs_from_local_map(
         entries_value = row.get("expected_entries")
         if entries_value is None:
             expected_entries = None
-        elif isinstance(entries_value, (str, bytes)) or not isinstance(
-            entries_value, Sequence
-        ):
+        elif isinstance(entries_value, (str, bytes)) or not isinstance(entries_value, Sequence):
             raise ArtifactIntegrityError(
                 f"local artifact map artifacts[{position}].expected_entries must be an array"
             )
@@ -1131,9 +1110,7 @@ def load_verification_receipt(path: str | Path) -> ArtifactVerificationReceipt:
     payload = _parse_json_object(encoded, label="artifact verification receipt")
     receipt = ArtifactVerificationReceipt.from_dict(payload)
     if encoded != receipt.canonical_bytes() + b"\n":
-        raise ArtifactIntegrityError(
-            "artifact verification receipt bytes are not canonical"
-        )
+        raise ArtifactIntegrityError("artifact verification receipt bytes are not canonical")
     return receipt
 
 

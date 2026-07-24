@@ -7,6 +7,7 @@ emitted and their completion receipt has been externally anchored. Public
 benchmark questions remain reidentifiable; this module removes serialized label
 fields, not outside knowledge of a public dataset.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -28,15 +29,19 @@ from .artifact_integrity import (
     write_exclusive_receipt_bytes,
 )
 from .corpora import EvidenceQuery, NormalizedCorpus
-from .study import SealedRunReceipt
+from .scalable_execution import (
+    ScalableExecutionError,
+    execution_compatibility_view,
+)
+from .study import SEALED_RUN_RECEIPT_BINDING_SCHEMA, SealedRunReceipt
 
 ONLINE_EXECUTION_SCHEMA = "fractal-online-execution-v2"
 SEALED_LABEL_SCHEMA = "fractal-sealed-labels-v2"
 PREDICTION_ARTIFACT_SCHEMA = "fractal-online-predictions-v1"
 ACTION_PANEL_BINDING_SCHEMA = "fractal-action-panel-binding-v1"
-PREDICTION_COMPLETION_SCHEMA = "fractal-prediction-completion-v3"
-OFFLINE_JOIN_SCHEMA = "fractal-offline-label-join-v1"
-RECEIPT_BINDING_SCHEMA = "fractal-sealed-run-receipt-binding-v1"
+PREDICTION_COMPLETION_SCHEMA = "fractal-prediction-completion-v4"
+OFFLINE_JOIN_SCHEMA = "fractal-offline-label-join-v3"
+RECEIPT_BINDING_SCHEMA = SEALED_RUN_RECEIPT_BINDING_SCHEMA
 
 _MAX_CUSTODY_ARTIFACT_BYTES = 1024 * 1024 * 1024
 _ONLINE_DOCUMENT_FIELDS = frozenset(
@@ -103,6 +108,7 @@ _PREDICTION_COMPLETION_FIELDS = frozenset(
         "external_anchor_identity",
         "external_anchor_uri",
         "manifest_sha256",
+        "online_execution_result_receipt_sha256",
         "prediction_artifact_sha256",
         "prediction_count",
         "run_receipt_sha256",
@@ -127,12 +133,14 @@ _OFFLINE_EVALUATION_FIELDS = frozenset(
         "corpus",
         "execution_artifact_sha256",
         "manifest_sha256",
+        "online_execution_result_receipt_sha256",
         "prediction_artifact_sha256",
         "prediction_completion_receipt_sha256",
         "run_receipt_sha256",
         "schema_version",
         "sealed_label_artifact_sha256",
         "stage",
+        "timelock_decryption_receipt_sha256",
         "trials",
     }
 )
@@ -245,9 +253,7 @@ def _parse_json_object(encoded: bytes, *, label: str) -> Mapping[str, Any]:
     def parse_float(value: str) -> float:
         parsed = float(value)
         if not math.isfinite(parsed):
-            raise LabelSeparationError(
-                f"{label} contains non-finite number {value!r}"
-            )
+            raise LabelSeparationError(f"{label} contains non-finite number {value!r}")
         return parsed
 
     def reject_nonfinite(value: str) -> None:
@@ -485,9 +491,7 @@ def _online_document_from_dict(payload: object) -> OnlineDocument:
         title=_require_json_string("online document title", row["title"]),
         text=_require_json_string("online document text", row["text"]),
         source_uri=_require_json_string("online document source_uri", row["source_uri"]),
-        content_hash=_require_json_string(
-            "online document content_hash", row["content_hash"]
-        ),
+        content_hash=_require_json_string("online document content_hash", row["content_hash"]),
     )
 
 
@@ -518,9 +522,7 @@ class OnlineExecutionArtifact:
         _require_text("corpus", self.corpus)
         _require_text("stage", self.stage)
         if self.schema_version != ONLINE_EXECUTION_SCHEMA:
-            raise LabelSeparationError(
-                f"schema_version must equal {ONLINE_EXECUTION_SCHEMA!r}"
-            )
+            raise LabelSeparationError(f"schema_version must equal {ONLINE_EXECUTION_SCHEMA!r}")
         documents = tuple(self.documents)
         trials = tuple(sorted(tuple(self.trials), key=lambda trial: trial.trial_key))
         if not documents or not all(isinstance(row, OnlineDocument) for row in documents):
@@ -623,9 +625,7 @@ class SealedEvidenceBundle:
                 ),
             )
         )
-        if not locations or not all(
-            isinstance(row, SealedEvidenceLocation) for row in locations
-        ):
+        if not locations or not all(isinstance(row, SealedEvidenceLocation) for row in locations):
             raise LabelSeparationError("evidence bundles need typed locations")
         if len(locations) != len(set(locations)):
             raise LabelSeparationError("evidence bundles cannot repeat a location")
@@ -656,14 +656,10 @@ class SealedTrialLabels:
             raise LabelSeparationError("answer must be a string or None")
         relevant = tuple(sorted(tuple(self.relevant_document_ids)))
         if any(type(value) is not int or value < 0 for value in relevant):
-            raise LabelSeparationError(
-                "relevant_document_ids must contain non-negative integers"
-            )
+            raise LabelSeparationError("relevant_document_ids must contain non-negative integers")
         if len(relevant) != len(set(relevant)):
             raise LabelSeparationError("relevant_document_ids cannot contain duplicates")
-        bundles = tuple(
-            sorted(tuple(self.evidence_bundles), key=lambda bundle: bundle.bundle_id)
-        )
+        bundles = tuple(sorted(tuple(self.evidence_bundles), key=lambda bundle: bundle.bundle_id))
         if not all(isinstance(bundle, SealedEvidenceBundle) for bundle in bundles):
             raise LabelSeparationError("evidence_bundles must contain typed bundles")
         bundle_ids = [bundle.bundle_id for bundle in bundles]
@@ -671,10 +667,7 @@ class SealedTrialLabels:
             raise LabelSeparationError("evidence bundle IDs must be unique")
         metadata = tuple(sorted(tuple(self.label_metadata)))
         if any(
-            not isinstance(key, str)
-            or not isinstance(value, str)
-            or not key
-            or not value
+            not isinstance(key, str) or not isinstance(value, str) or not key or not value
             for key, value in metadata
         ):
             raise LabelSeparationError("label_metadata needs non-empty string pairs")
@@ -704,12 +697,8 @@ def _sealed_evidence_location_from_dict(payload: object) -> SealedEvidenceLocati
     )
     return SealedEvidenceLocation(
         document_id=row["document_id"],
-        source_uri=_require_json_string(
-            "sealed evidence location source_uri", row["source_uri"]
-        ),
-        locator=_require_json_string(
-            "sealed evidence location locator", row["locator"]
-        ),
+        source_uri=_require_json_string("sealed evidence location source_uri", row["source_uri"]),
+        locator=_require_json_string("sealed evidence location locator", row["locator"]),
         content_hash=_require_nullable_json_string(
             "sealed evidence location content_hash", row["content_hash"]
         ),
@@ -724,9 +713,7 @@ def _sealed_evidence_bundle_from_dict(payload: object) -> SealedEvidenceBundle:
     )
     locations = _require_array("sealed evidence bundle locations", row["locations"])
     return SealedEvidenceBundle(
-        bundle_id=_require_json_string(
-            "sealed evidence bundle bundle_id", row["bundle_id"]
-        ),
+        bundle_id=_require_json_string("sealed evidence bundle bundle_id", row["bundle_id"]),
         locations=tuple(_sealed_evidence_location_from_dict(item) for item in locations),
     )
 
@@ -740,12 +727,8 @@ def _sealed_trial_labels_from_dict(payload: object) -> SealedTrialLabels:
     relevant = _require_array(
         "sealed trial labels relevant_document_ids", row["relevant_document_ids"]
     )
-    bundles = _require_array(
-        "sealed trial labels evidence_bundles", row["evidence_bundles"]
-    )
-    metadata_items = _require_array(
-        "sealed trial labels label_metadata", row["label_metadata"]
-    )
+    bundles = _require_array("sealed trial labels evidence_bundles", row["evidence_bundles"])
+    metadata_items = _require_array("sealed trial labels label_metadata", row["label_metadata"])
     metadata: list[tuple[str, str]] = []
     for position, item in enumerate(metadata_items):
         pair = _require_array(
@@ -758,24 +741,16 @@ def _sealed_trial_labels_from_dict(payload: object) -> SealedTrialLabels:
             )
         metadata.append(
             (
-                _require_json_string(
-                    f"sealed trial labels label_metadata[{position}][0]", pair[0]
-                ),
-                _require_json_string(
-                    f"sealed trial labels label_metadata[{position}][1]", pair[1]
-                ),
+                _require_json_string(f"sealed trial labels label_metadata[{position}][0]", pair[0]),
+                _require_json_string(f"sealed trial labels label_metadata[{position}][1]", pair[1]),
             )
         )
     return SealedTrialLabels(
         trial_key=_require_json_string("sealed trial labels trial_key", row["trial_key"]),
-        family_key=_require_json_string(
-            "sealed trial labels family_key", row["family_key"]
-        ),
+        family_key=_require_json_string("sealed trial labels family_key", row["family_key"]),
         answer=_require_nullable_json_string("sealed trial labels answer", row["answer"]),
         relevant_document_ids=tuple(relevant),
-        evidence_bundles=tuple(
-            _sealed_evidence_bundle_from_dict(item) for item in bundles
-        ),
+        evidence_bundles=tuple(_sealed_evidence_bundle_from_dict(item) for item in bundles),
         label_metadata=tuple(metadata),
     )
 
@@ -812,8 +787,7 @@ class SealedLabelArtifact:
                 raise LabelSeparationError("relevance label names an unknown document")
             for bundle in row.evidence_bundles:
                 if any(
-                    location.document_id >= self.document_count
-                    for location in bundle.locations
+                    location.document_id >= self.document_count for location in bundle.locations
                 ):
                     raise LabelSeparationError("gold evidence names an unknown document")
         object.__setattr__(self, "labels", labels)
@@ -904,8 +878,7 @@ def _sealed_metadata(metadata: Mapping[str, str]) -> tuple[tuple[str, str], ...]
         sorted(
             (str(key), str(value))
             for key, value in metadata.items()
-            if value
-            and any(token in str(key).casefold() for token in _LABEL_METADATA_TOKENS)
+            if value and any(token in str(key).casefold() for token in _LABEL_METADATA_TOKENS)
         )
     )
 
@@ -1017,26 +990,7 @@ def sealed_run_receipt_sha256(receipt: SealedRunReceipt) -> str:
         value = getattr(receipt, name)
         if not isinstance(value, str) or not value:
             raise LabelSeparationError(f"receipt.{name} must be non-empty")
-    payload = {
-        "code_commit": receipt.code_commit,
-        "manifest_sha256": receipt.manifest_sha256,
-        "protocol_version": receipt.protocol_version,
-        "protocol_registration_receipt_sha256": (
-            receipt.protocol_registration_receipt_sha256
-        ),
-        "protocol_registration_receipt_uri": (
-            receipt.protocol_registration_receipt_uri
-        ),
-        "protocol_registration_record_uri": receipt.protocol_registration_record_uri,
-        "receipt_uri": receipt.receipt_uri,
-        "runner_identity": receipt.runner_identity,
-        "runner_image": receipt.runner_image,
-        "schema_version": RECEIPT_BINDING_SCHEMA,
-        "started_at_utc": receipt.started_at_utc,
-        "verification_receipt_sha256": receipt.verification_receipt_sha256,
-        "verification_receipt_uri": receipt.verification_receipt_uri,
-    }
-    return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    return receipt.binding_sha256
 
 
 @dataclass(frozen=True)
@@ -1053,9 +1007,7 @@ class OnlinePrediction:
         _require_opaque_key("family_key", self.family_key)
         returned = tuple(self.returned_document_ids)
         if any(type(value) is not int or value < 0 for value in returned):
-            raise LabelSeparationError(
-                "returned_document_ids must contain non-negative integers"
-            )
+            raise LabelSeparationError("returned_document_ids must contain non-negative integers")
         if len(returned) != len(set(returned)):
             raise LabelSeparationError("returned_document_ids cannot contain duplicates")
         if self.emitted_answer is not None and (
@@ -1084,9 +1036,7 @@ def _online_prediction_from_dict(payload: object) -> OnlinePrediction:
     )
     return OnlinePrediction(
         trial_key=_require_json_string("online prediction trial_key", row["trial_key"]),
-        family_key=_require_json_string(
-            "online prediction family_key", row["family_key"]
-        ),
+        family_key=_require_json_string("online prediction family_key", row["family_key"]),
         returned_document_ids=tuple(returned),
         emitted_answer=_require_nullable_json_string(
             "online prediction emitted_answer", row["emitted_answer"]
@@ -1116,17 +1066,11 @@ class PredictionArtifact:
         _require_text("corpus", self.corpus)
         _require_text("stage", self.stage)
         if self.schema_version != PREDICTION_ARTIFACT_SCHEMA:
-            raise LabelSeparationError(
-                f"schema_version must equal {PREDICTION_ARTIFACT_SCHEMA!r}"
-            )
+            raise LabelSeparationError(f"schema_version must equal {PREDICTION_ARTIFACT_SCHEMA!r}")
         if type(self.document_count) is not int or self.document_count <= 0:
             raise LabelSeparationError("document_count must be positive")
-        predictions = tuple(
-            sorted(tuple(self.predictions), key=lambda row: row.trial_key)
-        )
-        if not predictions or not all(
-            isinstance(row, OnlinePrediction) for row in predictions
-        ):
+        predictions = tuple(sorted(tuple(self.predictions), key=lambda row: row.trial_key))
+        if not predictions or not all(isinstance(row, OnlinePrediction) for row in predictions):
             raise LabelSeparationError("predictions must contain online prediction records")
         keys = [row.trial_key for row in predictions]
         if len(keys) != len(set(keys)):
@@ -1180,9 +1124,7 @@ class PredictionArtifact:
             corpus=_require_json_string("prediction artifact corpus", row["corpus"]),
             stage=_require_json_string("prediction artifact stage", row["stage"]),
             document_count=row["document_count"],
-            predictions=tuple(
-                _online_prediction_from_dict(item) for item in predictions
-            ),
+            predictions=tuple(_online_prediction_from_dict(item) for item in predictions),
             schema_version=_require_json_string(
                 "prediction artifact schema_version", row["schema_version"]
             ),
@@ -1217,9 +1159,7 @@ class ActionPanelBinding:
         if self.stage != "sealed":
             raise LabelSeparationError("action panel binding stage must equal 'sealed'")
         if self.schema_version != ACTION_PANEL_BINDING_SCHEMA:
-            raise LabelSeparationError(
-                f"schema_version must equal {ACTION_PANEL_BINDING_SCHEMA!r}"
-            )
+            raise LabelSeparationError(f"schema_version must equal {ACTION_PANEL_BINDING_SCHEMA!r}")
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -1271,6 +1211,7 @@ class PredictionCompletionReceipt:
     run_receipt_sha256: str
     execution_artifact_sha256: str
     prediction_artifact_sha256: str
+    online_execution_result_receipt_sha256: str
     action_panel_binding: ActionPanelBinding
     prediction_count: int
     corpus: str
@@ -1286,12 +1227,11 @@ class PredictionCompletionReceipt:
             "run_receipt_sha256",
             "execution_artifact_sha256",
             "prediction_artifact_sha256",
+            "online_execution_result_receipt_sha256",
         ):
             _require_sha256(name, getattr(self, name))
         if not isinstance(self.action_panel_binding, ActionPanelBinding):
-            raise LabelSeparationError(
-                "action_panel_binding must be an ActionPanelBinding"
-            )
+            raise LabelSeparationError("action_panel_binding must be an ActionPanelBinding")
         if type(self.prediction_count) is not int or self.prediction_count <= 0:
             raise LabelSeparationError("prediction_count must be a positive integer")
         _require_text("corpus", self.corpus)
@@ -1304,9 +1244,7 @@ class PredictionCompletionReceipt:
             "stage",
         ):
             if getattr(self.action_panel_binding, name) != getattr(self, name):
-                raise LabelSeparationError(
-                    f"action panel binding has mismatched {name}"
-                )
+                raise LabelSeparationError(f"action panel binding has mismatched {name}")
         _require_text("external_anchor_identity", self.external_anchor_identity)
         _require_external_anchor_uri("external_anchor_uri", self.external_anchor_uri)
         _require_utc_timestamp("anchored_at_utc", self.anchored_at_utc)
@@ -1324,6 +1262,7 @@ class PredictionCompletionReceipt:
             "external_anchor_identity": self.external_anchor_identity,
             "external_anchor_uri": self.external_anchor_uri,
             "manifest_sha256": self.manifest_sha256,
+            "online_execution_result_receipt_sha256": (self.online_execution_result_receipt_sha256),
             "prediction_artifact_sha256": self.prediction_artifact_sha256,
             "prediction_count": self.prediction_count,
             "run_receipt_sha256": self.run_receipt_sha256,
@@ -1336,7 +1275,7 @@ class PredictionCompletionReceipt:
 
     @classmethod
     def from_dict(cls, payload: object) -> PredictionCompletionReceipt:
-        """Parse one closed-schema version-three completion receipt."""
+        """Parse one closed-schema version-four completion receipt."""
 
         row = _closed_mapping(
             payload,
@@ -1359,9 +1298,11 @@ class PredictionCompletionReceipt:
                 "prediction completion prediction_artifact_sha256",
                 row["prediction_artifact_sha256"],
             ),
-            action_panel_binding=ActionPanelBinding.from_dict(
-                row["action_panel_binding"]
+            online_execution_result_receipt_sha256=_require_json_string(
+                "prediction completion online_execution_result_receipt_sha256",
+                row["online_execution_result_receipt_sha256"],
             ),
+            action_panel_binding=ActionPanelBinding.from_dict(row["action_panel_binding"]),
             prediction_count=row["prediction_count"],
             corpus=_require_json_string("prediction completion corpus", row["corpus"]),
             stage=_require_json_string("prediction completion stage", row["stage"]),
@@ -1386,13 +1327,164 @@ class PredictionCompletionReceipt:
         return hashlib.sha256(self.canonical_bytes()).hexdigest()
 
 
+@dataclass(frozen=True)
+class _ExecutionBindings:
+    key_id: str
+    corpus: str
+    stage: str
+    document_count: int
+    artifact_sha256: str
+    trials: Mapping[str, object]
+
+
+def _execution_bindings(execution: object) -> _ExecutionBindings:
+    """Validate the common inline or sharded execution identity surface."""
+
+    try:
+        compatibility = execution_compatibility_view(execution)
+        key_id = execution.key_id  # type: ignore[attr-defined]
+        corpus = execution.corpus  # type: ignore[attr-defined]
+        stage = execution.stage  # type: ignore[attr-defined]
+        trial_rows = tuple(execution.trials)  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ScalableExecutionError) as exc:
+        raise LabelSeparationError(
+            "execution lacks a valid inline or sharded control interface"
+        ) from exc
+    _require_text("execution key_id", key_id)
+    _require_text("execution corpus", corpus)
+    if stage != "sealed":
+        raise LabelSeparationError("execution stage must equal 'sealed'")
+    trials: dict[str, object] = {}
+    for row in trial_rows:
+        try:
+            trial_key = row.trial_key
+            family_key = row.family_key
+        except AttributeError as exc:
+            raise LabelSeparationError("execution trial lacks opaque identifiers") from exc
+        _require_sha256("execution trial_key", trial_key)
+        _require_sha256("execution family_key", family_key)
+        if trial_key in trials:
+            raise LabelSeparationError("execution repeats a trial key")
+        trials[trial_key] = row
+    if tuple(sorted(trials)) != compatibility.trial_keys:
+        raise LabelSeparationError("execution trials differ from its compatibility view")
+    return _ExecutionBindings(
+        key_id=key_id,
+        corpus=corpus,
+        stage=stage,
+        document_count=compatibility.document_count,
+        artifact_sha256=compatibility.artifact_sha256,
+        trials=trials,
+    )
+
+
+def _require_online_result_bindings(
+    result: object,
+    *,
+    predictions: PredictionArtifact,
+    action_panel_binding: ActionPanelBinding,
+) -> str:
+    """Verify that the one-shot closure contains these exact core outputs."""
+
+    try:
+        from .sealed_online_execution import SealedOnlineResultReceipt
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise LabelSeparationError("sealed online result verifier is unavailable") from exc
+    if not isinstance(result, SealedOnlineResultReceipt):
+        raise LabelSeparationError(
+            "online_execution_result_receipt must be a SealedOnlineResultReceipt"
+        )
+    for name, expected in (
+        ("manifest_sha256", predictions.manifest_sha256),
+        ("run_receipt_sha256", predictions.run_receipt_sha256),
+        ("execution_artifact_sha256", predictions.execution_artifact_sha256),
+    ):
+        if getattr(result, name) != expected:
+            raise LabelSeparationError(f"sealed online result receipt has mismatched {name}")
+    pins = {row.role: row for row in result.outputs}
+    if pins["predictions"].semantic_sha256 != predictions.artifact_sha256:
+        raise LabelSeparationError(
+            "sealed online result receipt has mismatched prediction_artifact_sha256"
+        )
+    if pins["action-panel"].semantic_sha256 != action_panel_binding.action_panel_artifact_sha256:
+        raise LabelSeparationError("sealed online result receipt binds another action panel")
+    return result.receipt_sha256
+
+
+def _require_timelock_label_release(
+    release: object,
+    *,
+    sealed_labels: SealedLabelArtifact,
+    verified_completion_anchor: object,
+    manifest_sha256: str,
+    corpus: str,
+    online_result_sha256: str,
+) -> str:
+    """Admit label bytes only through the verified drand release capability."""
+
+    try:
+        from .external_anchors import VerifiedPredictionCompletionAnchor
+        from .timelock_release import TimelockReleaseError, VerifiedTimelockRelease
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise LabelSeparationError("timelock release verifier is unavailable") from exc
+    if not isinstance(verified_completion_anchor, VerifiedPredictionCompletionAnchor):
+        raise LabelSeparationError(
+            "verified_completion_anchor must come from external anchor verification"
+        )
+    if not isinstance(release, VerifiedTimelockRelease):
+        raise LabelSeparationError(
+            "verified_timelock_release must come from the drand release verifier"
+        )
+    receipt = release.receipt
+    expected_bindings = (
+        ("manifest_sha256", receipt.manifest_sha256, manifest_sha256),
+        ("corpus_id", receipt.corpus_id, corpus),
+        (
+            "prediction_completion_anchor_record_sha256",
+            receipt.prediction_completion_anchor_record_sha256,
+            verified_completion_anchor.record.record_sha256,
+        ),
+        (
+            "prediction_completion_anchor_receipt_sha256",
+            receipt.prediction_completion_anchor_receipt_sha256,
+            verified_completion_anchor.receipt.receipt_sha256,
+        ),
+        (
+            "online_execution_result_receipt_sha256",
+            receipt.online_execution_result_receipt_sha256,
+            online_result_sha256,
+        ),
+    )
+    for name, observed, expected in expected_bindings:
+        if observed != expected:
+            raise LabelSeparationError(f"verified timelock release has mismatched {name}")
+    try:
+        released = release.read_plaintext()
+    except TimelockReleaseError as exc:
+        raise LabelSeparationError(f"released label plaintext failed revalidation: {exc}") from exc
+    expected_plaintext = sealed_labels.canonical_bytes() + b"\n"
+    if (
+        len(expected_plaintext) != receipt.plaintext_byte_count
+        or hashlib.sha256(expected_plaintext).hexdigest() != receipt.plaintext_sha256
+        or not hmac.compare_digest(released, expected_plaintext)
+    ):
+        raise LabelSeparationError(
+            "verified timelock plaintext differs from the supplied sealed labels"
+        )
+    return _require_sha256(
+        "timelock decryption receipt sha256",
+        receipt.receipt_sha256,
+    )
+
+
 def create_prediction_completion_receipt(
     predictions: PredictionArtifact,
     *,
-    execution: OnlineExecutionArtifact,
+    execution: object,
     receipt: SealedRunReceipt,
     manifest_sha256: str,
     action_panel_binding: ActionPanelBinding,
+    online_execution_result_receipt: object,
     external_anchor_identity: str,
     external_anchor_uri: str,
     anchored_at_utc: str,
@@ -1401,12 +1493,14 @@ def create_prediction_completion_receipt(
 
     if not isinstance(predictions, PredictionArtifact):
         raise LabelSeparationError("predictions must be a PredictionArtifact")
-    if not isinstance(execution, OnlineExecutionArtifact):
-        raise LabelSeparationError("execution must be an OnlineExecutionArtifact")
+    execution_view = _execution_bindings(execution)
     if not isinstance(action_panel_binding, ActionPanelBinding):
-        raise LabelSeparationError(
-            "action_panel_binding must be an ActionPanelBinding"
-        )
+        raise LabelSeparationError("action_panel_binding must be an ActionPanelBinding")
+    online_result_sha256 = _require_online_result_bindings(
+        online_execution_result_receipt,
+        predictions=predictions,
+        action_panel_binding=action_panel_binding,
+    )
     _require_sha256("manifest_sha256", manifest_sha256)
     run_receipt_sha256 = sealed_run_receipt_sha256(receipt)
     if receipt.manifest_sha256 != manifest_sha256:
@@ -1415,43 +1509,38 @@ def create_prediction_completion_receipt(
         raise LabelSeparationError("prediction artifact belongs to another manifest")
     if predictions.run_receipt_sha256 != run_receipt_sha256:
         raise LabelSeparationError("prediction artifact belongs to another sealed run")
-    if predictions.execution_artifact_sha256 != execution.artifact_sha256:
+    if predictions.execution_artifact_sha256 != execution_view.artifact_sha256:
         raise LabelSeparationError("prediction artifact binds another execution artifact")
     for name, expected in (
         ("manifest_sha256", manifest_sha256),
         ("run_receipt_sha256", run_receipt_sha256),
-        ("execution_artifact_sha256", execution.artifact_sha256),
+        ("execution_artifact_sha256", execution_view.artifact_sha256),
         ("corpus", predictions.corpus),
         ("stage", predictions.stage),
     ):
         if getattr(action_panel_binding, name) != expected:
-            raise LabelSeparationError(
-                f"action panel binding has mismatched {name}"
-            )
+            raise LabelSeparationError(f"action panel binding has mismatched {name}")
     for name, prediction_value, execution_value in (
-        ("key_id", predictions.key_id, execution.key_id),
-        ("corpus", predictions.corpus, execution.corpus),
-        ("stage", predictions.stage, execution.stage),
-        ("document_count", predictions.document_count, len(execution.documents)),
+        ("key_id", predictions.key_id, execution_view.key_id),
+        ("corpus", predictions.corpus, execution_view.corpus),
+        ("stage", predictions.stage, execution_view.stage),
+        ("document_count", predictions.document_count, execution_view.document_count),
     ):
         if prediction_value != execution_value:
-            raise LabelSeparationError(
-                f"prediction and execution artifacts have mismatched {name}"
-            )
+            raise LabelSeparationError(f"prediction and execution artifacts have mismatched {name}")
     anchor_time = _require_utc_timestamp("anchored_at_utc", anchored_at_utc)
     try:
         run_started_at = datetime.fromisoformat(receipt.started_at_utc.replace("Z", "+00:00"))
     except (AttributeError, ValueError) as exc:
-        raise LabelSeparationError(
-            "sealed-run receipt started_at_utc must be ISO 8601"
-        ) from exc
+        raise LabelSeparationError("sealed-run receipt started_at_utc must be ISO 8601") from exc
     if anchor_time <= run_started_at:
         raise LabelSeparationError("completion anchor must postdate the sealed run")
     return PredictionCompletionReceipt(
         manifest_sha256=manifest_sha256,
         run_receipt_sha256=run_receipt_sha256,
-        execution_artifact_sha256=execution.artifact_sha256,
+        execution_artifact_sha256=execution_view.artifact_sha256,
         prediction_artifact_sha256=predictions.artifact_sha256,
+        online_execution_result_receipt_sha256=online_result_sha256,
         action_panel_binding=action_panel_binding,
         prediction_count=len(predictions.predictions),
         corpus=predictions.corpus,
@@ -1469,9 +1558,7 @@ def write_prediction_completion_receipt(
     """Write one completion receipt exclusively without following links."""
 
     if not isinstance(completion_receipt, PredictionCompletionReceipt):
-        raise LabelSeparationError(
-            "completion_receipt must be a PredictionCompletionReceipt"
-        )
+        raise LabelSeparationError("completion_receipt must be a PredictionCompletionReceipt")
     _write_artifact_bytes(
         completion_receipt.canonical_bytes(),
         target,
@@ -1482,16 +1569,14 @@ def write_prediction_completion_receipt(
 def load_prediction_completion_receipt(
     path: str | Path,
 ) -> PredictionCompletionReceipt:
-    """Load one canonical v3 completion receipt through secure file handles.
+    """Load one canonical v4 completion receipt through secure file handles.
 
     The on-disk representation is canonical JSON followed by exactly one newline.
     """
 
     label = "prediction completion receipt"
     encoded = _read_artifact_bytes(path, label=label)
-    receipt = PredictionCompletionReceipt.from_dict(
-        _parse_json_object(encoded, label=label)
-    )
+    receipt = PredictionCompletionReceipt.from_dict(_parse_json_object(encoded, label=label))
     _require_canonical_file_bytes(
         encoded,
         receipt.canonical_bytes(),
@@ -1501,7 +1586,7 @@ def load_prediction_completion_receipt(
 
 
 def emit_online_predictions(
-    execution: OnlineExecutionArtifact,
+    execution: object,
     predictions: Iterable[OnlinePrediction],
     *,
     receipt: SealedRunReceipt,
@@ -1509,8 +1594,7 @@ def emit_online_predictions(
 ) -> PredictionArtifact:
     """Freeze an exact online prediction set without accepting any labels."""
 
-    if not isinstance(execution, OnlineExecutionArtifact):
-        raise LabelSeparationError("execution must be an OnlineExecutionArtifact")
+    execution_view = _execution_bindings(execution)
     _require_sha256("manifest_sha256", manifest_sha256)
     receipt_sha256 = sealed_run_receipt_sha256(receipt)
     if receipt.manifest_sha256 != manifest_sha256:
@@ -1524,7 +1608,7 @@ def emit_online_predictions(
     keys = [row.trial_key for row in rows]
     if len(keys) != len(set(keys)):
         raise LabelSeparationError("online emission contains duplicate trial keys")
-    expected = {trial.trial_key: trial for trial in execution.trials}
+    expected = execution_view.trials
     observed = {row.trial_key: row for row in rows}
     missing = set(expected) - set(observed)
     extra = set(observed) - set(expected)
@@ -1538,11 +1622,11 @@ def emit_online_predictions(
     return PredictionArtifact(
         manifest_sha256=manifest_sha256,
         run_receipt_sha256=receipt_sha256,
-        execution_artifact_sha256=execution.artifact_sha256,
-        key_id=execution.key_id,
-        corpus=execution.corpus,
-        stage=execution.stage,
-        document_count=len(execution.documents),
+        execution_artifact_sha256=execution_view.artifact_sha256,
+        key_id=execution_view.key_id,
+        corpus=execution_view.corpus,
+        stage=execution_view.stage,
+        document_count=execution_view.document_count,
         predictions=rows,
     )
 
@@ -1592,6 +1676,8 @@ class OfflineEvaluationArtifact:
     execution_artifact_sha256: str
     prediction_artifact_sha256: str
     prediction_completion_receipt_sha256: str
+    online_execution_result_receipt_sha256: str
+    timelock_decryption_receipt_sha256: str
     sealed_label_artifact_sha256: str
     corpus: str
     stage: str
@@ -1605,6 +1691,8 @@ class OfflineEvaluationArtifact:
             "execution_artifact_sha256",
             "prediction_artifact_sha256",
             "prediction_completion_receipt_sha256",
+            "online_execution_result_receipt_sha256",
+            "timelock_decryption_receipt_sha256",
             "sealed_label_artifact_sha256",
         ):
             _require_sha256(name, getattr(self, name))
@@ -1625,14 +1713,14 @@ class OfflineEvaluationArtifact:
             "corpus": self.corpus,
             "execution_artifact_sha256": self.execution_artifact_sha256,
             "manifest_sha256": self.manifest_sha256,
+            "online_execution_result_receipt_sha256": (self.online_execution_result_receipt_sha256),
             "prediction_artifact_sha256": self.prediction_artifact_sha256,
-            "prediction_completion_receipt_sha256": (
-                self.prediction_completion_receipt_sha256
-            ),
+            "prediction_completion_receipt_sha256": (self.prediction_completion_receipt_sha256),
             "run_receipt_sha256": self.run_receipt_sha256,
             "schema_version": self.schema_version,
             "sealed_label_artifact_sha256": self.sealed_label_artifact_sha256,
             "stage": self.stage,
+            "timelock_decryption_receipt_sha256": (self.timelock_decryption_receipt_sha256),
             "trials": [trial.to_dict() for trial in self.trials],
         }
 
@@ -1668,6 +1756,14 @@ class OfflineEvaluationArtifact:
                 "offline evaluation prediction_completion_receipt_sha256",
                 row["prediction_completion_receipt_sha256"],
             ),
+            online_execution_result_receipt_sha256=_require_json_string(
+                "offline evaluation online_execution_result_receipt_sha256",
+                row["online_execution_result_receipt_sha256"],
+            ),
+            timelock_decryption_receipt_sha256=_require_json_string(
+                "offline evaluation timelock_decryption_receipt_sha256",
+                row["timelock_decryption_receipt_sha256"],
+            ),
             sealed_label_artifact_sha256=_require_json_string(
                 "offline evaluation sealed_label_artifact_sha256",
                 row["sealed_label_artifact_sha256"],
@@ -1689,10 +1785,13 @@ def join_predictions_after_receipt(
     predictions: PredictionArtifact,
     sealed_labels: SealedLabelArtifact,
     *,
-    execution: OnlineExecutionArtifact,
+    execution: object,
     receipt: SealedRunReceipt,
     completion_receipt: PredictionCompletionReceipt,
     action_panel_binding: ActionPanelBinding,
+    online_execution_result_receipt: object,
+    verified_completion_anchor: object,
+    verified_timelock_release: object,
     manifest_sha256: str,
 ) -> OfflineEvaluationArtifact:
     """Join labels only after run and prediction-completion receipt checks."""
@@ -1701,20 +1800,42 @@ def join_predictions_after_receipt(
         raise LabelSeparationError("predictions must be a PredictionArtifact")
     if not isinstance(sealed_labels, SealedLabelArtifact):
         raise LabelSeparationError("sealed_labels must be a SealedLabelArtifact")
-    if not isinstance(execution, OnlineExecutionArtifact):
-        raise LabelSeparationError("execution must be an OnlineExecutionArtifact")
+    execution_view = _execution_bindings(execution)
     if not isinstance(completion_receipt, PredictionCompletionReceipt):
-        raise LabelSeparationError(
-            "completion_receipt must be a PredictionCompletionReceipt"
-        )
+        raise LabelSeparationError("completion_receipt must be a PredictionCompletionReceipt")
     if not isinstance(action_panel_binding, ActionPanelBinding):
+        raise LabelSeparationError("action_panel_binding must be an ActionPanelBinding")
+    try:
+        from .external_anchors import VerifiedPredictionCompletionAnchor
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise LabelSeparationError("external completion verifier is unavailable") from exc
+    if not isinstance(verified_completion_anchor, VerifiedPredictionCompletionAnchor):
         raise LabelSeparationError(
-            "action_panel_binding must be an ActionPanelBinding"
+            "verified_completion_anchor must come from external anchor verification"
         )
+    if verified_completion_anchor.record.prediction_completion_receipt_sha256 != (
+        completion_receipt.receipt_sha256
+    ):
+        raise LabelSeparationError("verified external anchor belongs to another completion receipt")
+    if verified_completion_anchor.receipt.anchor_record_sha256 != (
+        verified_completion_anchor.record.record_sha256
+    ):
+        raise LabelSeparationError("verified external anchor record binding differs")
     if completion_receipt.action_panel_binding != action_panel_binding:
-        raise LabelSeparationError(
-            "prediction completion receipt binds a different action panel"
-        )
+        raise LabelSeparationError("prediction completion receipt binds a different action panel")
+    online_result_sha256 = _require_online_result_bindings(
+        online_execution_result_receipt,
+        predictions=predictions,
+        action_panel_binding=action_panel_binding,
+    )
+    timelock_decryption_receipt_sha256 = _require_timelock_label_release(
+        verified_timelock_release,
+        sealed_labels=sealed_labels,
+        verified_completion_anchor=verified_completion_anchor,
+        manifest_sha256=manifest_sha256,
+        corpus=predictions.corpus,
+        online_result_sha256=online_result_sha256,
+    )
     _require_sha256("manifest_sha256", manifest_sha256)
     receipt_sha256 = sealed_run_receipt_sha256(receipt)
     if receipt.manifest_sha256 != manifest_sha256:
@@ -1729,12 +1850,17 @@ def join_predictions_after_receipt(
         (
             "execution_artifact_sha256",
             completion_receipt.execution_artifact_sha256,
-            execution.artifact_sha256,
+            execution_view.artifact_sha256,
         ),
         (
             "prediction_artifact_sha256",
             completion_receipt.prediction_artifact_sha256,
             predictions.artifact_sha256,
+        ),
+        (
+            "online_execution_result_receipt_sha256",
+            completion_receipt.online_execution_result_receipt_sha256,
+            online_result_sha256,
         ),
         (
             "prediction_count",
@@ -1756,7 +1882,7 @@ def join_predictions_after_receipt(
         (
             "action_panel_binding.execution_artifact_sha256",
             action_panel_binding.execution_artifact_sha256,
-            execution.artifact_sha256,
+            execution_view.artifact_sha256,
         ),
         (
             "action_panel_binding.corpus",
@@ -1771,27 +1897,21 @@ def join_predictions_after_receipt(
     )
     for name, observed, expected in expected_completion_bindings:
         if observed != expected:
-            raise LabelSeparationError(
-                f"prediction completion receipt has mismatched {name}"
-            )
+            raise LabelSeparationError(f"prediction completion receipt has mismatched {name}")
     completion_time = _require_utc_timestamp(
         "completion_receipt.anchored_at_utc",
         completion_receipt.anchored_at_utc,
     )
     run_started_at = datetime.fromisoformat(receipt.started_at_utc.replace("Z", "+00:00"))
     if completion_time <= run_started_at:
-        raise LabelSeparationError(
-            "prediction completion receipt must postdate the sealed run"
-        )
+        raise LabelSeparationError("prediction completion receipt must postdate the sealed run")
     for name in ("key_id", "corpus", "stage", "document_count"):
         prediction_value = getattr(predictions, name)
         label_value = getattr(sealed_labels, name)
-        execution_value = (
-            len(execution.documents) if name == "document_count" else getattr(execution, name)
-        )
+        execution_value = getattr(execution_view, name)
         if prediction_value != label_value or prediction_value != execution_value:
             raise LabelSeparationError(f"prediction and label artifacts have mismatched {name}")
-    execution_sha256 = execution.artifact_sha256
+    execution_sha256 = execution_view.artifact_sha256
     if (
         predictions.execution_artifact_sha256 != sealed_labels.execution_artifact_sha256
         or predictions.execution_artifact_sha256 != execution_sha256
@@ -1800,7 +1920,7 @@ def join_predictions_after_receipt(
 
     prediction_rows = {row.trial_key: row for row in predictions.predictions}
     label_rows = {row.trial_key: row for row in sealed_labels.labels}
-    execution_rows = {row.trial_key: row for row in execution.trials}
+    execution_rows = execution_view.trials
     expected_keys = set(execution_rows)
     for role, observed_rows in (
         ("predictions", prediction_rows),
@@ -1809,9 +1929,7 @@ def join_predictions_after_receipt(
         missing = expected_keys - set(observed_rows)
         extra = set(observed_rows) - expected_keys
         if missing:
-            raise LabelSeparationError(
-                f"{role} are missing trial keys: {_path_sample(missing)}"
-            )
+            raise LabelSeparationError(f"{role} are missing trial keys: {_path_sample(missing)}")
         if extra:
             raise LabelSeparationError(f"{role} have extra trial keys: {_path_sample(extra)}")
     joined: list[JoinedEvaluationTrial] = []
@@ -1828,6 +1946,8 @@ def join_predictions_after_receipt(
         execution_artifact_sha256=execution_sha256,
         prediction_artifact_sha256=predictions.artifact_sha256,
         prediction_completion_receipt_sha256=completion_receipt.receipt_sha256,
+        online_execution_result_receipt_sha256=online_result_sha256,
+        timelock_decryption_receipt_sha256=timelock_decryption_receipt_sha256,
         sealed_label_artifact_sha256=sealed_labels.artifact_sha256,
         corpus=predictions.corpus,
         stage=predictions.stage,
@@ -1930,8 +2050,6 @@ def load_offline_evaluation_artifact(path: str | Path) -> OfflineEvaluationArtif
 
     label = "offline evaluation artifact"
     encoded = _read_artifact_bytes(path, label=label)
-    artifact = OfflineEvaluationArtifact.from_dict(
-        _parse_json_object(encoded, label=label)
-    )
+    artifact = OfflineEvaluationArtifact.from_dict(_parse_json_object(encoded, label=label))
     _require_canonical_file_bytes(encoded, artifact.canonical_bytes(), label=label)
     return artifact

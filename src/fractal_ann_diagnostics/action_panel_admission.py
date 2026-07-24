@@ -1,4 +1,5 @@
 """Typed admission of governed executions into pre-label action panels."""
+
 from __future__ import annotations
 
 import json
@@ -25,11 +26,11 @@ from .confirmatory_analysis import (
 )
 from .controller import ControllerDecision, GovernedResult
 from .label_separation import (
-    OnlineExecutionArtifact,
     OnlineTrial,
     sealed_run_receipt_sha256,
 )
 from .policy import PolicyDecision
+from .scalable_execution import execution_artifact_sha256, execution_document_count
 from .study import SealedRunReceipt
 
 FailureCode = Literal[
@@ -141,8 +142,7 @@ def _authorization_matches(
         and observed.mask_size == int(mask.size)
         and observed.available is bool(decision.available)
         and observed.environment_sha256 == decision.environment_sha256
-        and observed.document_universe_sha256
-        == decision.document_universe_sha256
+        and observed.document_universe_sha256 == decision.document_universe_sha256
         and observed.request_nonce == decision.request_nonce
         and observed.request_sha256 == decision.request_sha256
     )
@@ -180,23 +180,17 @@ class GovernedActionExecution:
         if record.controller_action != result.decision.action:
             raise ConfirmatoryAnalysisError("audit and governed-result actions differ")
         if record.controller_policy_revision != result.decision.policy_version:
-            raise ConfirmatoryAnalysisError(
-                "audit and governed-result policy revisions differ"
-            )
+            raise ConfirmatoryAnalysisError("audit and governed-result policy revisions differ")
         if record.controller_reasons != result.decision.reasons or not _same_number(
             record.controller_risk_score,
             result.decision.risk_score,
         ):
-            raise ConfirmatoryAnalysisError(
-                "audit and governed-result controller decisions differ"
-            )
+            raise ConfirmatoryAnalysisError("audit and governed-result controller decisions differ")
         if not _same_number(
             record.total_online_latency_ms,
             result.total_online_latency_ms,
         ):
-            raise ConfirmatoryAnalysisError(
-                "audit and governed-result request latencies differ"
-            )
+            raise ConfirmatoryAnalysisError("audit and governed-result request latencies differ")
         if not _authorization_matches(
             record.initial_authorization,
             result.initial_authorization,
@@ -210,9 +204,7 @@ class GovernedActionExecution:
 
         abstained = result.decision.action == "abstain"
         if record.abstained is not abstained:
-            raise ConfirmatoryAnalysisError(
-                "audit and governed-result execution states differ"
-            )
+            raise ConfirmatoryAnalysisError("audit and governed-result execution states differ")
         if abstained:
             if result.search is not None or record.returned_evidence:
                 raise ConfirmatoryAnalysisError(
@@ -269,9 +261,7 @@ class GovernedActionExecution:
             )
         mask = np.asarray(authorization.authorized_mask, dtype=bool)
         return sum(
-            document_id < 0
-            or document_id >= mask.size
-            or not bool(mask[document_id])
+            document_id < 0 or document_id >= mask.size or not bool(mask[document_id])
             for document_id in self.returned_document_ids
         )
 
@@ -279,6 +269,7 @@ class GovernedActionExecution:
         self,
         *,
         action_order: int,
+        execution_position: int,
         controller_selected: bool,
     ) -> PreLabelActionRow:
         """Derive one serializable row from the admitted execution pair."""
@@ -289,6 +280,7 @@ class GovernedActionExecution:
             family_key=self.trial.family_key,
             action=self.result.decision.action,
             action_order=action_order,
+            execution_position=execution_position,
             audit_record_sha256=self.audit_record.record_sha256,
             execution_state="abstained" if abstained else "completed",
             failure_state="governed-abstention" if abstained else None,
@@ -317,13 +309,9 @@ class FailedActionExecution:
         if not isinstance(self.trial, OnlineTrial):
             raise ConfirmatoryAnalysisError("trial must be an OnlineTrial")
         if not isinstance(self.decision, ControllerDecision):
-            raise ConfirmatoryAnalysisError(
-                "failed action decision must be a ControllerDecision"
-            )
+            raise ConfirmatoryAnalysisError("failed action decision must be a ControllerDecision")
         if not isinstance(self.authorization, PolicyDecision):
-            raise ConfirmatoryAnalysisError(
-                "failed action authorization must be a PolicyDecision"
-            )
+            raise ConfirmatoryAnalysisError("failed action authorization must be a PolicyDecision")
         if self.decision.policy_version != self.authorization.policy_version:
             raise ConfirmatoryAnalysisError(
                 "failed action decision and authorization policy revisions differ"
@@ -339,25 +327,18 @@ class FailedActionExecution:
             ("finished_monotonic_ns", self.finished_monotonic_ns),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                raise ConfirmatoryAnalysisError(
-                    f"{name} must be a non-negative integer"
-                )
+                raise ConfirmatoryAnalysisError(f"{name} must be a non-negative integer")
         if self.finished_monotonic_ns <= self.started_monotonic_ns:
-            raise ConfirmatoryAnalysisError(
-                "failure timing must have positive monotonic duration"
-            )
+            raise ConfirmatoryAnalysisError("failure timing must have positive monotonic duration")
         if (
             not isinstance(self.runner_identity, str)
             or not self.runner_identity
             or self.runner_identity != self.runner_identity.strip()
             or any(
-                ord(character) < 32 or ord(character) == 127
-                for character in self.runner_identity
+                ord(character) < 32 or ord(character) == 127 for character in self.runner_identity
             )
         ):
-            raise ConfirmatoryAnalysisError(
-                "runner_identity must be a canonical non-empty string"
-            )
+            raise ConfirmatoryAnalysisError("runner_identity must be a canonical non-empty string")
         features = None if self.feature_values is None else tuple(self.feature_values)
         object.__setattr__(self, "feature_values", features)
 
@@ -386,6 +367,7 @@ class FailedActionExecution:
         self,
         *,
         action_order: int,
+        execution_position: int,
         controller_selected: bool,
     ) -> PreLabelActionRow:
         """Emit an explicit intention-to-treat failure row without invented output."""
@@ -395,6 +377,7 @@ class FailedActionExecution:
             family_key=self.trial.family_key,
             action=self.action,
             action_order=action_order,
+            execution_position=execution_position,
             audit_record_sha256=None,
             execution_state="failed",
             failure_state=self.failure_code,
@@ -427,6 +410,7 @@ def _admission_record(
     item: GovernedActionExecution | FailedActionExecution,
     *,
     action_order: int,
+    execution_position: int,
     controller_selected: bool,
 ) -> ActionPanelAdmissionRecord:
     if isinstance(item, GovernedActionExecution):
@@ -462,6 +446,7 @@ def _admission_record(
         family_key=item.trial.family_key,
         action=decision.action,
         action_order=action_order,
+        execution_position=execution_position,
         controller_selected=controller_selected,
         execution_state=execution_state,
         controller_risk_score=decision.risk_score,
@@ -475,9 +460,7 @@ def _admission_record(
         authorization_decision_sha256=str(authorization_fields["decision_sha256"]),
         policy_available=bool(authorization_fields["available"]),
         environment_sha256=str(authorization_fields["environment_sha256"]),
-        document_universe_sha256=str(
-            authorization_fields["document_universe_sha256"]
-        ),
+        document_universe_sha256=str(authorization_fields["document_universe_sha256"]),
         audit_sequence=audit_sequence,
         audit_previous_record_sha256=audit_previous,
         audit_record_sha256=audit_sha256,
@@ -491,39 +474,54 @@ def _admission_record(
 
 def action_panel_from_governed_executions(
     *,
-    execution: OnlineExecutionArtifact,
+    execution: object,
     run_receipt: SealedRunReceipt,
     governed_executions: Iterable[GovernedActionExecution],
     failed_executions: Iterable[FailedActionExecution] = (),
     selected_decisions: Mapping[str, ControllerDecision],
     action_set: Sequence[str],
+    execution_orders: Mapping[str, Sequence[str]],
     expected_audit_head_sha256: str,
     query_partition_audit_sha256: str,
     partition_label: Literal["primary", "reserve"],
 ) -> AdmittedActionPanel:
     """Build a complete panel and its provenance receipt from typed executions."""
 
-    if not isinstance(execution, OnlineExecutionArtifact):
-        raise ConfirmatoryAnalysisError(
-            "execution must be an OnlineExecutionArtifact"
-        )
     if not isinstance(run_receipt, SealedRunReceipt):
         raise ConfirmatoryAnalysisError("run_receipt must be a SealedRunReceipt")
-    if execution.stage != "sealed":
+    try:
+        stage = execution.stage  # type: ignore[attr-defined]
+        corpus = execution.corpus  # type: ignore[attr-defined]
+        execution_trials = tuple(execution.trials)  # type: ignore[attr-defined]
+        document_count = execution_document_count(execution)
+        execution_sha256 = execution_artifact_sha256(execution)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ConfirmatoryAnalysisError(
+            "execution lacks the admitted online artifact interface"
+        ) from exc
+    if stage != "sealed":
         raise ConfirmatoryAnalysisError("action-panel execution stage must be sealed")
     actions = tuple(action_set)
     if not actions or len(actions) != len(set(actions)):
         raise ConfirmatoryAnalysisError("action_set must be non-empty and unique")
-    expected_trials = {trial.trial_key: trial for trial in execution.trials}
+    expected_trials = {trial.trial_key: trial for trial in execution_trials}
+    if len(expected_trials) != len(execution_trials):
+        raise ConfirmatoryAnalysisError("execution contains duplicate trial keys")
+    orders = {trial_key: tuple(order) for trial_key, order in execution_orders.items()}
+    if set(orders) != set(expected_trials):
+        raise ConfirmatoryAnalysisError("execution_orders must cover the exact execution trial set")
+    for trial_key, order in orders.items():
+        if len(order) != len(actions) or set(order) != set(actions):
+            raise ConfirmatoryAnalysisError(
+                f"execution order for trial {trial_key!r} is not one complete permutation"
+            )
     selections = dict(selected_decisions)
     if set(selections) != set(expected_trials):
         raise ConfirmatoryAnalysisError(
             "selected decisions must cover the exact execution trial set"
         )
     if not all(isinstance(value, ControllerDecision) for value in selections.values()):
-        raise ConfirmatoryAnalysisError(
-            "selected decisions must contain ControllerDecision values"
-        )
+        raise ConfirmatoryAnalysisError("selected decisions must contain ControllerDecision values")
 
     governed = tuple(governed_executions)
     failed = tuple(failed_executions)
@@ -535,9 +533,7 @@ def action_panel_from_governed_executions(
         raise ConfirmatoryAnalysisError(
             "failed_executions must contain FailedActionExecution values"
         )
-    admitted: tuple[GovernedActionExecution | FailedActionExecution, ...] = (
-        governed + failed
-    )
+    admitted: tuple[GovernedActionExecution | FailedActionExecution, ...] = governed + failed
     if not admitted:
         raise ConfirmatoryAnalysisError("action executions must not be empty")
 
@@ -550,9 +546,7 @@ def action_panel_from_governed_executions(
         sorted((item.audit_record for item in governed), key=lambda row: row.sequence)
     )
     if not ordered_records:
-        raise ConfirmatoryAnalysisError(
-            "action-panel admission requires governed audit records"
-        )
+        raise ConfirmatoryAnalysisError("action-panel admission requires governed audit records")
     try:
         verification = verify_audit_chain(
             ordered_records,
@@ -560,13 +554,10 @@ def action_panel_from_governed_executions(
             expected_length=len(ordered_records),
         )
     except ValueError as exc:
-        raise ConfirmatoryAnalysisError(
-            "expected audit-chain head is invalid"
-        ) from exc
+        raise ConfirmatoryAnalysisError("expected audit-chain head is invalid") from exc
     if not verification.valid:
         raise ConfirmatoryAnalysisError(
-            "governed action audit chain is invalid: "
-            + "; ".join(verification.errors)
+            "governed action audit chain is invalid: " + "; ".join(verification.errors)
         )
 
     keyed: dict[
@@ -575,24 +566,38 @@ def action_panel_from_governed_executions(
     ] = {}
     for item in admitted:
         trial = expected_trials.get(item.trial.trial_key)
-        if trial is None or item.trial != trial:
+        if trial is None:
             raise ConfirmatoryAnalysisError(
                 "action execution belongs to another execution artifact"
+            )
+        try:
+            expected_family_key = trial.family_key
+        except AttributeError as exc:
+            raise ConfirmatoryAnalysisError("execution trial lacks a family-key binding") from exc
+        if (
+            item.trial.family_key != expected_family_key
+            or item.trial.corpus != corpus
+            or item.trial.stage != stage
+        ):
+            raise ConfirmatoryAnalysisError(
+                "action execution belongs to another execution artifact"
+            )
+        if isinstance(trial, OnlineTrial) and item.trial != trial:
+            raise ConfirmatoryAnalysisError(
+                "inline execution trial content differs from its artifact"
             )
         if isinstance(item, FailedActionExecution):
             if item.runner_identity != run_receipt.runner_identity:
                 raise ConfirmatoryAnalysisError(
                     "failed action timing receipt belongs to another runner"
                 )
-            if item.authorization.authorized_mask.size != len(execution.documents):
+            if item.authorization.authorized_mask.size != document_count:
                 raise ConfirmatoryAnalysisError(
                     "failed action authorization mask does not match document_count"
                 )
         else:
-            authorization = (
-                item.result.final_authorization or item.result.initial_authorization
-            )
-            if authorization.authorized_mask.size != len(execution.documents):
+            authorization = item.result.final_authorization or item.result.initial_authorization
+            if authorization.authorized_mask.size != document_count:
                 raise ConfirmatoryAnalysisError(
                     "governed action authorization mask does not match document_count"
                 )
@@ -625,18 +630,13 @@ def action_panel_from_governed_executions(
             )
         trial_executions = [keyed[(trial_key, action)] for action in actions]
         attempted_decisions = [
-            item.result.decision
-            if isinstance(item, GovernedActionExecution)
-            else item.decision
+            item.result.decision if isinstance(item, GovernedActionExecution) else item.decision
             for item in trial_executions
         ]
         if any(
-            decision.policy_version != selection.policy_version
-            for decision in attempted_decisions
+            decision.policy_version != selection.policy_version for decision in attempted_decisions
         ):
-            raise ConfirmatoryAnalysisError(
-                "selected and counterfactual policy revisions differ"
-            )
+            raise ConfirmatoryAnalysisError("selected and counterfactual policy revisions differ")
         selected = keyed[(trial_key, selection.action)]
         selected_decision = (
             selected.result.decision
@@ -660,8 +660,7 @@ def action_panel_from_governed_executions(
         if any(
             decision.policy_version != reference.policy_version
             or decision.environment_sha256 != reference.environment_sha256
-            or decision.document_universe_sha256
-            != reference.document_universe_sha256
+            or decision.document_universe_sha256 != reference.document_universe_sha256
             or decision.available is not reference.available
             or not np.array_equal(
                 decision.authorized_mask,
@@ -676,9 +675,11 @@ def action_panel_from_governed_executions(
         for action_order, action in enumerate(actions):
             item = keyed[(trial.trial_key, action)]
             controller_selected = action == selection.action
+            execution_position = orders[trial.trial_key].index(action)
             rows.append(
                 item.to_prelabel_row(
                     action_order=action_order,
+                    execution_position=execution_position,
                     controller_selected=controller_selected,
                 )
             )
@@ -686,6 +687,7 @@ def action_panel_from_governed_executions(
                 _admission_record(
                     item,
                     action_order=action_order,
+                    execution_position=execution_position,
                     controller_selected=controller_selected,
                 )
             )
@@ -693,26 +695,24 @@ def action_panel_from_governed_executions(
     panel = ActionPanelArtifact(
         manifest_sha256=run_receipt.manifest_sha256,
         run_receipt_sha256=sealed_run_receipt_sha256(run_receipt),
-        execution_artifact_sha256=execution.artifact_sha256,
-        corpus=execution.corpus,
-        stage=execution.stage,
-        document_count=len(execution.documents),
+        execution_artifact_sha256=execution_sha256,
+        corpus=corpus,
+        stage=stage,
+        document_count=document_count,
         action_set=actions,
         rows=tuple(rows),
     )
     receipt = ActionPanelAdmissionReceipt(
         manifest_sha256=run_receipt.manifest_sha256,
         run_receipt_sha256=sealed_run_receipt_sha256(run_receipt),
-        execution_artifact_sha256=execution.artifact_sha256,
+        execution_artifact_sha256=execution_sha256,
         action_panel_artifact_sha256=panel.artifact_sha256,
-        corpus=execution.corpus,
+        corpus=corpus,
         query_partition_audit_sha256=query_partition_audit_sha256,
         partition_label=partition_label,
         audit_head_sha256=expected_audit_head_sha256,
         audit_chain_length=len(ordered_records),
-        audit_record_sha256s=tuple(
-            record.record_sha256 for record in ordered_records
-        ),
+        audit_record_sha256s=tuple(record.record_sha256 for record in ordered_records),
         records=tuple(admission_records),
     )
     return AdmittedActionPanel(panel=panel, admission_receipt=receipt)

@@ -1,4 +1,5 @@
 """Fail-closed action selection inside an already authorized universe."""
+
 from __future__ import annotations
 
 import re
@@ -7,7 +8,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 from threading import RLock
 from time import perf_counter_ns
-from typing import Literal
+from typing import Literal, Protocol
 
 import numpy as np
 
@@ -17,16 +18,24 @@ from .retrieval import (
     AuthorizedExactIndex,
     AuthorizedHNSWIndex,
     DistanceMetric,
+    PolicyTransitionEvidence,
     ProbeTelemetry,
     SearchResult,
     authorized_exact_search,
     authorized_hnsw_probe,
     authorized_hnsw_search,
+    dual_epoch_query_drift,
     search_result_from_probe,
     snapshot_query,
 )
 
 ControllerAction = Literal["hnsw-low", "hnsw-high", "exact-authorized", "abstain"]
+
+
+class AuthorizedHNSWProvider(Protocol):
+    """Supply one previously built index for an exact authorization decision."""
+
+    def index_for(self, authorization: PolicyDecision) -> AuthorizedHNSWIndex: ...
 
 
 @dataclass(frozen=True)
@@ -48,9 +57,7 @@ class ControllerConfig:
         if self.exact_scan_threshold < 0:
             raise ValueError("exact_scan_threshold must be non-negative")
         if not 0.0 <= self.high_effort_threshold < self.exact_threshold <= 1.0:
-            raise ValueError(
-                "risk thresholds must satisfy 0 <= high_effort < exact <= 1"
-            )
+            raise ValueError("risk thresholds must satisfy 0 <= high_effort < exact <= 1")
 
 
 @dataclass(frozen=True)
@@ -204,28 +211,73 @@ class GovernedRetriever:
         role: str,
         *,
         expected_document_universe_sha256: str,
+        exact_truth_vectors: np.ndarray | None = None,
         metric: DistanceMetric = "euclidean",
         controller: RuleController | None = None,
-        policy_churn: float = 0.0,
-        embedding_drift: float = 0.0,
+        policy_transitions: Mapping[str, PolicyTransitionEvidence] | None = None,
+        require_policy_transition: bool = False,
         hnsw_seed: int = 42,
+        trusted_readonly_vectors: bool = False,
+        authorized_hnsw_provider: AuthorizedHNSWProvider | None = None,
     ) -> None:
-        self.vectors = np.array(vectors, dtype=np.float32, copy=True)
+        if not isinstance(trusted_readonly_vectors, bool):
+            raise ValueError("trusted_readonly_vectors must be boolean")
+        if trusted_readonly_vectors:
+            self.vectors = np.asarray(vectors)
+            if self.vectors.dtype != np.dtype(np.float32):
+                raise ValueError("trusted read-only vectors must use native float32")
+            if self.vectors.flags.writeable:
+                raise ValueError("trusted read-only vectors must not be writeable")
+            if not self.vectors.flags.c_contiguous:
+                raise ValueError("trusted read-only vectors must be C-contiguous")
+        else:
+            self.vectors = np.array(vectors, dtype=np.float32, copy=True)
         if self.vectors.ndim != 2 or len(self.vectors) == 0:
             raise ValueError("vectors must have shape (n_documents, dimension), n > 0")
         if not np.all(np.isfinite(self.vectors)):
             raise ValueError("vectors contain non-finite values")
         self.vectors.setflags(write=False)
+        if exact_truth_vectors is None:
+            self.exact_truth_vectors = self.vectors
+        elif trusted_readonly_vectors:
+            self.exact_truth_vectors = np.asarray(exact_truth_vectors)
+            if self.exact_truth_vectors.dtype != np.dtype(np.float32):
+                raise ValueError("trusted read-only exact truth vectors must use native float32")
+            if self.exact_truth_vectors.flags.writeable:
+                raise ValueError("trusted read-only exact truth vectors must not be writeable")
+            if not self.exact_truth_vectors.flags.c_contiguous:
+                raise ValueError("trusted read-only exact truth vectors must be C-contiguous")
+        else:
+            self.exact_truth_vectors = np.array(
+                exact_truth_vectors,
+                dtype=np.float32,
+                copy=True,
+            )
+        if self.exact_truth_vectors.shape != self.vectors.shape:
+            raise ValueError("exact_truth_vectors must have the same shape as vectors")
+        if not np.all(np.isfinite(self.exact_truth_vectors)):
+            raise ValueError("exact_truth_vectors contain non-finite values")
+        self.exact_truth_vectors.setflags(write=False)
         self.policy = policy
         self.role = role
         self.metric = metric
         self.controller = controller or RuleController()
-        if not np.isfinite(policy_churn) or not 0.0 <= policy_churn <= 1.0:
-            raise ValueError("policy_churn must be finite and in [0, 1]")
-        if not np.isfinite(embedding_drift) or embedding_drift < 0.0:
-            raise ValueError("embedding_drift must be finite and non-negative")
-        self.policy_churn = float(policy_churn)
-        self.embedding_drift = float(embedding_drift)
+        if not isinstance(require_policy_transition, bool):
+            raise ValueError("require_policy_transition must be boolean")
+        transitions = dict(policy_transitions or {})
+        if not all(
+            isinstance(key, str)
+            and isinstance(value, PolicyTransitionEvidence)
+            and key == value.environment_sha256
+            for key, value in transitions.items()
+        ):
+            raise ValueError("policy_transitions must be keyed by their environment digests")
+        if any(value.document_count != len(self.vectors) for value in transitions.values()):
+            raise ValueError("policy transition evidence covers another document universe")
+        if require_policy_transition and not transitions:
+            raise ValueError("required policy transition evidence is missing")
+        self.policy_transitions = transitions
+        self.require_policy_transition = require_policy_transition
         if policy.n_documents != len(self.vectors):
             raise ValueError("policy and vector document counts differ")
         if (
@@ -243,6 +295,12 @@ class GovernedRetriever:
             )
         self.document_universe_sha256 = expected_document_universe_sha256
         self.hnsw_seed = hnsw_seed
+        self.authorized_hnsw_provider = authorized_hnsw_provider
+        self._authorized_index_cache: dict[
+            tuple[str, str],
+            tuple[AuthorizedExactIndex, AuthorizedHNSWIndex],
+        ] = {}
+        self._authorized_index_cache_sealed = False
         self._authorized_exact: AuthorizedExactIndex | None = None
         self._authorized_hnsw: AuthorizedHNSWIndex | None = None
         self._authorized_hnsw_key: tuple[str, str] | None = None
@@ -267,9 +325,7 @@ class GovernedRetriever:
                 policy_version="unavailable",
                 authorized_mask=np.zeros(len(self.vectors), dtype=bool),
                 available=False,
-                reason=(
-                    f"policy decision point raised {type(exc).__name__}; deny by default"
-                ),
+                reason=(f"policy decision point raised {type(exc).__name__}; deny by default"),
                 document_universe_sha256=self.document_universe_sha256,
             )
 
@@ -327,43 +383,102 @@ class GovernedRetriever:
         mask_digest = sha256(authorization.authorized_mask.tobytes()).hexdigest()
         key = (authorization.policy_version, mask_digest)
         with self._index_lock:
-            rebuilt = (
-                self._authorized_exact is None
-                or self._authorized_hnsw is None
-                or self._authorized_hnsw_key != key
-            )
             start = perf_counter_ns()
-            if rebuilt:
+            cached = self._authorized_index_cache.get(key)
+            cache_miss = cached is None
+            if cache_miss:
+                if self._authorized_index_cache_sealed:
+                    raise RuntimeError(
+                        "live authorization selected an index that was not prepared "
+                        "before request timing"
+                    )
                 authorized_exact = AuthorizedExactIndex(
-                    self.vectors,
+                    self.exact_truth_vectors,
                     authorization.authorized_mask,
                     metric=self.metric,
                 )
-                authorized_hnsw = AuthorizedHNSWIndex(
-                    self.vectors,
-                    authorization.authorized_mask,
-                    metric=self.metric,
-                    ef_search=self.controller.config.low_ef,
-                    seed=self.hnsw_seed,
-                )
-                self._authorized_exact = authorized_exact
-                self._authorized_hnsw = authorized_hnsw
-                self._authorized_hnsw_key = key
+                if self.authorized_hnsw_provider is None:
+                    authorized_hnsw = AuthorizedHNSWIndex(
+                        self.vectors,
+                        authorization.authorized_mask,
+                        metric=self.metric,
+                        ef_search=self.controller.config.low_ef,
+                        seed=self.hnsw_seed,
+                    )
+                else:
+                    authorized_hnsw = self.authorized_hnsw_provider.index_for(authorization)
+                    expected_rows = np.flatnonzero(authorization.authorized_mask)
+                    if (
+                        authorized_hnsw.n_documents != len(self.vectors)
+                        or authorized_hnsw.n_authorized != authorization.authorized_count
+                        or authorized_hnsw.metric != self.metric
+                        or not np.array_equal(authorized_hnsw.original_ids, expected_rows)
+                    ):
+                        raise RuntimeError(
+                            "prebuilt authorized HNSW index differs from the live decision"
+                        )
+                cached = (authorized_exact, authorized_hnsw)
+                self._authorized_index_cache[key] = cached
+            authorized_exact, authorized_hnsw = cached
+            self._authorized_exact = authorized_exact
+            self._authorized_hnsw = authorized_hnsw
+            self._authorized_hnsw_key = key
             latency_ms = (perf_counter_ns() - start) / 1_000_000
-            assert self._authorized_exact is not None
-            assert self._authorized_hnsw is not None
-            return self._authorized_exact, self._authorized_hnsw, IndexRefreshWork(
-                policy_version=authorization.policy_version,
-                mask_sha256=mask_digest,
-                rebuilt=rebuilt,
-                latency_ms=latency_ms,
-                authorized_count=authorization.authorized_count,
+            return (
+                authorized_exact,
+                authorized_hnsw,
+                IndexRefreshWork(
+                    policy_version=authorization.policy_version,
+                    mask_sha256=mask_digest,
+                    rebuilt=cache_miss and self.authorized_hnsw_provider is None,
+                    latency_ms=latency_ms,
+                    authorized_count=authorization.authorized_count,
+                ),
             )
+
+    def prepare_authorization(
+        self,
+        *,
+        action: str,
+        environment: Mapping[str, object] | None,
+        expected_policy_version: str,
+    ) -> PolicyDecision:
+        """Load one live authorization universe before request timing starts."""
+
+        with self._index_lock:
+            if self._authorized_index_cache_sealed:
+                raise RuntimeError("authorized index cache is already sealed")
+        environment_sha256 = policy_environment_sha256(environment)
+        decision = self._policy_decision(action=action, environment=environment)
+        error = self._validate_decision(
+            decision,
+            action=action,
+            environment_sha256=environment_sha256,
+        )
+        if error is not None:
+            raise RuntimeError(f"pre-timing authorization failed: {error}")
+        if decision.policy_version != expected_policy_version:
+            raise RuntimeError("pre-timing authorization has another policy version")
+        if decision.authorized_count <= 0:
+            raise RuntimeError("pre-timing authorization selected an empty universe")
+        self._authorized_index(decision)
+        return decision
+
+    def seal_authorized_index_cache(self) -> None:
+        """Reject every later authorization universe not prepared in advance."""
+
+        with self._index_lock:
+            if not self._authorized_index_cache:
+                raise RuntimeError("cannot seal an empty authorized index cache")
+            if self._authorized_index_cache_sealed:
+                raise RuntimeError("authorized index cache is already sealed")
+            self._authorized_index_cache_sealed = True
 
     def query(
         self,
         query: np.ndarray,
         *,
+        current_truth_query: np.ndarray | None = None,
         k: int = 10,
         policy_available: bool = True,
         expected_policy_version: str | None = None,
@@ -386,7 +501,15 @@ class GovernedRetriever:
             raise ValueError("k must be positive")
         if k > self.controller.config.probe_k:
             raise ValueError("k cannot exceed the frozen probe_k bound")
-        query_snapshot = snapshot_query(query, self.vectors.shape[1])
+        active_query_snapshot = snapshot_query(query, self.vectors.shape[1])
+        current_truth_query_snapshot = (
+            active_query_snapshot
+            if current_truth_query is None
+            else snapshot_query(
+                current_truth_query,
+                self.exact_truth_vectors.shape[1],
+            )
+        )
         if not policy_available:
             return finish(
                 self._abstain(
@@ -410,9 +533,7 @@ class GovernedRetriever:
             action=action,
             environment=environment,
         )
-        authorization_latency_ms += (
-            perf_counter_ns() - authorization_started
-        ) / 1_000_000
+        authorization_latency_ms += (perf_counter_ns() - authorization_started) / 1_000_000
         initial_error = self._validate_decision(
             initial_authorization,
             action=action,
@@ -448,21 +569,46 @@ class GovernedRetriever:
                 )
             )
 
-        authorized_exact, authorized_index, index_refresh = self._authorized_index(
-            initial_authorization
+        transition = self.policy_transitions.get(environment_digest)
+        if transition is None:
+            if self.require_policy_transition:
+                raise ValueError("query environment lacks its frozen policy transition evidence")
+            policy_churn = 0.0
+        else:
+            transition.verify_current_mask(
+                mask,
+                policy_revision=initial_authorization.policy_version,
+                environment_sha256=environment_digest,
+            )
+            policy_churn = transition.policy_churn
+        embedding_drift = dual_epoch_query_drift(
+            active_query_snapshot,
+            current_truth_query_snapshot,
         )
-        probe = authorized_hnsw_probe(
-            authorized_index,
-            query_snapshot,
-            mask,
-            probe_k=self.controller.config.probe_k,
-            ef_search=self.controller.config.low_ef,
-            max_neighbors=self.controller.config.probe_k,
-        )
+        try:
+            authorized_exact, authorized_index, index_refresh = self._authorized_index(
+                initial_authorization
+            )
+            probe = authorized_hnsw_probe(
+                authorized_index,
+                active_query_snapshot,
+                mask,
+                probe_k=self.controller.config.probe_k,
+                ef_search=self.controller.config.low_ef,
+                max_neighbors=self.controller.config.probe_k,
+            )
+        except Exception as exc:
+            return finish(
+                self._abstain(
+                    f"authorized index admission failed ({type(exc).__name__}); fail closed",
+                    policy_version=initial_authorization.policy_version,
+                    initial_authorization=initial_authorization,
+                )
+            )
         geometry = query_geometry_from_probe(
             probe,
-            policy_churn=self.policy_churn,
-            embedding_drift=self.embedding_drift,
+            policy_churn=policy_churn,
+            embedding_drift=embedding_drift,
         )
         controller_started = perf_counter_ns()
         decision = self.controller.decide(
@@ -485,13 +631,17 @@ class GovernedRetriever:
                 )
             )
         if decision.action == "exact-authorized":
-            search = authorized_exact_search(authorized_exact, query_snapshot, k)
+            search = authorized_exact_search(
+                authorized_exact,
+                current_truth_query_snapshot,
+                k,
+            )
         elif decision.action == "hnsw-low":
             search = search_result_from_probe(probe, k, strategy="hnsw-low")
         else:
             search = authorized_hnsw_search(
                 authorized_index,
-                query_snapshot,
+                active_query_snapshot,
                 mask,
                 k,
                 ef_search=self.controller.config.high_ef,
@@ -505,9 +655,7 @@ class GovernedRetriever:
             action=action,
             environment=environment,
         )
-        authorization_latency_ms += (
-            perf_counter_ns() - authorization_started
-        ) / 1_000_000
+        authorization_latency_ms += (perf_counter_ns() - authorization_started) / 1_000_000
         final_error = self._validate_decision(
             final_authorization,
             action=action,

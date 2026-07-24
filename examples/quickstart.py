@@ -4,6 +4,7 @@ Run from the repo root after `pip install -e .`:
 
     python examples/quickstart.py
 """
+
 from __future__ import annotations
 
 import numpy as np

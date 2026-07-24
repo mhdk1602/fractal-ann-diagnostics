@@ -10,6 +10,7 @@ Reference
   A benchmarking tool for approximate nearest neighbor algorithms.
   Information Systems, 87.
 """
+
 from __future__ import annotations
 
 import re
@@ -132,8 +133,7 @@ def load_ann_benchmark(name: str, cache_dir: Path) -> AnnDataset:
         import h5py
     except ImportError as e:
         raise ImportError(
-            "h5py is required for ANN-benchmarks loading. Install with: "
-            "pip install h5py"
+            "h5py is required for ANN-benchmarks loading. Install with: pip install h5py"
         ) from e
 
     cache_dir = Path(cache_dir)

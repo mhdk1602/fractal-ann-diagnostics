@@ -1,4 +1,5 @@
 """Authorization policy primitives for governed retrieval."""
+
 from __future__ import annotations
 
 import hashlib

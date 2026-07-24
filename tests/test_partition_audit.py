@@ -285,9 +285,7 @@ def test_short_or_two_edit_texts_do_not_receive_near_duplicate_edges() -> None:
         text="which policy version denies authorized retrieval access today",
     )
 
-    audit = audit_query_partitions(
-        (short_fit, short_sealed, two_edit_fit, two_edit_sealed)
-    )
+    audit = audit_query_partitions((short_fit, short_sealed, two_edit_fit, two_edit_sealed))
 
     assert audit.passed
     assert not audit.edges

@@ -36,6 +36,7 @@ Run::
 
 Use ``experiments/run_governance_pilot.py`` for the current executable study.
 """
+
 from __future__ import annotations
 
 import sys
@@ -73,12 +74,12 @@ DATASETS_OPTIONAL = ("nytimes-256-angular",)
 CACHE_DIR = Path("./data/ann_cache").resolve()
 OUTPUT_PATH = Path(__file__).resolve().parent / "calibration-v0.1.0.md"
 
-SAMPLE_SIZE = 5000           # subsample for the descriptor pass
+SAMPLE_SIZE = 5000  # subsample for the descriptor pass
 # These values reproduce the historical sampling protocol. Correlation
 # dimension no longer allocates the former (n, n, d) broadcast, while the
 # retired multifractal function returns NaN.
 D2_MFW_SAMPLE_SIZE = 2000
-MFW_FALLBACK_SIZE = 1500     # further fallback if mfw exceeds the budget
+MFW_FALLBACK_SIZE = 1500  # further fallback if mfw exceeds the budget
 MFW_SAMPLE_BUDGET_SECONDS = 300.0  # 5 min per dataset before we shrink mfw
 
 # Practitioner ground truth for the recommendation column. The ANN-benchmarks
@@ -209,18 +210,20 @@ def main() -> None:
         train = _load_one(name)
         if train is None:
             failures[name] = "download/load failed"
-            rows.append({
-                "dataset": name,
-                "n": "n/a",
-                "d": "n/a",
-                "D2": "n/a",
-                "lid_p50": "n/a",
-                "lid_p95": "n/a",
-                "hubness_skew": "n/a",
-                "multifractal_width": "n/a",
-                "recommended": "**[FAILED: download/load failed]**",
-                "predicted_drop": "n/a",
-            })
+            rows.append(
+                {
+                    "dataset": name,
+                    "n": "n/a",
+                    "d": "n/a",
+                    "D2": "n/a",
+                    "lid_p50": "n/a",
+                    "lid_p95": "n/a",
+                    "hubness_skew": "n/a",
+                    "multifractal_width": "n/a",
+                    "recommended": "**[FAILED: download/load failed]**",
+                    "predicted_drop": "n/a",
+                }
+            )
             continue
 
         print(f"  train shape: {train.shape}")
@@ -240,18 +243,20 @@ def main() -> None:
             print(f"[error] {name}: descriptor pass failed: {type(e).__name__}: {e}")
             traceback.print_exc()
             failures[name] = f"descriptor pass failed ({type(e).__name__})"
-            rows.append({
-                "dataset": name,
-                "n": str(len(train)),
-                "d": str(train.shape[1]),
-                "D2": "n/a",
-                "lid_p50": "n/a",
-                "lid_p95": "n/a",
-                "hubness_skew": "n/a",
-                "multifractal_width": "n/a",
-                "recommended": f"**[FAILED: {type(e).__name__}]**",
-                "predicted_drop": "n/a",
-            })
+            rows.append(
+                {
+                    "dataset": name,
+                    "n": str(len(train)),
+                    "d": str(train.shape[1]),
+                    "D2": "n/a",
+                    "lid_p50": "n/a",
+                    "lid_p95": "n/a",
+                    "hubness_skew": "n/a",
+                    "multifractal_width": "n/a",
+                    "recommended": f"**[FAILED: {type(e).__name__}]**",
+                    "predicted_drop": "n/a",
+                }
+            )
             continue
 
         # Re-use the panel we just computed. Rewrite n_points to len(train) so
@@ -275,22 +280,24 @@ def main() -> None:
         lid_p50 = float(np.quantile(panel.lid_distribution, 0.5))
         lid_p95 = float(np.quantile(panel.lid_distribution, 0.95))
 
-        rows.append({
-            "dataset": name,
-            "n": f"{panel.n_points}",
-            "d": f"{panel.ambient_dimension}",
-            "D2": f"{panel.correlation_dimension:.3f}",
-            "lid_p50": f"{lid_p50:.3f}",
-            "lid_p95": f"{lid_p95:.3f}",
-            "hubness_skew": f"{panel.hubness_skew:.3f}",
-            "multifractal_width": (
-                f"{panel.multifractal_width:.3f}"
-                if np.isfinite(panel.multifractal_width)
-                else "nan"
-            ),
-            "recommended": index,
-            "predicted_drop": f"{drop:.3f}",
-        })
+        rows.append(
+            {
+                "dataset": name,
+                "n": f"{panel.n_points}",
+                "d": f"{panel.ambient_dimension}",
+                "D2": f"{panel.correlation_dimension:.3f}",
+                "lid_p50": f"{lid_p50:.3f}",
+                "lid_p95": f"{lid_p95:.3f}",
+                "hubness_skew": f"{panel.hubness_skew:.3f}",
+                "multifractal_width": (
+                    f"{panel.multifractal_width:.3f}"
+                    if np.isfinite(panel.multifractal_width)
+                    else "nan"
+                ),
+                "recommended": index,
+                "predicted_drop": f"{drop:.3f}",
+            }
+        )
         print(
             f"  D2={panel.correlation_dimension:.3f} ambient={panel.ambient_dimension} "
             f"D2/d={panel.correlation_dimension / panel.ambient_dimension:.3f} "
@@ -427,7 +434,8 @@ def _build_analysis(
             lines.append(f"- `{name}`: D2/ambient = {ratio:.3f}; {verdict}.")
         lines.append("")
         contradictions = [
-            (n, r) for n, r in rule1_fires
+            (n, r)
+            for n, r in rule1_fires
             if PRACTITIONER_INDEX.get(n) and PRACTITIONER_INDEX[n] != "flat-nsw"
         ]
         if contradictions:
@@ -458,7 +466,8 @@ def _build_analysis(
             lines.append(f"- `{name}`: D2={d2:.3f}, n={n}; {verdict}.")
         lines.append("")
         contradictions = [
-            (n, d2, npts) for n, d2, npts in rule4_fires
+            (n, d2, npts)
+            for n, d2, npts in rule4_fires
             if PRACTITIONER_INDEX.get(n) and PRACTITIONER_INDEX[n] != "ivf"
         ]
         if contradictions:

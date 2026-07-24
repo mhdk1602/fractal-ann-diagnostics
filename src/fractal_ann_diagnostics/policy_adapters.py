@@ -1,4 +1,5 @@
 """Adapters that obtain authorization from external policy decision points."""
+
 from __future__ import annotations
 
 import hmac
@@ -181,8 +182,7 @@ class OpenPolicyAgentDecisionPoint:
         if expected_policy_revision != expected_policy_revision.strip():
             raise ValueError("expected_policy_revision must be canonical")
         if any(
-            ord(character) < 32 or ord(character) == 127
-            for character in expected_policy_revision
+            ord(character) < 32 or ord(character) == 127 for character in expected_policy_revision
         ):
             raise ValueError("expected_policy_revision cannot contain control characters")
         if bearer_token is not None and (
@@ -195,8 +195,7 @@ class OpenPolicyAgentDecisionPoint:
         if ssl_context is not None and not isinstance(ssl_context, ssl.SSLContext):
             raise TypeError("ssl_context must be an ssl.SSLContext")
         if ssl_context is not None and (
-            ssl_context.verify_mode != ssl.CERT_REQUIRED
-            or ssl_context.check_hostname is not True
+            ssl_context.verify_mode != ssl.CERT_REQUIRED or ssl_context.check_hostname is not True
         ):
             raise ValueError(
                 "ssl_context must require certificate verification and hostname checking"
@@ -364,10 +363,7 @@ class OpenPolicyAgentDecisionPoint:
             "request_nonce": request_nonce,
             "request_sha256": request_sha256,
         }
-        if any(
-            not hmac.compare_digest(echoed[field], value)
-            for field, value in expected.items()
-        ):
+        if any(not hmac.compare_digest(echoed[field], value) for field, value in expected.items()):
             raise _ResponseSchemaError("OPA response is not bound to this request")
         allowed_ids = result.get("allowed_document_ids")
         if not isinstance(allowed_ids, list):
@@ -376,10 +372,7 @@ class OpenPolicyAgentDecisionPoint:
             raise _ResponseSchemaError("allowed_document_ids must contain only integers")
         if len(set(allowed_ids)) != len(allowed_ids):
             raise _ResponseSchemaError("allowed_document_ids contains duplicates")
-        if any(
-            document_id < 0 or document_id >= self.n_documents
-            for document_id in allowed_ids
-        ):
+        if any(document_id < 0 or document_id >= self.n_documents for document_id in allowed_ids):
             raise _ResponseSchemaError("allowed_document_ids contains an out-of-range ID")
 
         mask = np.zeros(self.n_documents, dtype=bool)

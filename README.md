@@ -44,9 +44,27 @@ entailment, faithfulness, or prompt-based extraction.
 > **Scientific status:** the apparatus, closed protocol schema, real-corpus adapters, label
 > separation, request-bound policy path, frozen model specifications, family-clustered inference,
 > an event-yield sensitivity simulator, fresh pre-run artifact admission, detached action-panel
-> provenance, and single-attempt result custody are implemented. The manifest is still a draft, no
-> external preregistration has been deposited, and the five-corpus sealed study has not run. The repository
+> provenance, pinned-binary timelock encryption, process-local label withholding, and a
+> provider-claimed no-rescue execution lineage are implemented. Public benchmark labels remain
+> accessible outside the apparatus; this design does not establish human outcome blindness or
+> independent organizational custody. The manifest is still a draft, the prospective external
+> registration has not been published, and the five-corpus sealed study has not run. A
+> [Zenodo record and DOI are reserved](research/zenodo-reservation.json), but the draft is deliberately
+> unpublished until the exact C1 bytes exist. The repository
 > contains no confirmatory finding yet.
+
+The workflow source names two GitHub environments: `confirmatory-rehearsal` for candidate execution
+and `confirmatory` for production publication, attestations, claims, and execution. Those names do
+not prove that repository protection rules exist. Before C0/C1 freeze, the live environment
+configuration and its API readback must be retained with the apparatus evidence. Under the current
+sole-operator ownership, an approval recorded by `mhdk1602` is self-approval. It creates an
+auditable manual pause, but it is not independent review, separation of duties, or independent
+custody. Enabling prevention of self-review without another eligible reviewer would make the
+registered execution inoperable rather than independent.
+The production image workflow authenticates the live REST capture. The
+[offline environment-control verifier](research/github-environment-control.md) admits that exact
+two-environment readback and records its evidentiary limit without holding credentials or changing
+GitHub state; C0 and C1 bind the canonical receipt file hash.
 
 ## Security contract
 
@@ -89,27 +107,76 @@ records what each source supports and where it stops.
 | Synthetic mechanism check | Fixed-seed mixtures, policy scrambling, embedding drift, every pilot search strategy replayed | Code-path behavior and accounting checks |
 | Engineering conformance | Authorized-only indexes, fresh final authorization, OPA behavior tests, artifact hashing, label isolation, audit chain | A testable security and execution contract |
 | Draft confirmatory protocol | Closed schema, draft manifest, action set, estimands, receipt types, and explicit freeze blockers | Prospective design only; it cannot authorize sealed access |
-| Externally registered frozen protocol | Not yet created | A confirmatory study only after every `tbd` is resolved, the artifacts are admitted, and the frozen digest is independently registered |
-| Confirmatory evidence | Not run | Only the untouched sealed run can produce this |
+| Externally registered frozen protocol | Not yet created | A confirmatory study only after every `tbd` is resolved, the artifacts are admitted, and the frozen digest is publicly registered |
+| Confirmatory evidence | Not run | Only the sole admissible provider-claimed lineage can produce this |
 
 The draft manifest deliberately fails frozen validation. It records the unresolved work rather than
 hiding it:
 
 - acquire and hash the five fixed corpus inputs, separately held labels, and corpus-specific policy
   workloads;
-- pin development-fit and calibration data, the connected query-partition audit with exact and
-  near-duplicate edges, and the power report;
+- pin five timelock ciphertexts, the exact drand chain and round, Linux ARM64 `tle`, separate
+  release-image digest, custody builder, and custody-seal receipt; disclose common administrative
+  control and public label availability;
+- publish the [label-excluded development selection receipt](research/development-cohort.md), then
+  pin its fit/calibration materialization, the connected query-partition audit, and the power
+  report;
 - pin the embedding, backends, OPA bundle, controller, comparator, fitted models, and analysis
   runner;
 - estimate nuisance parameters on development data, run the event-yield sensitivity grid and the
   endpoint-specific joint-gate simulation, then lock the maximum required family count;
 - provision a custodian, a distinct online runner, fixed hardware, a digest-pinned image, and an
   externally administered result anchor;
+- replace the explicit `production_workloads: unresolved-before-c1` sentinel with the five complete
+  fixed-order WorkloadSpec objects and their canonical newline-terminated file hashes;
 - change status to `frozen`, write the manifest digest lock, then open the sealed run once.
 
 This is the practical answer to “how do synthetic mechanism results become confirmatory?” The code
 must stop changing before the labels become visible, and the result must be allowed to fail every
 prespecified gate.
+
+## Apparatus lifecycle
+
+The freeze has two Git commits with different jobs. C0 fixes the executable apparatus. Heavy
+artifact construction happens from that exact commit under schemas that exclude the sealed label
+artifacts from those process inputs. C1 is then a direct child of C0 whose only changed files are
+the frozen manifest, its digest lock, and the consumed candidate-to-C1 transition receipt.
+
+```mermaid
+flowchart LR
+    C0["C0 apparatus commit"] --> IMG["Digest-pinned OCI image"]
+    C0 --> EMB["Pinned paired-Qwen embedding build"]
+    EMB --> DEV["Development selection and paired execution"]
+    DEV --> ART["Policies, indexes, models, and power evidence"]
+    IMG --> C0REL["Immutable C0 evidence release"]
+    C0REL --> C1["C1 witnessed freeze"]
+    EMB --> C1
+    ART --> C1
+    C1 --> REG["GitHub attestations and public Zenodo record"]
+    REG --> OPEN["OPENED"]
+    OPEN --> RUN["One claimed suite; five corpus workloads"]
+    RUN --> ONLINE["ONLINE_COMPLETE and external anchor"]
+    ONLINE --> LABELS["Timed label release"]
+    LABELS --> SCORE["One declared analysis"]
+    SCORE --> FINAL["ANALYSIS_COMPLETE"]
+```
+
+The operator contracts are split by responsibility:
+
+| Boundary | Primary specification |
+|---|---|
+| Development-family selection and paired measurements | [development cohort](research/development-cohort.md), [development execution](research/development-execution.md) |
+| Embedding, policy, index, model, and power artifacts | [embedding store](research/embedding-store.md), [artifact pipeline](research/artifact-pipeline.md), [freeze package](research/freeze-package.md) |
+| Image and process identity | [runner image](research/runner-image.md), [runtime attestation](research/runtime-attestation.md) |
+| Durable C0 evidence and C1 release binding | [runner image](research/runner-image.md), [external anchors](research/external-anchors.md) |
+| Provider CAS state and no-rescue phase lineage | [suite attempt](research/suite-attempt.md), [GitHub state attestation](research/github-state-attestation.md), [provider-plan construction](research/provider-plan-operator.md), [runner registration and activation](research/provider-runner-activation.md), [provider phase workflows](research/provider-phase-workflows.md) |
+| Ciphertext custody and release | [label custody](research/label-custody.md), [external anchors](research/external-anchors.md) |
+| Post-label persisted input and sole analysis | [input operator](research/confirmatory-input-operator.md), [confirmatory execution](research/confirmatory-execution.md) |
+| Prespecified estimands and decision gates | [preregistration](research/preregistration.md) |
+
+Passing one boundary never implies that the next occurred. C0 is not C1, registration is not
+execution, a completed online suite is not label release, and an analysis result is not externally
+attested until the final ledger transition verifies.
 
 ## Prespecified claim and gates
 
@@ -237,6 +304,7 @@ fractal-retrieval-governance begin-sealed-run \
   --artifact-map /approved/artifact-map.json \
   --protocol-registration-receipt /approved/protocol-registration.json \
   --protocol-registration-record /approved/protocol-registration-record.json \
+  --registration-package /approved/confirmatory-c1-registration \
   --runner-identity github-actions:environment:confirmatory
 ```
 
@@ -246,18 +314,13 @@ map again. It rereads every local artifact immediately before opening and requir
 verification receipt bytes to equal the previously admitted receipt. A stored verification receipt
 alone cannot authorize the run.
 
-The registration receipt identifies the external HTTPS record containing the exact frozen-manifest
-digest and binds a byte-exact local copy of that registry record. Both local files must be canonical
-JSON followed by one newline. The run receipt records both prerequisite receipt digests and URIs,
-and the command refuses a second opening.
-
-Immediately before opening the run, the CLI performs one fresh certificate-validated HTTPS fetch
-of the receipt's registry URI. It refuses redirects, a changed response URL, non-200 responses, and
-records larger than 64 KiB. The fetched digest and bytes must exactly match the secure local
-canonical record and its receipt. This admission preflight occurs before the runner enters the
-network-disabled sealed execution environment. It verifies prospective public availability, not
-who controls the registry; an independent reviewer must still establish registry ownership and
-preserve the registration evidence.
+The local registration record and receipt are canonical JSON followed by one newline. They are
+pointers, not admission authority. Immediately before opening the run, the CLI revalidates the exact
+27-file C1 package, both retained GitHub attestations, fixed Zenodo record `21361837`, and every file
+through its anonymous public-content URI. The public bytes, local package, registry record, and
+receipt must agree. The run receipt records both prerequisite receipt digests and URIs, and the
+command refuses a second opening. This networked preflight occurs before the runner enters the
+network-disabled execution environment.
 
 After prediction anchoring and offline label admission, the sealed scorer calls
 `run_confirmatory_analysis_once`, not the repeatable analysis core. The built-in path accepts only a
@@ -280,12 +343,12 @@ manifest digest; none is selected by the caller.
 | Measured request cost | authorization, refresh, probe, feature, controller, selected search, wall time | non-overlap and total-time checks |
 | Evidence truth | alternative complete bundles with URI, locator, and content hash | wrong query, wrong source, stale hash, partial route, unretrieved evidence |
 | Corpus normalization | SciFact, separate-corpus HotpotQA FullWiki, T2-RAGBench, qrels export for BRIGHT/MIRACL | candidate leakage, unknown IDs, bad locators, conflicting documents |
-| Label custody | opaque HMAC keys, disjoint online/label artifacts, canonical no-follow I/O, externally anchored action-panel and prediction completion | actual sealed-label bytes must match their manifest pins; joined label objects must equal those admitted payloads |
+| Label withholding | opaque HMAC keys, disjoint online/plaintext/ciphertext artifacts, manifest-pinned Linux ARM64 `tle`, a provider-claimed release phase after online completion, and process-local input gates | altered ciphertext, moving round, unpinned binary, plaintext mounted by the online process, pre-claim input access, or joined labels that differ from admitted bytes |
 | Action-panel admission | typed governed and failed outcomes plus a detached receipt for controller decisions, policy decisions, audit-chain position, failure timing, and query-partition binding | caller-supplied IDs, missing or duplicate actions, decision drift, audit mismatch, invented failure output |
 | Frozen modeling | four logistic specifications and prespecified LID×instability interaction | feature order, category drift, partition overlap, artifact digest |
 | Confirmatory inference | equal-corpus paired family bootstrap, exact zero-event bound, pre-compute attempt receipt, and detached result receipt | pair-key mismatch, single-family strata, repeated attempt, result or receipt substitution |
 | Design sensitivity | beta-binomial event-yield sensitivity plus a required endpoint-specific joint-gate simulation | deterministic grids, coverage checks, and a maximum required family count |
-| Study integrity | closed manifest, external protocol registration, exact artifact cardinalities, fresh local byte revalidation, no-follow traversal, and one-shot run receipt | extras, omissions, symlinks, hard links, post-verification mutation, wrong runner or manifest |
+| Study integrity | closed manifest, external protocol registration, exact artifact cardinalities, fresh local byte revalidation, no-follow traversal, exclusive local run receipt, and provider CAS claims | extras, omissions, symlinks, hard links, post-verification mutation, wrong runner or manifest, or an alternate provider lineage |
 | Audit | HMAC subject pseudonym, request bindings, component revisions, evidence hashes, chained records | tamper, reorder, delete, truncate, denied-evidence forgery |
 
 The audit chain and exclusive receipt need a trusted external head or write-once store. Local hashes
@@ -301,8 +364,8 @@ cannot protect against an actor who can rewrite both the evidence and its anchor
 | BRIGHT | difficult domain retrieval | qrels only | qrels never masquerade as complete evidence |
 | MIRACL transfer slice | multilingual transfer | qrels only | language, split, and source export must be pinned before freeze |
 
-Source-input bytes, canonical online-execution bytes, and label bytes occupy separate manifest
-roles for every corpus. The online artifact contains query text, documents, and opaque keys. It
+Source-input bytes, canonical online-execution bytes, label bytes, and timelock ciphertexts occupy
+separate manifest roles for every corpus. The online artifact contains query text, documents, and opaque keys. It
 contains no source query IDs, family IDs, answers, relevance judgments, evidence bundles, or
 label-bearing metadata. Offline scoring joins predictions and labels only after an external anchor
 records a canonical prediction-completion receipt with the exact typed action-panel binding. The
@@ -310,6 +373,11 @@ scorer loads the actual custody file through `load_sealed_label_artifact`; the a
 recomputes its canonical digest against the manifest pin and compares every joined label object with
 that admitted payload. A bare in-memory prediction object, reconstructed label object, or copied
 digest string cannot release labels into the primary analysis.
+
+The [custody protocol](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/label-custody.md)
+defines the pinned-binary encryption command, drand round rule, online artifact whitelist, release
+predicate, and proof limits. Timelock encryption supplies a time condition, not evidence that the
+custodian is independent or that no other plaintext copy exists.
 
 ## Statistical contract
 
@@ -342,38 +410,47 @@ already occurred.
 ```text
 fractal-ann-diagnostics/
 ├── src/fractal_ann_diagnostics/
-│   ├── policy.py                 # immutable policy decisions and request binding
-│   ├── policy_adapters.py        # fail-closed OPA Data API adapter
-│   ├── retrieval.py             # authorized exact/HNSW indexes and bounded probe
-│   ├── geometry.py              # multiscale query diagnostics
-│   ├── controller.py            # frozen action rule and final authorization
-│   ├── corpora.py               # evidence-aware corpus normalization
-│   ├── label_separation.py      # custodian split and post-receipt join
-│   ├── action_panel_admission.py  # governed result and audit admission
-│   ├── policy_workload.py       # label-independent authorization workload
-│   ├── partition_audit.py       # connected family and duplicate audit
-│   ├── evidence.py              # complete evidence bundles
-│   ├── evaluation.py            # trial outcomes and measured serving cost
-│   ├── confirmatory_analysis.py # anchored panel, H1 diagnostic, and H2–H3 gates
-│   ├── confirmatory_execution.py # one-attempt result and detached receipt custody
-│   ├── confirmatory_modeling.py # frozen H1/H2 specifications
-│   ├── confirmatory_stats.py    # family bootstrap, gates, and power simulation
-│   ├── artifact_integrity.py    # no-follow tree hashing and receipts
-│   ├── audit.py                 # privacy-minimized hash chain
-│   ├── drift.py                 # corpus, embedding, and policy revision checks
-│   └── study.py                 # closed manifest and one-shot sealed-run control
+│   ├── policy.py / policy_adapters.py       # request-bound authorization
+│   ├── retrieval.py / geometry.py           # authorized search and bounded diagnostics
+│   ├── controller.py / online_runner.py     # frozen decisions and paired online actions
+│   ├── study_data.py / query_cohort.py      # five-corpus staging and family selection
+│   ├── development_execution.py             # label-excluded fit/calibration measurements
+│   ├── embedding_store.py                   # current and stale Qwen vector stores
+│   ├── compiled_policy.py                   # exact OPA mask catalogs
+│   ├── authorized_index_store.py            # policy-specific HNSW stores
+│   ├── artifact_pipeline.py                 # deterministic C1 artifact compiler
+│   ├── runtime_attestation.py               # live Linux process and mount evidence
+│   ├── production_workload_registration.py  # public five-workload C1 contract
+│   ├── production_controls.py                # blueprint, closed C1 inputs, and atomic finalizer
+│   ├── production_corpus_run.py             # config-only sealed corpus entrypoint
+│   ├── suite_attempt.py                     # externally attested suite state machine
+│   ├── custody.py / timelock_release.py     # ciphertext creation and gated release
+│   ├── confirmatory_analysis.py             # H1 diagnostic and H2–H3 gates
+│   ├── confirmatory_input_operator.py       # persisted post-label input and sole analysis
+│   ├── confirmatory_execution.py            # single analysis attempt and result custody
+│   ├── freeze_package.py                    # closed manifest-to-filesystem layout
+│   ├── zenodo_publication.py                # guarded C1 deposit and public verification
+│   └── study.py                             # closed protocol and artifact cardinalities
 ├── examples/
-│   ├── opa_authorization.rego
-│   └── opa_authorization_test.rego
+│   ├── opa_authorization.rego                # request-time policy contract
+│   └── opa_compiled_masks.rego               # offline bulk-mask contract
 ├── research/
-│   ├── study-manifest.json
-│   ├── preregistration.md
-│   ├── confirmatory-execution.md
-│   ├── threat-model.md
-│   └── literature.md
+│   ├── study-manifest.json                   # draft C1 lock, 79 typed artifacts at freeze
+│   ├── preregistration.md                    # estimands, gates, exclusions, nulls
+│   ├── confirmatory-execution.md             # role-separated operator sequence
+│   ├── confirmatory-input-operator.md        # LABELS_RELEASED to ANALYSIS_COMPLETE
+│   ├── suite-attempt.md                      # four externally attested transitions
+│   ├── label-custody.md                      # timed release and claim boundary
+│   └── literature.md                         # source-by-source evidence limits
+├── .github/workflows/
+│   ├── ci.yml
+│   ├── confirmatory-image.yml
+│   ├── confirmatory-c0-evidence-release.yml
+│   ├── confirmatory-registration-attestation.yml
+│   └── confirmatory-state-attestation.yml
+├── Dockerfile.confirmatory
 ├── artifacts/pilot/             # synthetic development evidence only
-├── tests/
-└── .github/workflows/ci.yml
+└── tests/                        # unit, hostile-input, and contract checks
 ```
 
 ## Scientific lineage
@@ -402,6 +479,8 @@ the proposed contribution.
 - Every frozen input, label set, normalizer, model, backend, policy workload, controller, runner,
   image, development split, partition audit, power report, and source revision receives a manifest
   role and digest.
+- Each plaintext label, timelock ciphertext, exact `tle` executable, custody builder, and custody
+  seal receives a distinct manifest role and digest.
 - Development, calibration, and sealed families cannot cross partitions.
 - A technical failure preserves its run, action-panel admission, analysis-attempt, detached-result,
   and partial artifact evidence. A failed admitted analysis ends v0.3. Confirmatory reserve release

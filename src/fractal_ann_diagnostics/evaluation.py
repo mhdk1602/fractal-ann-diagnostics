@@ -1,4 +1,5 @@
 """Metrics and audit records for policy-aware retrieval experiments."""
+
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -56,12 +57,8 @@ class ServingCost:
 def serving_cost_from_governed_result(result: GovernedResult) -> ServingCost:
     """Extract non-overlapping components and the measured request wall time."""
     probe_search_ms = 0.0 if result.probe is None else result.probe.search_latency_ms
-    geometry_feature_ms = (
-        0.0 if result.geometry is None else result.geometry.feature_latency_ms
-    )
-    index_refresh_ms = (
-        0.0 if result.index_refresh is None else result.index_refresh.latency_ms
-    )
+    geometry_feature_ms = 0.0 if result.geometry is None else result.geometry.feature_latency_ms
+    index_refresh_ms = 0.0 if result.index_refresh is None else result.index_refresh.latency_ms
     selected_search_ms = 0.0
     if result.search is not None and result.search.strategy != "hnsw-low":
         selected_search_ms = result.search.latency_ms
@@ -158,8 +155,7 @@ def make_trial_record(
         if authorized_count is not None and authorized_count != resolved_authorized_count:
             raise ValueError("authorized_count does not match final_authorization")
         authorized_ids = tuple(
-            int(document_id)
-            for document_id in np.flatnonzero(final_authorization.authorized_mask)
+            int(document_id) for document_id in np.flatnonzero(final_authorization.authorized_mask)
         )
 
     recall = recall_at_k(search.ids, ground_truth, k)
@@ -180,9 +176,7 @@ def make_trial_record(
 
     if gold_evidence is None:
         if returned_evidence is not None or answered is not None:
-            raise ValueError(
-                "gold_evidence is required for evidence or answer-level outcomes"
-            )
+            raise ValueError("gold_evidence is required for evidence or answer-level outcomes")
     else:
         if gold_evidence.query_id != query_id:
             raise ValueError("gold evidence query_id must match the trial query_id")
@@ -191,9 +185,7 @@ def make_trial_record(
                 "returned_evidence and final_authorization are required with gold_evidence"
             )
         observed_evidence = tuple(returned_evidence)
-        observed_document_ids = {
-            location.document_id for location in observed_evidence
-        }
+        observed_document_ids = {location.document_id for location in observed_evidence}
         search_document_ids = set(int(document_id) for document_id in search.ids)
         if not observed_document_ids.issubset(search_document_ids):
             raise ValueError("returned evidence must be derived from the search result")
@@ -210,9 +202,7 @@ def make_trial_record(
         complete_bundle_ids = assessment.complete_bundle_ids
         if answered is not None:
             answer_outcomes = evaluate_answer(assessment, answered=answered)
-            evidence_supported_emission = (
-                answer_outcomes.evidence_supported_emission
-            )
+            evidence_supported_emission = answer_outcomes.evidence_supported_emission
             false_permit = answer_outcomes.false_permit
             false_denial = answer_outcomes.false_denial
 
@@ -285,28 +275,18 @@ def summarize_trials(records: list[TrialRecord]) -> list[dict[str, object]]:
                 "evidence_success_rate": float(np.mean(evidence)) if evidence else None,
                 "answer_labeled_n": len(answers),
                 "answer_coverage": (
-                    float(np.mean([row.answered for row in answers]))
-                    if answers
-                    else None
+                    float(np.mean([row.answered for row in answers])) if answers else None
                 ),
                 "evidence_supported_emission_rate": (
-                    float(
-                        np.mean(
-                            [row.evidence_supported_emission for row in answers]
-                        )
-                    )
+                    float(np.mean([row.evidence_supported_emission for row in answers]))
                     if answers
                     else None
                 ),
                 "false_permit_rate": (
-                    float(np.mean([row.false_permit for row in answers]))
-                    if answers
-                    else None
+                    float(np.mean([row.false_permit for row in answers])) if answers else None
                 ),
                 "false_denial_rate": (
-                    float(np.mean([row.false_denial for row in answers]))
-                    if answers
-                    else None
+                    float(np.mean([row.false_denial for row in answers])) if answers else None
                 ),
                 "unauthorized_context": int(sum(row.unauthorized_context for row in rows)),
                 "mean_shortfall": float(np.mean([row.shortfall for row in rows])),

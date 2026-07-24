@@ -1,0 +1,1244 @@
+# syntax=docker/dockerfile:1.7
+
+ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc
+ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
+ARG DISTROLESS_IMAGE=gcr.io/distroless/base-nossl-debian12:nonroot@sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe
+ARG DEBIAN_SNAPSHOT=20260714T000000Z
+ARG SOURCE_DATE_EPOCH
+
+FROM ${UV_IMAGE} AS uv-bin
+
+FROM ${PYTHON_IMAGE} AS hnsw-builder
+
+ARG DEBIAN_SNAPSHOT
+ARG DEBIAN_INRELEASE_SHA256=77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa
+ARG DEBIAN_KEYRING_SHA256=506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017
+ARG SOURCE_DATE_EPOCH
+ARG UV_LOCK_SHA256=a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CFLAGS="-g0 -ffile-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source -fdebug-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source -fmacro-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source" \
+    CXXFLAGS="-g0 -ffile-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source -fdebug-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source -fmacro-prefix-map=/build/hnswlib-source=/usr/src/hnswlib-source" \
+    HNSWLIB_NO_NATIVE=1 \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=0 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    TZ=UTC \
+    UV_LINK_MODE=copy \
+    UV_NO_CACHE=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON_DOWNLOADS=never
+
+COPY --from=uv-bin /uv /usr/local/bin/uv
+
+WORKDIR /build
+
+COPY pyproject.toml uv.lock requirements.confirmatory-build.txt ./
+
+ADD --checksum=sha256:cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c \
+    https://files.pythonhosted.org/packages/cf/7a/1a9b1405f2eb59515f06c3074750b03e0e96edf7fee0f6dd6df81d9c21d7/hnswlib-0.8.0.tar.gz \
+    /tmp/hnswlib-0.8.0.tar.gz
+
+ADD --checksum=sha256:77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa \
+    http://snapshot.debian.org/archive/debian/20260714T000000Z/dists/bookworm/InRelease \
+    /tmp/debian-InRelease
+
+RUN case "${SOURCE_DATE_EPOCH}" in \
+        '' | *[!0-9]* | 0 ) echo 'SOURCE_DATE_EPOCH must be a positive Unix timestamp' >&2; exit 64 ;; \
+        * ) ;; \
+    esac \
+    && printf '%s  %s\n' "${UV_LOCK_SHA256}" uv.lock > /tmp/uv.lock.sha256 \
+    && sha256sum -c /tmp/uv.lock.sha256 \
+    && rm /tmp/uv.lock.sha256 \
+    && grep -F 'hnswlib-0.8.0.tar.gz", hash = "sha256:cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"' uv.lock >/dev/null
+
+# hnswlib 0.8.0 ships only an sdist. Compile it in this discarded stage
+# against one signed Debian snapshot, without host-specific -march flags.
+RUN printf '%s  %s\n' \
+        "${DEBIAN_KEYRING_SHA256}" \
+        /usr/share/keyrings/debian-archive-keyring.gpg \
+        | sha256sum -c - \
+    && printf '%s  %s\n' \
+        "${DEBIAN_INRELEASE_SHA256}" \
+        /tmp/debian-InRelease \
+        | sha256sum -c - \
+    && gpgv \
+        --keyring /usr/share/keyrings/debian-archive-keyring.gpg \
+        /tmp/debian-InRelease \
+    && printf '%s\n' \
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm main" \
+        > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'APT::Get::AllowUnauthenticated "false";' \
+        > /etc/apt/apt.conf.d/99snapshot-security \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        | LC_ALL=C sort > /tmp/packages.before \
+    && apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get install -y --no-install-recommends g++=4:12.2.0-3 \
+    && test "$(dpkg-query -W -f='${Version}' g++)" = '4:12.2.0-3' \
+    && test "$(command -v g++)" = '/usr/bin/g++' \
+    && case "$(dpkg --print-architecture)" in amd64 | arm64 ) ;; * ) exit 66 ;; esac \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        | LC_ALL=C sort > /tmp/packages.after \
+    && awk 'NR==FNR {before[$0]=1; next} !before[$0]' \
+        /tmp/packages.before /tmp/packages.after \
+        > /opt/hnsw-compiler-closure.tsv \
+    && : > /opt/hnsw-runtime-package-status \
+    && for package in libgcc-s1 libgomp1 libstdc++6; do \
+        dpkg-query -s "$package" >> /opt/hnsw-runtime-package-status; \
+        printf '\n' >> /opt/hnsw-runtime-package-status; \
+    done \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        libgcc-s1 libgomp1 libstdc++6 \
+        | LC_ALL=C sort > /opt/hnsw-runtime-packages.tsv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN uv venv --python /usr/local/bin/python /opt/venv \
+    && uv pip install \
+        --python /opt/venv/bin/python \
+        --no-deps \
+        --only-binary=:all: \
+        --require-hashes \
+        --requirements requirements.confirmatory-build.txt \
+    && uv sync \
+        --frozen \
+        --no-dev \
+        --no-extra production-embedding \
+        --inexact \
+        --no-install-project \
+    && install -d /build/hnswlib-source \
+    && tar \
+        --extract \
+        --file /tmp/hnswlib-0.8.0.tar.gz \
+        --directory /build/hnswlib-source \
+        --no-same-owner \
+        --no-same-permissions \
+    && test -f /build/hnswlib-source/hnswlib-0.8.0/setup.py \
+    && test "$(find /build/hnswlib-source -mindepth 1 -maxdepth 1 -printf '%f\n')" = 'hnswlib-0.8.0' \
+    && uv build \
+        --wheel \
+        --no-build-isolation \
+        --no-create-gitignore \
+        --python /opt/venv/bin/python \
+        --out-dir /opt/wheels \
+        /build/hnswlib-source/hnswlib-0.8.0 \
+    && test "$(find /opt/wheels -maxdepth 1 -type f -name 'hnswlib-0.8.0-*.whl' | wc -l)" -eq 1 \
+    && wheel="$(find /opt/wheels -maxdepth 1 -type f -name 'hnswlib-0.8.0-*.whl')" \
+    && uv pip install \
+        --python /opt/venv/bin/python \
+        --no-deps \
+        --reinstall \
+        "$wheel" \
+    && uv pip uninstall \
+        --python /opt/venv/bin/python \
+        pybind11 setuptools wheel \
+    && uv pip check --python /opt/venv/bin/python \
+    && /opt/venv/bin/python -c 'import importlib.metadata as metadata; expected = {"hnswlib": "0.8.0", "joblib": "1.5.3", "narwhals": "2.24.0", "numpy": "2.5.1", "scikit-learn": "1.9.0", "scipy": "1.18.0", "threadpoolctl": "3.6.0", "tqdm": "4.68.4"}; observed = {distribution.metadata["Name"].lower().replace("_", "-"): distribution.version for distribution in metadata.distributions()}; assert observed == expected, (expected, observed); assert "torch" not in observed and "transformers" not in observed' \
+    && /opt/venv/bin/python -c 'import pathlib; dist_info = pathlib.Path("/opt/venv/lib/python3.12/site-packages/hnswlib-0.8.0.dist-info"); cache = dist_info / "uv_cache.json"; record = dist_info / "RECORD"; lines = record.read_text(encoding="utf-8").splitlines(keepends=True); matches = [line for line in lines if line.startswith("hnswlib-0.8.0.dist-info/uv_cache.json,")]; assert cache.is_file() and len(matches) == 1; cache.unlink(); record.write_text("".join(line for line in lines if line not in matches), encoding="utf-8"); assert not cache.exists()' \
+    && /opt/venv/bin/python -c 'import hashlib, json, os, pathlib, sys, time, zipfile; import hnswlib; wheel = pathlib.Path(sys.argv[1]); extension = pathlib.Path(hnswlib.__file__); wheel_bytes = wheel.read_bytes(); extension_bytes = extension.read_bytes(); archive = zipfile.ZipFile(wheel); expected_epoch = int(os.environ["SOURCE_DATE_EPOCH"]); expected_epoch -= expected_epoch % 2; expected_timestamp = time.gmtime(expected_epoch)[:6]; timestamps = {member.date_time for member in archive.infolist()}; assert timestamps == {expected_timestamp}, (expected_timestamp, timestamps); members = [name for name in archive.namelist() if name.startswith("hnswlib") and name.endswith(".so")]; assert len(members) == 1, members; member_bytes = archive.read(members[0]); assert hashlib.sha256(member_bytes).digest() == hashlib.sha256(extension_bytes).digest(); receipt = {"extension_basename": extension.name, "extension_byte_count": len(extension_bytes), "extension_sha256": hashlib.sha256(extension_bytes).hexdigest(), "package": "hnswlib", "python_abi": "cp312", "schema_version": "fractal-hnswlib-runtime-artifact-v1", "sdist_sha256": "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c", "version": "0.8.0", "wheel_basename": wheel.name, "wheel_byte_count": len(wheel_bytes), "wheel_sha256": hashlib.sha256(wheel_bytes).hexdigest()}; pathlib.Path(sys.argv[2]).write_text(json.dumps(receipt, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n", encoding="utf-8")' "$wheel" /opt/hnswlib-runtime-receipt.json \
+    && rm -f /opt/venv/bin/python \
+    && cp -L /usr/local/bin/python /opt/venv/bin/python \
+    && chmod 0555 /opt/venv/bin/python \
+    && test ! -L /opt/venv/bin/python \
+    && test "$(stat -c '%F' /opt/venv/bin/python)" = 'regular file' \
+    && test "$(stat -c '%h' /opt/venv/bin/python)" -eq 1 \
+    && /opt/venv/bin/python -c 'import hnswlib, numpy, scipy, sklearn' \
+    && /opt/venv/bin/python -c 'import os, pathlib, stat, sys; path = pathlib.Path("/opt/venv/bin/python"); observed = os.lstat(path); assert stat.S_ISREG(observed.st_mode); assert observed.st_nlink == 1; assert sys.executable == str(path); assert sys.prefix == "/opt/venv"' \
+    && test -z "$(find /opt/venv -type f -name '*.pyc' -print -quit)"
+
+# The slim runtime does not contain the C++ and OpenMP libraries required by
+# hnswlib. Copy only those runtime objects; discard the compiler and headers.
+RUN install -d /opt/native-libs \
+    && cp -L "$(g++ -print-file-name=libstdc++.so.6)" /opt/native-libs/libstdc++.so.6 \
+    && cp -L "$(g++ -print-file-name=libgcc_s.so.1)" /opt/native-libs/libgcc_s.so.1 \
+    && cp -L "$(g++ -print-file-name=libgomp.so.1)" /opt/native-libs/libgomp.so.1
+
+FROM ${PYTHON_IMAGE} AS native-builder
+
+ARG DEBIAN_SNAPSHOT
+ARG DEBIAN_INRELEASE_SHA256=77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa
+ARG DEBIAN_KEYRING_SHA256=506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017
+ARG SQLITE_AUTOCONF=3530300
+ARG SQLITE_SHA256=c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0
+ARG SQLITE_SHA3_256=98f2b3f3c11be6a03ea32346937b032c2472ebbd7a716bed36ca2f5693e7ce8b
+ARG SQLITE_SOURCE_ID="2026-06-26 20:14:12 d4c0e51e4aeb96955b99185ab9cde75c339e2c29c3f3f12428d364a10d782c62"
+ARG ZLIB_VERSION=1.3.2
+ARG ZLIB_SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
+ARG SOURCE_DATE_EPOCH
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    TZ=UTC
+
+ADD --checksum=sha256:77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa \
+    http://snapshot.debian.org/archive/debian/20260714T000000Z/dists/bookworm/InRelease \
+    /tmp/debian-InRelease
+ADD --checksum=sha256:c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0 \
+    https://www.sqlite.org/2026/sqlite-autoconf-3530300.tar.gz \
+    /tmp/sqlite.tar.gz
+ADD --checksum=sha256:bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16 \
+    https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz \
+    /tmp/zlib.tar.gz
+
+RUN case "${SOURCE_DATE_EPOCH}" in \
+        '' | *[!0-9]* | 0 ) echo 'SOURCE_DATE_EPOCH must be a positive Unix timestamp' >&2; exit 64 ;; \
+        * ) ;; \
+    esac \
+    && printf '%s  %s\n' \
+        "${DEBIAN_KEYRING_SHA256}" \
+        /usr/share/keyrings/debian-archive-keyring.gpg \
+        | sha256sum -c - \
+    && printf '%s  %s\n' "${DEBIAN_INRELEASE_SHA256}" /tmp/debian-InRelease \
+        | sha256sum -c - \
+    && printf '%s  %s\n' "${SQLITE_SHA256}" /tmp/sqlite.tar.gz | sha256sum -c - \
+    && printf '%s  %s\n' "${ZLIB_SHA256}" /tmp/zlib.tar.gz | sha256sum -c - \
+    && SQLITE_SHA3_256="${SQLITE_SHA3_256}" python - <<'PY'
+import hashlib
+import os
+import pathlib
+
+actual = hashlib.sha3_256(pathlib.Path("/tmp/sqlite.tar.gz").read_bytes()).hexdigest()
+expected = os.environ["SQLITE_SHA3_256"]
+if actual != expected:
+    raise SystemExit(f"SQLite SHA3-256 mismatch: {actual} != {expected}")
+PY
+
+RUN gpgv \
+        --keyring /usr/share/keyrings/debian-archive-keyring.gpg \
+        /tmp/debian-InRelease \
+    && printf '%s\n' \
+        "deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://snapshot.debian.org/archive/debian/${DEBIAN_SNAPSHOT} bookworm main" \
+        > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/debian.sources \
+    && printf '%s\n' \
+        'Acquire::Check-Valid-Until "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'APT::Get::AllowUnauthenticated "false";' \
+        > /etc/apt/apt.conf.d/99snapshot-security \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        | LC_ALL=C sort > /tmp/packages.before \
+    && apt-get -o APT::Update::Error-Mode=any update \
+    && apt-get install --yes --no-install-recommends \
+        gcc=4:12.2.0-3 \
+        libc6-dev=2.36-9+deb12u14 \
+        make=4.3-4.1 \
+    && test "$(dpkg-query -W -f='${Version}' gcc)" = '4:12.2.0-3' \
+    && test "$(dpkg-query -W -f='${Version}' libc6-dev)" = '2.36-9+deb12u14' \
+    && test "$(dpkg-query -W -f='${Version}' make)" = '4.3-4.1' \
+    && dpkg-query -W -f='${binary:Package}\t${Version}\n' \
+        | LC_ALL=C sort > /tmp/packages.after \
+    && awk 'NR==FNR {before[$0]=1; next} !before[$0]' \
+        /tmp/packages.before /tmp/packages.after \
+        > /tmp/compiler-closure.tsv \
+    && install -d \
+        /tmp/sqlite-src \
+        /tmp/zlib-src \
+        /opt/sqlite/lib \
+        /opt/zlib/lib \
+        /opt/artifacts/native-build \
+    && tar \
+        --extract \
+        --gzip \
+        --file /tmp/sqlite.tar.gz \
+        --strip-components=1 \
+        --directory /tmp/sqlite-src \
+        --no-same-owner \
+        --no-same-permissions \
+    && cd /tmp/sqlite-src \
+    && CFLAGS='-O2 -g0 -fPIC -ffile-prefix-map=/tmp/sqlite-src=/usr/src/sqlite -fdebug-prefix-map=/tmp/sqlite-src=/usr/src/sqlite -fmacro-prefix-map=/tmp/sqlite-src=/usr/src/sqlite' \
+        ./configure \
+            --prefix=/opt/sqlite \
+            --disable-static \
+            --enable-shared \
+            --disable-readline \
+    && make -j1 \
+    && make install \
+    && strip --strip-unneeded /opt/sqlite/lib/libsqlite3.so.3.53.3 \
+    && test "$(/opt/sqlite/bin/sqlite3 ':memory:' 'select sqlite_version();')" = '3.53.3' \
+    && test "$(/opt/sqlite/bin/sqlite3 ':memory:' 'select sqlite_source_id();')" = "${SQLITE_SOURCE_ID}" \
+    && tar \
+        --extract \
+        --gzip \
+        --file /tmp/zlib.tar.gz \
+        --strip-components=1 \
+        --directory /tmp/zlib-src \
+        --no-same-owner \
+        --no-same-permissions \
+    && cd /tmp/zlib-src \
+    && CFLAGS='-O2 -g0 -fPIC -ffile-prefix-map=/tmp/zlib-src=/usr/src/zlib -fdebug-prefix-map=/tmp/zlib-src=/usr/src/zlib -fmacro-prefix-map=/tmp/zlib-src=/usr/src/zlib' \
+        ./configure --prefix=/opt/zlib \
+    && make -j1 \
+    && make test \
+    && make install \
+    && strip --strip-unneeded /opt/zlib/lib/libz.so.1.3.2 \
+    && test "$(LD_LIBRARY_PATH=/opt/zlib/lib /usr/local/bin/python -c 'import zlib; print(zlib.ZLIB_RUNTIME_VERSION)')" = "${ZLIB_VERSION}" \
+    && cp /tmp/compiler-closure.tsv /opt/artifacts/native-build/compiler-closure.tsv \
+    && /opt/sqlite/bin/sqlite3 ':memory:' 'select sqlite_version(), sqlite_source_id();' \
+        > /opt/artifacts/native-build/sqlite-version.txt \
+    && sha256sum /opt/sqlite/lib/libsqlite3.so.3.53.3 \
+        > /opt/artifacts/native-build/sqlite-library.sha256 \
+    && sha256sum /opt/zlib/lib/libz.so.1.3.2 \
+        > /opt/artifacts/native-build/zlib-library.sha256 \
+    && python - <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+
+root = pathlib.Path("/opt/artifacts/native-build")
+sqlite_library = pathlib.Path("/opt/sqlite/lib/libsqlite3.so.3.53.3")
+zlib_library = pathlib.Path("/opt/zlib/lib/libz.so.1.3.2")
+receipt = {
+    "debian_inrelease_sha256": os.environ["DEBIAN_INRELEASE_SHA256"],
+    "debian_keyring_sha256": os.environ["DEBIAN_KEYRING_SHA256"],
+    "debian_snapshot": os.environ["DEBIAN_SNAPSHOT"],
+    "schema_version": "fractal-native-build-receipt-v1",
+    "source_date_epoch": int(os.environ["SOURCE_DATE_EPOCH"]),
+    "sqlite_autoconf": os.environ["SQLITE_AUTOCONF"],
+    "sqlite_library_sha256": hashlib.sha256(sqlite_library.read_bytes()).hexdigest(),
+    "sqlite_sha256": os.environ["SQLITE_SHA256"],
+    "sqlite_sha3_256": os.environ["SQLITE_SHA3_256"],
+    "sqlite_source_id": os.environ["SQLITE_SOURCE_ID"],
+    "zlib_library_sha256": hashlib.sha256(zlib_library.read_bytes()).hexdigest(),
+    "zlib_sha256": os.environ["ZLIB_SHA256"],
+    "zlib_version": os.environ["ZLIB_VERSION"],
+}
+(root / "native-build-receipt.json").write_text(
+    json.dumps(receipt, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+
+FROM ${GO_IMAGE} AS opa-builder
+
+ARG GO_IMAGE
+ARG TARGETARCH
+ARG OPA_COMMIT=e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297
+ARG OPA_SOURCE_SHA256=a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637
+ARG OPA_VERSION=1.18.2
+ARG OPA_RELEASE_TIMESTAMP=2026-07-02T13:14:00Z
+ARG ORAS_VERSION=2.6.2
+ARG X_SYNC_VERSION=0.22.0
+ARG GO_VERSION=1.26.5
+ARG GO_TARBALL_SHA256_AMD64=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG OPA_ORIGINAL_GO_MOD_SHA256=59b4beeea1af5d33ce1c22579e24ab4b0002a3638d0aadeb82a5a4500eb8a175
+ARG OPA_ORIGINAL_GO_SUM_SHA256=be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f
+ARG OPA_PATCHED_GO_MOD_SHA256=049c4ae3f1d58e8dd8885249873f358b4abbab1ece8f910a3549521dffd026e5
+ARG OPA_PATCHED_GO_SUM_SHA256=594c9098656b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903
+ARG OPA_DEPENDENCY_DELTA_SHA256=2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524
+ARG SOURCE_DATE_EPOCH
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    TZ=UTC
+
+ADD --checksum=sha256:a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637 \
+    https://github.com/open-policy-agent/opa/archive/e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297.tar.gz \
+    /tmp/opa.tar.gz
+
+RUN case "${SOURCE_DATE_EPOCH}" in \
+        '' | *[!0-9]* | 0 ) echo 'SOURCE_DATE_EPOCH must be a positive Unix timestamp' >&2; exit 64 ;; \
+        * ) ;; \
+    esac \
+    && test "$(go env GOVERSION)" = "go${GO_VERSION}" \
+    && test "$(go env GOARCH)" = "${TARGETARCH}" \
+    && case "${TARGETARCH}" in \
+        amd64) go_tarball_sha256="${GO_TARBALL_SHA256_AMD64}" ;; \
+        arm64) go_tarball_sha256="${GO_TARBALL_SHA256_ARM64}" ;; \
+        *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 65 ;; \
+    esac \
+    && mkdir -p /build/opa /out/artifacts \
+    && tar \
+        --extract \
+        --gzip \
+        --file /tmp/opa.tar.gz \
+        --strip-components=1 \
+        --directory /build/opa \
+        --no-same-owner \
+        --no-same-permissions \
+    && cd /build/opa \
+    && test "$(sed -n 's/^go //p' go.mod)" = '1.25.0' \
+    && test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = 'v2.6.1' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/sync)" = 'v0.21.0' \
+    && printf '%s  %s\n' "${OPA_ORIGINAL_GO_MOD_SHA256}" go.mod | sha256sum -c - \
+    && printf '%s  %s\n' "${OPA_ORIGINAL_GO_SUM_SHA256}" go.sum | sha256sum -c - \
+    && cp go.mod /tmp/go.mod.original \
+    && cp go.sum /tmp/go.sum.original \
+    && go mod edit -require="oras.land/oras-go/v2@v${ORAS_VERSION}" \
+    && go mod download "oras.land/oras-go/v2@v${ORAS_VERSION}" \
+    && go mod tidy -go=1.25.0 -compat=1.25 \
+    && test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "v${ORAS_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/sync)" = "v${X_SYNC_VERSION}" \
+    && go mod verify \
+    && printf '%s  %s\n' "${OPA_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \
+    && printf '%s  %s\n' "${OPA_PATCHED_GO_SUM_SHA256}" go.sum | sha256sum -c - \
+    && cp go.mod /out/artifacts/go.mod.patched \
+    && cp go.sum /out/artifacts/go.sum.patched \
+    && diff -u \
+        --label go.mod@opa-v1.18.2 \
+        --label go.mod@opa-v1.18.2+oras-v2.6.2 \
+        /tmp/go.mod.original go.mod \
+        > /out/artifacts/opa-go-mod.patch \
+        || test "$?" -eq 1 \
+    && diff -u \
+        --label go.sum@opa-v1.18.2 \
+        --label go.sum@opa-v1.18.2+oras-v2.6.2 \
+        /tmp/go.sum.original go.sum \
+        > /out/artifacts/opa-go-sum.patch \
+        || test "$?" -eq 1 \
+    && dependency_delta_sha256="$( \
+        cat /out/artifacts/opa-go-mod.patch /out/artifacts/opa-go-sum.patch \
+            | sha256sum | cut -d ' ' -f 1 \
+    )" \
+    && test "${dependency_delta_sha256}" = "${OPA_DEPENDENCY_DELTA_SHA256}" \
+    && export CGO_ENABLED=0 GOOS=linux GOARCH="${TARGETARCH}" \
+    && go build \
+        -buildvcs=false \
+        -mod=readonly \
+        -trimpath \
+        -ldflags="-s -w -buildid= -X github.com/open-policy-agent/opa/v1/version.Vcs=${OPA_COMMIT} -X github.com/open-policy-agent/opa/v1/version.Timestamp=${OPA_RELEASE_TIMESTAMP} -X github.com/open-policy-agent/opa/v1/version.Hostname=" \
+        -o /out/opa \
+        . \
+    && test "$(/out/opa version | sed -n 's/^Version: //p')" = "${OPA_VERSION}" \
+    && test "$(/out/opa version | sed -n 's/^Build Commit: //p')" = "${OPA_COMMIT}" \
+    && test "$(/out/opa version | sed -n 's/^Build Timestamp: //p')" = "${OPA_RELEASE_TIMESTAMP}" \
+    && test "$(/out/opa version | sed -n 's/^Go Version: //p')" = "go${GO_VERSION}" \
+    && go version -m /out/opa > /out/artifacts/opa-go-build-info.txt \
+    && grep -E '^[[:space:]]+dep[[:space:]]+oras.land/oras-go/v2[[:space:]]+v2\.6\.2' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sync[[:space:]]+v0\.22\.0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+build[[:space:]]+CGO_ENABLED=0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && opa_sha256="$(sha256sum /out/opa | cut -d ' ' -f 1)" \
+    && printf '{"dependency_delta_sha256":"%s","go_builder_image":"%s","go_tarball_sha256":"%s","go_version":"%s","opa_commit":"%s","opa_release_timestamp":"%s","opa_sha256":"%s","opa_source_sha256":"%s","opa_version":"%s","oras_original_version":"2.6.1","oras_patched_version":"%s","original_go_mod_sha256":"%s","original_go_sum_sha256":"%s","patched_go_mod_sha256":"%s","patched_go_sum_sha256":"%s","schema_version":"fractal-opa-build-receipt-v1","source_date_epoch":%s,"target_arch":"%s","x_sync_original_version":"0.21.0","x_sync_patched_version":"%s"}\n' \
+        "${dependency_delta_sha256}" \
+        "${GO_IMAGE}" \
+        "${go_tarball_sha256}" \
+        "${GO_VERSION}" \
+        "${OPA_COMMIT}" \
+        "${OPA_RELEASE_TIMESTAMP}" \
+        "${opa_sha256}" \
+        "${OPA_SOURCE_SHA256}" \
+        "${OPA_VERSION}" \
+        "${ORAS_VERSION}" \
+        "${OPA_ORIGINAL_GO_MOD_SHA256}" \
+        "${OPA_ORIGINAL_GO_SUM_SHA256}" \
+        "${OPA_PATCHED_GO_MOD_SHA256}" \
+        "${OPA_PATCHED_GO_SUM_SHA256}" \
+        "${SOURCE_DATE_EPOCH}" \
+        "${TARGETARCH}" \
+        "${X_SYNC_VERSION}" \
+        > /out/artifacts/opa-build-receipt.json \
+    && test "$(/out/opa eval --format raw --stdin-input 'input.schema_version' < /out/artifacts/opa-build-receipt.json)" = 'fractal-opa-build-receipt-v1' \
+    && chmod 0555 /out/opa \
+    && chmod 0444 /out/artifacts/*
+
+FROM ${GO_IMAGE} AS tle-source-builder
+
+ARG GO_IMAGE
+ARG TARGETARCH
+ARG SOURCE_DATE_EPOCH
+ARG TLE_VERSION=1.2.0
+ARG TLE_SOURCE_COMMIT=7b54141a9733fd6fa207587a11148280e6fb020d
+ARG TLE_TAG_OBJECT=6a94bf6b8200ab67f2b80af8000a55db64998d94
+ARG TLE_SOURCE_ARCHIVE_SHA256=98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d
+ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
+ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
+ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
+ARG TLE_PATCHED_GO_SUM_SHA256=baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0
+ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
+ARG GO_VERSION=1.26.5
+ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG GO_TOOL_SHA256_ARM64=22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b
+
+ENV CGO_ENABLED=0 \
+    GOARCH=arm64 \
+    GOARM64=v8.0 \
+    GOFLAGS=-mod=readonly \
+    GOOS=linux \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOSUMDB=sum.golang.org \
+    GOTOOLCHAIN=local \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    TZ=UTC
+
+ADD --checksum=sha256:98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d \
+    https://github.com/drand/tlock/archive/7b54141a9733fd6fa207587a11148280e6fb020d.tar.gz \
+    /tmp/tlock-source.tar.gz
+ADD --checksum=sha256:fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49 \
+    https://go.dev/dl/go1.26.5.linux-arm64.tar.gz \
+    /tmp/go-linux-arm64.tar.gz
+
+RUN case "${SOURCE_DATE_EPOCH}" in \
+        '' | *[!0-9]* | 0 ) echo 'SOURCE_DATE_EPOCH must be a positive Unix timestamp' >&2; exit 64 ;; \
+        * ) ;; \
+    esac \
+    && test "${TARGETARCH}" = arm64 \
+    && test "$(go env GOVERSION)" = "go${GO_VERSION}" \
+    && test "$(go env GOARCH)" = arm64 \
+    && printf '%s  %s\n' "${TLE_SOURCE_ARCHIVE_SHA256}" /tmp/tlock-source.tar.gz \
+        | sha256sum -c - \
+    && printf '%s  %s\n' "${GO_TARBALL_SHA256_ARM64}" /tmp/go-linux-arm64.tar.gz \
+        | sha256sum -c - \
+    && tar -xOf /tmp/go-linux-arm64.tar.gz go/bin/go > /tmp/official-go \
+    && printf '%s  %s\n' "${GO_TOOL_SHA256_ARM64}" /tmp/official-go | sha256sum -c - \
+    && printf '%s  %s\n' "${GO_TOOL_SHA256_ARM64}" /usr/local/go/bin/go | sha256sum -c - \
+    && cmp /tmp/official-go /usr/local/go/bin/go \
+    && install -d /build/original /build/patched /out/artifacts /out/bin \
+    && tar \
+        --extract \
+        --gzip \
+        --file /tmp/tlock-source.tar.gz \
+        --strip-components=1 \
+        --directory /build/original \
+        --no-same-owner \
+        --no-same-permissions \
+    && cp -a /build/original/. /build/patched/ \
+    && printf '%s  %s\n' "${TLE_ORIGINAL_GO_MOD_SHA256}" /build/original/go.mod \
+        | sha256sum -c - \
+    && printf '%s  %s\n' "${TLE_ORIGINAL_GO_SUM_SHA256}" /build/original/go.sum \
+        | sha256sum -c -
+
+WORKDIR /build/patched
+
+# Apply only the closed security overlay. Every selected version and the final
+# go.mod/go.sum bytes are pinned; the original source tree remains retained in
+# the discarded builder for a byte-level lineage receipt.
+RUN GOFLAGS=-mod=mod go get \
+        filippo.io/age@v1.2.1 \
+        golang.org/x/crypto@v0.54.0 \
+        golang.org/x/net@v0.57.0 \
+        golang.org/x/sys@v0.47.0 \
+        golang.org/x/text@v0.40.0 \
+        google.golang.org/grpc@v1.82.1 \
+        google.golang.org/protobuf@v1.36.11 \
+    && GOFLAGS=-mod=mod go mod tidy \
+    && printf '%s  %s\n' "${TLE_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \
+    && printf '%s  %s\n' "${TLE_PATCHED_GO_SUM_SHA256}" go.sum | sha256sum -c - \
+    && go mod download all \
+    && go mod verify \
+    && go list -m -json all > /out/artifacts/go-modules.json \
+    && cp /build/original/go.mod /out/artifacts/go.mod.original \
+    && cp /build/original/go.sum /out/artifacts/go.sum.original \
+    && cp go.mod /out/artifacts/go.mod.patched \
+    && cp go.sum /out/artifacts/go.sum.patched
+
+# Tests and both clean build caches run with module resolution disabled.
+RUN --network=none \
+    GOCACHE=/tmp/go-test-cache \
+    GOPROXY=off \
+    GOSUMDB=off \
+    go test \
+        -count=1 \
+        -json \
+        ./... \
+        -run '^(TestParseDuration|TestEncryptionWithDurationOverflow|TestEncryptionWithDurationOverflowUsingOtherUnits|TestCannotEncryptWithPointAtInfinity)$' \
+        > /out/artifacts/upstream-offline-tests.jsonl \
+    && GOCACHE=/tmp/go-build-cache-a GOPROXY=off GOSUMDB=off \
+        go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags='-s -w -buildid=' \
+            -o /tmp/tle-a \
+            ./cmd/tle \
+    && GOCACHE=/tmp/go-build-cache-b GOPROXY=off GOSUMDB=off \
+        go build \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags='-s -w -buildid=' \
+            -o /tmp/tle-b \
+            ./cmd/tle \
+    && cmp /tmp/tle-a /tmp/tle-b \
+    && printf '%s  %s\n' "${TLE_BINARY_SHA256}" /tmp/tle-a | sha256sum -c - \
+    && install -m 0555 /tmp/tle-a /out/bin/tle \
+    && go version -m /out/bin/tle > /out/artifacts/tle-go-build-info.txt \
+    && /out/bin/tle --help >/dev/null
+
+FROM ${PYTHON_IMAGE} AS tle-builder
+
+ARG GO_IMAGE
+ARG TARGETARCH
+ARG SOURCE_DATE_EPOCH
+ARG TLE_VERSION=1.2.0
+ARG TLE_SOURCE_COMMIT=7b54141a9733fd6fa207587a11148280e6fb020d
+ARG TLE_TAG_OBJECT=6a94bf6b8200ab67f2b80af8000a55db64998d94
+ARG TLE_SOURCE_ARCHIVE_SHA256=98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d
+ARG TLE_SOURCE_TREE_MANIFEST_SHA256=6fedff45430fc81e9dbf5b13b1a2dc90e9840ae91f03de307dac5c2f7475c94c
+ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
+ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
+ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
+ARG TLE_PATCHED_GO_SUM_SHA256=baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0
+ARG TLE_DEPENDENCY_DELTA_SHA256=1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59
+ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
+ARG GO_VERSION=1.26.5
+ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG GO_TOOL_SHA256_ARM64=22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b
+
+COPY --from=tle-source-builder /out /out
+COPY --from=tle-source-builder /build/original /build/original
+
+RUN python - <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+import stat
+import struct
+
+
+def canonical(value: object) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def digest(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+artifacts = pathlib.Path("/out/artifacts")
+binary = pathlib.Path("/out/bin/tle")
+source = pathlib.Path("/build/original")
+
+rows: list[dict[str, str | int]] = []
+for path in sorted(source.rglob("*")):
+    if path.is_symlink() or not (path.is_file() or path.is_dir()):
+        raise SystemExit(f"unsupported tlock source-tree entry: {path}")
+    if path.is_file():
+        rows.append(
+            {
+                "byte_count": path.stat().st_size,
+                "mode": f"{stat.S_IMODE(path.stat().st_mode):04o}",
+                "path": path.relative_to(source).as_posix(),
+                "sha256": digest(path),
+            }
+        )
+tree_manifest = {
+    "entries": rows,
+    "schema_version": "fractal-source-tree-manifest-v1",
+}
+tree_payload = canonical(tree_manifest)
+if hashlib.sha256(tree_payload).hexdigest() != os.environ["TLE_SOURCE_TREE_MANIFEST_SHA256"]:
+    raise SystemExit("tlock source-tree manifest differs from its pin")
+(artifacts / "source-tree-manifest.json").write_bytes(tree_payload + b"\n")
+
+dependency_delta = {
+    "go_directive": {"from": "1.22", "to": "1.25.0"},
+    "modules": [
+        {"from": "v1.1.1", "module": "filippo.io/age", "to": "v1.2.1"},
+        {"from": "v0.25.0", "module": "golang.org/x/crypto", "to": "v0.54.0"},
+        {"from": "v0.27.0", "module": "golang.org/x/net", "to": "v0.57.0"},
+        {"from": "v0.22.0", "module": "golang.org/x/sys", "to": "v0.47.0"},
+        {"from": "v0.16.0", "module": "golang.org/x/text", "to": "v0.40.0"},
+        {
+            "from": "v0.0.0-20240723171418-e6d459c13d2a",
+            "module": "google.golang.org/genproto/googleapis/rpc",
+            "to": "v0.0.0-20260414002931-afd174a4e478",
+        },
+        {"from": "v1.65.0", "module": "google.golang.org/grpc", "to": "v1.82.1"},
+        {
+            "from": "v1.34.2",
+            "module": "google.golang.org/protobuf",
+            "to": "v1.36.11",
+        },
+    ],
+    "schema_version": "fractal-go-module-delta-v1",
+}
+delta_payload = canonical(dependency_delta)
+if hashlib.sha256(delta_payload).hexdigest() != os.environ["TLE_DEPENDENCY_DELTA_SHA256"]:
+    raise SystemExit("tlock dependency delta differs from its pin")
+(artifacts / "dependency-delta.json").write_bytes(delta_payload + b"\n")
+
+expected_hashes = {
+    "go.mod.original": os.environ["TLE_ORIGINAL_GO_MOD_SHA256"],
+    "go.sum.original": os.environ["TLE_ORIGINAL_GO_SUM_SHA256"],
+    "go.mod.patched": os.environ["TLE_PATCHED_GO_MOD_SHA256"],
+    "go.sum.patched": os.environ["TLE_PATCHED_GO_SUM_SHA256"],
+}
+for name, expected in expected_hashes.items():
+    if digest(artifacts / name) != expected:
+        raise SystemExit(f"{name} differs from its pin")
+
+test_events = [
+    json.loads(line)
+    for line in (artifacts / "upstream-offline-tests.jsonl").read_text(
+        encoding="utf-8"
+    ).splitlines()
+]
+if any(event.get("Action") == "fail" for event in test_events):
+    raise SystemExit("one offline upstream tlock test failed")
+passed_tests = sorted(
+    {
+        event["Test"]
+        for event in test_events
+        if event.get("Action") == "pass" and isinstance(event.get("Test"), str)
+    }
+)
+expected_passed_tests = [
+    "TestCannotEncryptWithPointAtInfinity",
+    "TestCannotEncryptWithPointAtInfinity/on_G1",
+    "TestCannotEncryptWithPointAtInfinity/on_G2",
+    "TestEncryptionWithDurationOverflow",
+    "TestEncryptionWithDurationOverflowUsingOtherUnits",
+    "TestParseDuration",
+    "TestParseDuration/0_values_are_in_the_middle_are_allowed",
+    "TestParseDuration/a_mix_of_timespans_in_a_funny_order_parse_successfully",
+    "TestParseDuration/a_mix_of_timespans_parse_successfully",
+    "TestParseDuration/days_are_parsed_correctly",
+    "TestParseDuration/hours_are_parsed_correctly",
+    "TestParseDuration/if_characters_are_repeated,_an_error_is_returned",
+    "TestParseDuration/missing_multipliers_fails",
+    "TestParseDuration/months_are_parsed_correctly",
+    "TestParseDuration/parsing_an_invalid_timespan_character_fails",
+    "TestParseDuration/seconds_are_parsed_correctly",
+    "TestParseDuration/times_with_multiple_digits_parse_successfully",
+    "TestParseDuration/total_of_0_should_also_be_fine",
+    "TestParseDuration/years_are_parsed_correctly",
+]
+if passed_tests != expected_passed_tests:
+    raise SystemExit("offline upstream tlock test inventory is incomplete")
+test_inventory = {
+    "network_access": False,
+    "passed_test_events": passed_tests,
+    "schema_version": "fractal-tlock-offline-test-inventory-v1",
+    "upstream_source_commit_git_sha1": os.environ["TLE_SOURCE_COMMIT"],
+}
+(artifacts / "offline-test-inventory.json").write_bytes(
+    canonical(test_inventory) + b"\n"
+)
+(artifacts / "upstream-offline-tests.jsonl").unlink()
+
+payload = binary.read_bytes()
+if hashlib.sha256(payload).hexdigest() != os.environ["TLE_BINARY_SHA256"]:
+    raise SystemExit("source-built tle binary differs from its pin")
+if len(payload) != 13_303_934:
+    raise SystemExit("source-built tle binary byte count differs from its pin")
+if payload[:6] != b"\x7fELF\x02\x01":
+    raise SystemExit("tle is not one little-endian ELF64 executable")
+elf_type, machine = struct.unpack_from("<HH", payload, 16)
+if elf_type != 2 or machine != 183:
+    raise SystemExit("tle is not one AArch64 ET_EXEC binary")
+program_offset = struct.unpack_from("<Q", payload, 32)[0]
+program_entry_size, program_count = struct.unpack_from("<HH", payload, 54)
+if program_entry_size < 56 or not 1 <= program_count <= 4096:
+    raise SystemExit("tle has an invalid program-header table")
+program_types = {
+    struct.unpack_from("<I", payload, program_offset + index * program_entry_size)[0]
+    for index in range(program_count)
+}
+if 2 in program_types or 3 in program_types:
+    raise SystemExit("tle contains a PT_DYNAMIC or PT_INTERP program header")
+
+receipt = {
+    "binary_byte_count": len(payload),
+    "binary_image_path": "/usr/local/bin/tle",
+    "binary_sha256": os.environ["TLE_BINARY_SHA256"],
+    "build_commands": [
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags=-s -w -buildid=",
+            "-o",
+            "/tmp/tle-a",
+            "./cmd/tle",
+        ],
+        [
+            "go",
+            "build",
+            "-trimpath",
+            "-buildvcs=false",
+            "-ldflags=-s -w -buildid=",
+            "-o",
+            "/tmp/tle-b",
+            "./cmd/tle",
+        ],
+    ],
+    "build_environment": {
+        "CGO_ENABLED": "0",
+        "GOARCH": "arm64",
+        "GOARM64": "v8.0",
+        "GOOS": "linux",
+        "GOTOOLCHAIN": "local",
+    },
+    "builder_image": os.environ["GO_IMAGE"],
+    "dependency_delta_sha256": os.environ["TLE_DEPENDENCY_DELTA_SHA256"],
+    "elf": {
+        "class": "ELF64",
+        "dynamic_program_header": False,
+        "machine": "AArch64",
+        "pt_interp": False,
+        "type": "ET_EXEC",
+    },
+    "go_tarball_sha256": os.environ["GO_TARBALL_SHA256_ARM64"],
+    "go_tarball_url": f"https://go.dev/dl/go{os.environ['GO_VERSION']}.linux-arm64.tar.gz",
+    "go_tool_sha256": os.environ["GO_TOOL_SHA256_ARM64"],
+    "go_version": os.environ["GO_VERSION"],
+    "included": True,
+    "independent_build_count": 2,
+    "independent_builds_byte_identical": True,
+    "offline_test_inventory_sha256": digest(
+        artifacts / "offline-test-inventory.json"
+    ),
+    "original_go_mod_sha256": os.environ["TLE_ORIGINAL_GO_MOD_SHA256"],
+    "original_go_sum_sha256": os.environ["TLE_ORIGINAL_GO_SUM_SHA256"],
+    "patched_go_mod_sha256": os.environ["TLE_PATCHED_GO_MOD_SHA256"],
+    "patched_go_sum_sha256": os.environ["TLE_PATCHED_GO_SUM_SHA256"],
+    "release_version": os.environ["TLE_VERSION"],
+    "schema_version": "fractal-tle-source-build-receipt-v2",
+    "source_archive_sha256": os.environ["TLE_SOURCE_ARCHIVE_SHA256"],
+    "source_archive_url": (
+        "https://github.com/drand/tlock/archive/"
+        f"{os.environ['TLE_SOURCE_COMMIT']}.tar.gz"
+    ),
+    "source_commit_git_sha1": os.environ["TLE_SOURCE_COMMIT"],
+    "source_date_epoch": int(os.environ["SOURCE_DATE_EPOCH"]),
+    "source_tree_manifest_sha256": os.environ["TLE_SOURCE_TREE_MANIFEST_SHA256"],
+    "tag_object_git_sha1": os.environ["TLE_TAG_OBJECT"],
+    "target_arch": os.environ["TARGETARCH"],
+    "target_os": "linux",
+}
+(artifacts / "tle-build-receipt.json").write_bytes(canonical(receipt) + b"\n")
+PY
+
+RUN chmod 0555 /out/bin/tle \
+    && chmod 0444 /out/artifacts/* \
+    && test ! -e /out/artifacts/upstream-offline-tests.jsonl
+
+FROM ${PYTHON_IMAGE} AS source-runtime
+
+ARG BUILD_CONTEXT_TREE_SHA256
+ARG DEBIAN_SNAPSHOT
+ARG SOURCE_DATE_EPOCH
+ARG TARGETARCH
+ARG OPA_REGO_SHA256=18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c
+ARG OPA_REGO_TEST_SHA256=67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00
+ARG UV_LOCK_SHA256=a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6
+
+ENV HOME=/home/runner \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    LD_LIBRARY_PATH=/opt/native-libs:/usr/local/lib \
+    LOGNAME=runner \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    PATH=/opt/venv/bin:/usr/local/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=0 \
+    PYTHONPATH=/opt/app/src \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    TMPDIR=/tmp \
+    TZ=UTC \
+    USER=runner \
+    VECLIB_MAXIMUM_THREADS=1 \
+    XDG_CACHE_HOME=/tmp/fractal-cache
+
+RUN case "${BUILD_CONTEXT_TREE_SHA256}" in \
+        '' | *[!0-9a-f]* ) echo 'BUILD_CONTEXT_TREE_SHA256 must be a lowercase SHA-256' >&2; exit 64 ;; \
+        * ) ;; \
+    esac \
+    && test "${#BUILD_CONTEXT_TREE_SHA256}" -eq 64 \
+    && install -d -o 65532 -g 65532 /home/runner /input /output /workspace
+
+COPY --from=hnsw-builder --chown=0:0 /opt/venv /opt/venv
+COPY --from=hnsw-builder --chown=0:0 /opt/native-libs /opt/native-libs
+COPY --from=hnsw-builder --chown=0:0 /opt/wheels /opt/artifacts/hnswlib
+COPY --from=hnsw-builder --chown=0:0 /opt/hnswlib-runtime-receipt.json /opt/artifacts/hnswlib-runtime-receipt.json
+COPY --from=hnsw-builder --chown=0:0 /opt/hnsw-compiler-closure.tsv /opt/artifacts/hnswlib-build/compiler-closure.tsv
+COPY --from=hnsw-builder --chown=0:0 /opt/hnsw-runtime-package-status /opt/artifacts/hnswlib-build/runtime-package-status
+COPY --from=hnsw-builder --chown=0:0 /opt/hnsw-runtime-packages.tsv /opt/artifacts/hnswlib-build/runtime-packages.tsv
+COPY --from=hnsw-builder --chown=0:0 /build/uv.lock /opt/app/uv.lock
+COPY --from=native-builder --chown=0:0 /opt/sqlite/lib/libsqlite3.so.3.53.3 /opt/native-libs/libsqlite3.so.0
+COPY --from=native-builder --chown=0:0 /opt/zlib/lib/libz.so.1.3.2 /opt/native-libs/libz.so.1
+COPY --from=native-builder --chown=0:0 /opt/artifacts/native-build /opt/artifacts/native-build
+COPY --from=opa-builder --chown=0:0 /out/opa /usr/local/bin/opa
+COPY --from=opa-builder --chown=0:0 /out/artifacts /opt/artifacts/opa-build
+COPY --chown=0:0 examples/opa_compiled_masks.rego /opt/app/policy/opa_compiled_masks.rego
+COPY --chown=0:0 src /opt/app/src
+
+RUN chmod -R a-w /opt/venv /opt/native-libs /opt/artifacts /opt/app/src \
+    && chmod 0555 /opt/venv/bin/python \
+    && chmod 0555 /usr/local/bin/opa \
+    && chmod 0444 /opt/app/uv.lock \
+    && chmod 0444 /opt/app/policy/opa_compiled_masks.rego \
+    && test ! -L /opt/venv/bin/python \
+    && test "$(stat -c '%F' /opt/venv/bin/python)" = 'regular file' \
+    && test "$(stat -c '%h' /opt/venv/bin/python)" -eq 1 \
+    && test -z "$(find /opt/venv /opt/native-libs /opt/artifacts /opt/app/src /opt/app/uv.lock \
+        \( -type f -o -type d \) ! -user root -print -quit)" \
+    && test -z "$(find /opt/venv /opt/native-libs /opt/artifacts /opt/app/src /opt/app/uv.lock \
+        \( -type f -o -type d \) -perm /222 -print -quit)" \
+    && printf '%s  %s\n' \
+        "${UV_LOCK_SHA256}" \
+        /opt/app/uv.lock \
+        > /tmp/uv-lock.sha256 \
+    && sha256sum -c /tmp/uv-lock.sha256 \
+    && rm /tmp/uv-lock.sha256 \
+    && printf '%s  %s\n' \
+        "${OPA_REGO_SHA256}" \
+        /opt/app/policy/opa_compiled_masks.rego \
+        > /tmp/opa-rego.sha256 \
+    && sha256sum -c /tmp/opa-rego.sha256 \
+    && rm /tmp/opa-rego.sha256 \
+    && test "$(/usr/local/bin/opa version | sed -n 's/^Version: //p')" = '1.18.2' \
+    && test "$(/usr/local/bin/opa version | sed -n 's/^Build Commit: //p')" = 'e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297' \
+    && test "$(/usr/local/bin/opa version | sed -n 's/^Go Version: //p')" = 'go1.26.5' \
+    && test ! -e /usr/local/bin/tle \
+    && /opt/venv/bin/python -c 'import sqlite3, zlib; assert sqlite3.sqlite_version == "3.53.3"; assert zlib.ZLIB_RUNTIME_VERSION == "1.3.2"' \
+    && /usr/local/bin/python -c 'import os, pathlib; roots = tuple(map(pathlib.Path, ("/opt/venv", "/opt/native-libs", "/opt/artifacts", "/opt/app/src", "/opt/app/uv.lock"))); paths = roots + tuple(path for root in roots if root.is_dir() for path in root.rglob("*")); os.setgid(65532); os.setuid(65532); writable = [str(path) for path in paths if os.access(path, os.W_OK)]; assert not writable, writable[:10]'
+
+USER 65532:65532
+WORKDIR /workspace
+
+# Exercise the shipped interpreter, CLI import graph, native extension, OPA
+# binary, and Rego contract as the final nonroot identity. The test module is a
+# read-only build-context mount, so its bytes do not enter the runtime layers.
+RUN --network=none \
+    --mount=type=bind,source=examples/opa_compiled_masks_test.rego,target=/tmp/opa_compiled_masks_test.rego,readonly \
+    test "$(id -u)" = '65532' \
+    && test "$(id -g)" = '65532' \
+    && test ! -w /opt/venv \
+    && test ! -w /opt/native-libs \
+    && test ! -w /opt/artifacts \
+    && test ! -w /opt/app/src \
+    && test ! -w /opt/app/uv.lock \
+    && /opt/venv/bin/python -c 'import os, pathlib, stat, sys; path = pathlib.Path("/opt/venv/bin/python"); observed = os.lstat(path); assert stat.S_ISREG(observed.st_mode); assert observed.st_nlink == 1; assert not os.access(path, os.W_OK); assert os.access(path, os.X_OK); assert sys.executable == str(path); assert sys.prefix == "/opt/venv"' \
+    && printf '%s  %s\n' \
+        "${OPA_REGO_TEST_SHA256}" \
+        /tmp/opa_compiled_masks_test.rego \
+        > /tmp/opa-rego-test.sha256 \
+    && sha256sum -c /tmp/opa-rego-test.sha256 \
+    && rm /tmp/opa-rego-test.sha256 \
+    && /opt/venv/bin/python -c 'import hnswlib, narwhals, numpy, scipy, sklearn; import fractal_ann_diagnostics.cli' \
+    && /opt/venv/bin/python -c 'import importlib.util; assert all(importlib.util.find_spec(name) is None for name in ("torch", "transformers"))' \
+    && /opt/venv/bin/python -m fractal_ann_diagnostics.cli --help >/dev/null \
+    && /usr/local/bin/opa test \
+        /opt/app/policy/opa_compiled_masks.rego \
+        /tmp/opa_compiled_masks_test.rego
+
+USER 0:0
+
+# Prune shell-adjacent optional modules and assemble only the ELF closure that
+# is absent from the signed distroless base. The generated package status and
+# library manifest make every copied native byte scanner-visible.
+RUN rm -f \
+        /usr/local/lib/python3.12/lib-dynload/_curses*.so \
+        /usr/local/lib/python3.12/lib-dynload/_tkinter*.so \
+        /usr/local/lib/python3.12/lib-dynload/_uuid*.so \
+        /usr/local/lib/python3.12/lib-dynload/readline*.so \
+    && rm -rf \
+        /usr/local/lib/python3.12/curses \
+        /usr/local/lib/python3.12/idlelib \
+        /usr/local/lib/python3.12/tkinter \
+        /usr/local/lib/python3.12/turtledemo \
+        /usr/local/lib/python3.12/turtle.py \
+    && find /opt/app -type d -name __pycache__ -prune -exec rm -rf '{}' ';' \
+    && /opt/venv/bin/python - <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+
+roots = (
+    pathlib.Path("/usr/local"),
+    pathlib.Path("/opt/venv"),
+    pathlib.Path("/opt/native-libs"),
+)
+elf_files = [
+    path
+    for root in roots
+    for path in root.rglob("*")
+    if path.is_file() and path.open("rb").read(4) == b"\x7fELF"
+]
+libraries: set[str] = set()
+for path in elf_files:
+    result = subprocess.run(
+        ["ldd", str(path)], capture_output=True, check=False, text=True
+    )
+    diagnostic = result.stdout + result.stderr
+    vendored_library = any(parent.name.endswith(".libs") for parent in path.parents)
+    if "not found" in diagnostic and not vendored_library:
+        raise RuntimeError(f"unresolved dependency for {path}: {diagnostic}")
+    if result.returncode == 0:
+        libraries.update(re.findall(r"(?:=> )?(/[^ ]+)", result.stdout))
+
+destination = pathlib.Path("/tmp/rootfs")
+records: list[dict[str, str | int]] = []
+owners: set[str] = set()
+for raw_path in sorted(libraries):
+    if raw_path.startswith(("/usr/local/", "/opt/")):
+        continue
+    path = pathlib.Path(raw_path)
+    ownership = subprocess.run(
+        ["dpkg-query", "-S", raw_path], capture_output=True, check=False, text=True
+    )
+    if ownership.returncode != 0:
+        ownership = subprocess.run(
+            ["dpkg-query", "-S", str(path.resolve())],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    if ownership.returncode != 0:
+        raise RuntimeError(f"no Debian owner for {raw_path}: {ownership.stderr}")
+    package = ownership.stdout.split(": ", 1)[0].split(":", 1)[0]
+    # Distroless supplies libc. Retain its newer Debian 12 bytes and metadata.
+    if package == "libc6":
+        continue
+    version = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", package],
+        capture_output=True,
+        check=True,
+        text=True,
+    ).stdout
+    resolved = path.resolve()
+    target = destination / path.relative_to("/")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(resolved, target)
+    owners.add(package)
+    records.append(
+        {
+            "byte_count": target.stat().st_size,
+            "destination_path": str(path),
+            "package": package,
+            "package_version": version,
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "source_path": str(resolved),
+        }
+    )
+
+hnsw_versions: dict[str, str] = {}
+for line in pathlib.Path(
+    "/opt/artifacts/hnswlib-build/runtime-packages.tsv"
+).read_text(encoding="utf-8").splitlines():
+    package, version = line.split("\t", 1)
+    hnsw_versions[package.split(":", 1)[0]] = version
+if set(hnsw_versions) != {"libgcc-s1", "libgomp1", "libstdc++6"}:
+    raise RuntimeError(f"unexpected hnsw runtime packages: {hnsw_versions}")
+for path, package in (
+    (pathlib.Path("/opt/native-libs/libgcc_s.so.1"), "libgcc-s1"),
+    (pathlib.Path("/opt/native-libs/libgomp.so.1"), "libgomp1"),
+    (pathlib.Path("/opt/native-libs/libstdc++.so.6"), "libstdc++6"),
+):
+    owners.add(package)
+    records.append(
+        {
+            "byte_count": path.stat().st_size,
+            "destination_path": str(path),
+            "package": package,
+            "package_version": hnsw_versions[package],
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "source_path": str(path),
+        }
+    )
+
+for path, package, version, purl, source_path in (
+    (
+        pathlib.Path("/opt/native-libs/libsqlite3.so.0"),
+        "sqlite",
+        "3.53.3",
+        "pkg:generic/sqlite@3.53.3",
+        "/opt/sqlite/lib/libsqlite3.so.3.53.3",
+    ),
+    (
+        pathlib.Path("/opt/native-libs/libz.so.1"),
+        "zlib",
+        "1.3.2",
+        "pkg:generic/zlib@1.3.2",
+        "/opt/zlib/lib/libz.so.1.3.2",
+    ),
+):
+    records.append(
+        {
+            "byte_count": path.stat().st_size,
+            "destination_path": str(path),
+            "package": package,
+            "package_version": version,
+            "purl": purl,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "source_path": source_path,
+        }
+    )
+
+status_stanzas = pathlib.Path("/var/lib/dpkg/status").read_text(
+    encoding="utf-8"
+).split("\n\n")
+hnsw_status_stanzas = pathlib.Path(
+    "/opt/artifacts/hnswlib-build/runtime-package-status"
+).read_text(encoding="utf-8").split("\n\n")
+selected: dict[str, str] = {}
+for stanza in status_stanzas + hnsw_status_stanzas:
+    package_line = next(
+        (line for line in stanza.splitlines() if line.startswith("Package: ")), None
+    )
+    if package_line is None:
+        continue
+    package = package_line.removeprefix("Package: ")
+    if package in owners:
+        selected[package] = stanza
+if set(selected) != owners:
+    raise RuntimeError(f"missing package status records: {sorted(owners - set(selected))}")
+status_path = destination / "var/lib/dpkg/status"
+status_path.parent.mkdir(parents=True, exist_ok=True)
+status_path.write_text(
+    "\n\n".join(selected[name] for name in sorted(selected)) + "\n",
+    encoding="utf-8",
+)
+manifest_path = destination / "opt/artifacts/runtime-library-manifest.json"
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_text(
+    json.dumps(
+        {
+            "libraries": sorted(records, key=lambda item: item["destination_path"]),
+            "schema_version": "fractal-runtime-library-manifest-v1",
+        },
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+for relative in ("home/runner", "input", "output", "workspace", "tmp"):
+    path = destination / relative
+    path.mkdir(parents=True, exist_ok=True)
+    os.chown(path, 65532, 65532)
+PY
+
+FROM source-runtime AS release-rootfs
+
+ARG TARGETARCH
+
+USER 0:0
+
+COPY --from=tle-builder --chown=0:0 /out/bin/tle /usr/local/bin/tle
+COPY --from=tle-builder --chown=0:0 /out/artifacts/tle-build-receipt.json /opt/artifacts/tle-build/tle-build-receipt.json
+
+RUN test "${TARGETARCH}" = arm64 \
+    && printf '%s  %s\n' \
+        ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5 \
+        /usr/local/bin/tle | sha256sum -c - \
+    && /usr/local/bin/tle --help >/dev/null \
+    && chmod 0555 /usr/local/bin/tle \
+    && chmod 0444 /opt/artifacts/tle-build/tle-build-receipt.json
+
+FROM ${DISTROLESS_IMAGE} AS scientific-runtime-base
+
+ARG BUILD_CONTEXT_TREE_SHA256
+ARG DEBIAN_SNAPSHOT
+ARG SOURCE_DATE_EPOCH
+ARG OPA_REGO_SHA256=18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c
+ARG OPA_REGO_TEST_SHA256=67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00
+ARG UV_LOCK_SHA256=a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6
+
+LABEL org.opencontainers.image.title="Fractal ANN confirmatory runner" \
+      org.opencontainers.image.description="C0-pinned execution image for the registered Fractal ANN confirmatory apparatus" \
+      org.opencontainers.image.authors="mhdk1602 <mhdk1602@users.noreply.github.com>" \
+      org.opencontainers.image.vendor="mhdk1602" \
+      org.opencontainers.image.source="https://github.com/mhdk1602/fractal-ann-diagnostics" \
+      org.opencontainers.image.url="https://github.com/mhdk1602/fractal-ann-diagnostics" \
+      org.opencontainers.image.documentation="https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/runner-image.md" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.base.name="gcr.io/distroless/base-nossl-debian12:nonroot@sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe" \
+      org.opencontainers.image.revision="${BUILD_CONTEXT_TREE_SHA256}" \
+      org.opencontainers.image.version="${BUILD_CONTEXT_TREE_SHA256}" \
+      io.fractal-ann.confirmatory.build-context-tree-sha256="${BUILD_CONTEXT_TREE_SHA256}" \
+      io.fractal-ann.confirmatory.debian-snapshot="${DEBIAN_SNAPSHOT}" \
+      io.fractal-ann.confirmatory.debian-inrelease-sha256="77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa" \
+      io.fractal-ann.confirmatory.debian-keyring-sha256="506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017" \
+      io.fractal-ann.confirmatory.go-builder-image="docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651" \
+      io.fractal-ann.confirmatory.opa-commit="e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297" \
+      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524" \
+      io.fractal-ann.confirmatory.opa-rego-sha256="${OPA_REGO_SHA256}" \
+      io.fractal-ann.confirmatory.opa-rego-test-sha256="${OPA_REGO_TEST_SHA256}" \
+      io.fractal-ann.confirmatory.opa-source-sha256="a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637" \
+      io.fractal-ann.confirmatory.oras-version="2.6.2" \
+      io.fractal-ann.confirmatory.python-builder-image="python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b" \
+      io.fractal-ann.confirmatory.source-date-epoch="${SOURCE_DATE_EPOCH}" \
+      io.fractal-ann.confirmatory.sqlite-sha256="c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0" \
+      io.fractal-ann.confirmatory.sqlite-sha3-256="98f2b3f3c11be6a03ea32346937b032c2472ebbd7a716bed36ca2f5693e7ce8b" \
+      io.fractal-ann.confirmatory.runtime-role="scientific" \
+      io.fractal-ann.confirmatory.tle-present="false" \
+      io.fractal-ann.confirmatory.uv-lock-sha256="${UV_LOCK_SHA256}" \
+      io.fractal-ann.confirmatory.zlib-sha256="bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16"
+
+ENV HOME=/home/runner \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    LD_LIBRARY_PATH=/opt/native-libs:/usr/local/lib \
+    LOGNAME=runner \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    PATH=/opt/venv/bin:/usr/local/bin \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=0 \
+    PYTHONPATH=/opt/app/src \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    TMPDIR=/tmp \
+    TZ=UTC \
+    USER=runner \
+    VECLIB_MAXIMUM_THREADS=1 \
+    XDG_CACHE_HOME=/tmp/fractal-cache
+
+COPY --from=source-runtime /tmp/rootfs/ /
+COPY --from=source-runtime /usr/local/ /usr/local/
+COPY --from=source-runtime /opt/ /opt/
+
+USER 65532:65532
+WORKDIR /workspace
+
+ENTRYPOINT ["/opt/venv/bin/python", "-m", "fractal_ann_diagnostics.cli"]
+CMD ["--help"]
+
+FROM scientific-runtime-base AS release-runtime
+
+LABEL org.opencontainers.image.title="Fractal ANN confirmatory release runner" \
+      org.opencontainers.image.description="C0-pinned ARM64 timelock release image for the registered Fractal ANN confirmatory apparatus" \
+      io.fractal-ann.confirmatory.runtime-role="timelock-release" \
+      io.fractal-ann.confirmatory.tle-binary-sha256="ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5" \
+      io.fractal-ann.confirmatory.tle-dependency-delta-sha256="1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59" \
+      io.fractal-ann.confirmatory.tle-go-tarball-sha256="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49" \
+      io.fractal-ann.confirmatory.tle-go-tool-sha256="22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b" \
+      io.fractal-ann.confirmatory.tle-patched-go-mod-sha256="ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08" \
+      io.fractal-ann.confirmatory.tle-patched-go-sum-sha256="baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0" \
+      io.fractal-ann.confirmatory.tle-present="true" \
+      io.fractal-ann.confirmatory.tle-release-version="1.2.0" \
+      io.fractal-ann.confirmatory.tle-runtime-scope="linux/arm64-only" \
+      io.fractal-ann.confirmatory.tle-source-archive-sha256="98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d" \
+      io.fractal-ann.confirmatory.tle-source-commit="7b54141a9733fd6fa207587a11148280e6fb020d" \
+      io.fractal-ann.confirmatory.tle-source-tree-manifest-sha256="6fedff45430fc81e9dbf5b13b1a2dc90e9840ae91f03de307dac5c2f7475c94c" \
+      io.fractal-ann.confirmatory.tle-tag-object="6a94bf6b8200ab67f2b80af8000a55db64998d94"
+
+COPY --from=release-rootfs /usr/local/bin/tle /usr/local/bin/tle
+COPY --from=release-rootfs /opt/artifacts/tle-build/ /opt/artifacts/tle-build/
+
+FROM scientific-runtime-base AS runtime

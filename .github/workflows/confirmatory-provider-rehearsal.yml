@@ -1,0 +1,832 @@
+name: Rehearse provider phases without confirmatory state
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Full candidate rehearsal or a harmless tag head-branch probe
+        required: true
+        default: candidate-rehearsal
+        type: choice
+        options:
+          - candidate-rehearsal
+          - tag-head-branch-probe
+      candidate_image_run_id:
+        description: Successful candidate image run; empty for the tag probe
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: provider-rehearsal-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.candidate_image_run_id }}
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONPATH: src
+
+jobs:
+  plan:
+    name: admit-provider-rehearsal
+    if: inputs.mode == 'candidate-rehearsal'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      candidate_branch: ${{ steps.plan.outputs.candidate_branch }}
+      plan_closure_sha256: ${{ steps.plan.outputs.plan_closure_sha256 }}
+      online_admission_json: ${{ steps.plan.outputs.online_admission_json }}
+      online_runner_label: ${{ steps.plan.outputs.online_runner_label }}
+      online_host_python_path: ${{ steps.plan.outputs.online_host_python_path }}
+      label_release_admission_json: ${{ steps.plan.outputs.label_release_admission_json }}
+      label_release_runner_label: ${{ steps.plan.outputs.label_release_runner_label }}
+      label_release_host_python_path: ${{ steps.plan.outputs.label_release_host_python_path }}
+      analysis_admission_json: ${{ steps.plan.outputs.analysis_admission_json }}
+      analysis_runner_label: ${{ steps.plan.outputs.analysis_runner_label }}
+      analysis_host_python_path: ${{ steps.plan.outputs.analysis_host_python_path }}
+
+    steps:
+      - name: Admit one candidate branch and first attempt
+        shell: bash
+        env:
+          CANDIDATE_IMAGE_RUN_ID: ${{ inputs.candidate_image_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_IMAGE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_REF" =~ ^refs/heads/c0-candidate/[a-z0-9._-]+$ ]]
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-provider-rehearsal.yml@${GITHUB_REF}"
+
+      - name: Check out the exact candidate source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the fixed candidate verifier
+        run: uv sync --frozen --no-install-project
+
+      - name: Verify the bootstrap image run and derive source P
+        id: candidate_run
+        shell: bash
+        env:
+          CANDIDATE_IMAGE_RUN_ID: ${{ inputs.candidate_image_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api_dir="${RUNNER_TEMP}/candidate-image-api"
+          install -d -m 0700 "$api_dir"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${CANDIDATE_IMAGE_RUN_ID}/attempts/1" \
+            > "$api_dir/candidate-image-run-api.raw.json"
+          jq -e \
+            --arg branch "${GITHUB_REF#refs/heads/}" \
+            --arg path '.github/workflows/confirmatory-image.yml' \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson run_id "$CANDIDATE_IMAGE_RUN_ID" '
+              .id == $run_id
+              and .run_attempt == 1
+              and .event == "workflow_dispatch"
+              and .status == "completed"
+              and .conclusion == "success"
+              and (.head_sha | test("^[0-9a-f]{40}$"))
+              and .head_branch == $branch
+              and .path == $path
+              and .actor.login == "mhdk1602"
+              and .triggering_actor.login == "mhdk1602"
+              and .repository.full_name == $repository
+              and .head_repository.full_name == $repository
+            ' "$api_dir/candidate-image-run-api.raw.json" >/dev/null
+          source_commit="$(jq -er '.head_sha' \
+            "$api_dir/candidate-image-run-api.raw.json")"
+          printf 'source_commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Read the candidate image closure from bootstrap source P
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.candidate_image_run_id }}
+          name: confirmatory-image-candidate-closure-${{ steps.candidate_run.outputs.source_commit }}-${{ inputs.candidate_image_run_id }}
+          path: ${{ runner.temp }}/candidate-image-source
+
+      - name: Bind closure source P to its retained run API bytes
+        shell: bash
+        env:
+          CANDIDATE_IMAGE_RUN_ID: ${{ inputs.candidate_image_run_id }}
+          CANDIDATE_IMAGE_SOURCE_COMMIT: ${{ steps.candidate_run.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          source_dir="${RUNNER_TEMP}/candidate-image-source"
+          jq -e \
+            --arg branch "${GITHUB_REF#refs/heads/}" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg source_commit "$CANDIDATE_IMAGE_SOURCE_COMMIT" \
+            --argjson run_id "$CANDIDATE_IMAGE_RUN_ID" '
+              .candidate_branch == $branch
+              and .github_ref == ("refs/heads/" + $branch)
+              and .github_run_attempt == 1
+              and .github_run_id == $run_id
+              and .github_sha == $source_commit
+              and .github_workflow_sha == $source_commit
+              and .github_workflow_ref == (
+                $repository
+                + "/.github/workflows/confirmatory-image.yml@refs/heads/"
+                + $branch
+              )
+            ' "$source_dir/candidate-closure.json" >/dev/null
+          cp -- "${RUNNER_TEMP}/candidate-image-api/candidate-image-run-api.raw.json" \
+            "$source_dir/candidate-image-run-api.raw.json"
+
+      - name: Load the production plans and derive rehearsal labels
+        id: plan
+        shell: bash
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.provider_rehearsal
+          plan
+          --manifest research/study-manifest.json
+          --c0-commit "$GITHUB_SHA"
+          --candidate-closure "${RUNNER_TEMP}/candidate-image-source/candidate-closure.json"
+          --workflow-sha "$GITHUB_WORKFLOW_SHA"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-plan"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Retain the admitted source and hosted plan evidence
+        shell: bash
+        env:
+          CANDIDATE_CLOSURE_SHA256: ${{ steps.plan.outputs.candidate_closure_sha256 }}
+          PLAN_RECEIPT: ${{ steps.plan.outputs.plan_receipt_path }}
+          PLAN_RECEIPT_SHA256: ${{ steps.plan.outputs.plan_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-plan"
+          source="${RUNNER_TEMP}/candidate-image-source"
+          [[ "$CANDIDATE_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PLAN_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$evidence/candidate-closure.json" | awk '{print $1}')" = \
+            "$CANDIDATE_CLOSURE_SHA256"
+          test "$(sha256sum "$PLAN_RECEIPT" | awk '{print $1}')" = \
+            "$PLAN_RECEIPT_SHA256"
+          cp -- "$source/candidate-image-run-api.raw.json" \
+            "$evidence/candidate-image-run-api.raw.json"
+          checksums="${RUNNER_TEMP}/provider-rehearsal-plan.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload the hosted rehearsal admission
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-plan
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  probe_tag:
+    name: probe-tag-head-branch
+    if: inputs.mode == 'tag-head-branch-probe'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Admit a disposable candidate tag and first attempt
+        shell: bash
+        env:
+          CANDIDATE_IMAGE_RUN_ID: ${{ inputs.candidate_image_run_id }}
+        run: |
+          set -euo pipefail
+          test -z "$CANDIDATE_IMAGE_RUN_ID"
+          [[ "$GITHUB_REF" =~ ^refs/tags/c0-head-branch-probe/[a-z0-9._-]+$ ]]
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-provider-rehearsal.yml@${GITHUB_REF}"
+
+      - name: Check out the exact probe source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the fixed probe verifier
+        run: uv sync --frozen --no-install-project
+
+      - name: Record the raw tag-dispatch provider fields
+        id: probe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.provider_rehearsal
+          probe-tag-head-branch
+          --gh-executable "$(command -v gh)"
+          --workflow-sha "$GITHUB_WORKFLOW_SHA"
+          --github-ref "$GITHUB_REF"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --output-dir "${RUNNER_TEMP}/tag-head-branch-probe"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify the probe subject bytes
+        shell: bash
+        env:
+          PROBE_RECEIPT: ${{ steps.probe.outputs.probe_receipt_path }}
+          PROBE_RECEIPT_SHA256: ${{ steps.probe.outputs.probe_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$PROBE_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$PROBE_RECEIPT" | awk '{print $1}')" = \
+            "$PROBE_RECEIPT_SHA256"
+
+      - name: Attest the tag head-branch observation
+        id: probe_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.probe.outputs.probe_receipt_path }}
+          create-storage-record: false
+
+      - name: Retain tag probe checksums and attestation
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.probe_attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/tag-head-branch-probe"
+          test -f "$ATTESTATION_BUNDLE"
+          cp -- "$ATTESTATION_BUNDLE" "$evidence/attestation-bundle.json"
+          checksums="${RUNNER_TEMP}/tag-head-branch-probe.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload the raw tag-dispatch observation
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-tag-head-branch-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/tag-head-branch-probe
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  execute_online:
+    environment: confirmatory-rehearsal
+    name: rehearse-online
+    if: inputs.mode == 'candidate-rehearsal'
+    needs: plan
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+      - ${{ needs.plan.outputs.online_runner_label }}
+    timeout-minutes: 45
+    permissions:
+      actions: read
+
+    steps:
+      - name: Admit the exact candidate runner invocation
+        shell: bash
+        env:
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          HOST_PYTHON: ${{ needs.plan.outputs.online_host_python_path }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/${CANDIDATE_BRANCH}"
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test -x "$HOST_PYTHON"
+
+      - name: Verify the live job, scrub tokens, and run the networkless self-check
+        id: execute
+        shell: bash
+        env:
+          ADMISSION_JSON: ${{ needs.plan.outputs.online_admission_json }}
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          GH_TOKEN: ${{ github.token }}
+          HOST_PYTHON: ${{ needs.plan.outputs.online_host_python_path }}
+        run: >-
+          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          execute
+          --admission-json "$ADMISSION_JSON"
+          --run-head-branch "$CANDIDATE_BRANCH"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-online"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Prepare online evidence even after failure
+        if: always()
+        shell: bash
+        env:
+          PHASE_RECEIPT: ${{ steps.execute.outputs.phase_receipt_path }}
+          PHASE_RECEIPT_SHA256: ${{ steps.execute.outputs.phase_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-online"
+          install -d -m 0700 "$evidence"
+          if test -n "$PHASE_RECEIPT"; then
+            [[ "$PHASE_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$PHASE_RECEIPT" = "$evidence/phase-rehearsal-receipt.json"
+            test -f "$PHASE_RECEIPT"
+            test "$(sha256sum "$PHASE_RECEIPT" | cut -d ' ' -f 1)" = "$PHASE_RECEIPT_SHA256"
+          fi
+          if test ! -f "$evidence/phase-rehearsal-receipt.json"; then
+            printf '%s\n' 'phase receipt unavailable; see retained partial evidence' \
+              > "$evidence/PHASE-RECEIPT-MISSING.txt"
+          fi
+          checksums="${RUNNER_TEMP}/provider-rehearsal-online.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload online rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-online-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-online
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  execute_label_release:
+    environment: confirmatory-rehearsal
+    name: rehearse-label-release
+    if: inputs.mode == 'candidate-rehearsal'
+    needs: plan
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+      - ${{ needs.plan.outputs.label_release_runner_label }}
+    timeout-minutes: 45
+    permissions:
+      actions: read
+
+    steps:
+      - name: Admit the exact candidate runner invocation
+        shell: bash
+        env:
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          HOST_PYTHON: ${{ needs.plan.outputs.label_release_host_python_path }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/${CANDIDATE_BRANCH}"
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test -x "$HOST_PYTHON"
+
+      - name: Verify the live job, scrub tokens, and run the networkless self-check
+        id: execute
+        shell: bash
+        env:
+          ADMISSION_JSON: ${{ needs.plan.outputs.label_release_admission_json }}
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          GH_TOKEN: ${{ github.token }}
+          HOST_PYTHON: ${{ needs.plan.outputs.label_release_host_python_path }}
+        run: >-
+          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          execute
+          --admission-json "$ADMISSION_JSON"
+          --run-head-branch "$CANDIDATE_BRANCH"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-label-release"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Prepare label-release evidence even after failure
+        if: always()
+        shell: bash
+        env:
+          PHASE_RECEIPT: ${{ steps.execute.outputs.phase_receipt_path }}
+          PHASE_RECEIPT_SHA256: ${{ steps.execute.outputs.phase_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-label-release"
+          install -d -m 0700 "$evidence"
+          if test -n "$PHASE_RECEIPT"; then
+            [[ "$PHASE_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$PHASE_RECEIPT" = "$evidence/phase-rehearsal-receipt.json"
+            test -f "$PHASE_RECEIPT"
+            test "$(sha256sum "$PHASE_RECEIPT" | cut -d ' ' -f 1)" = "$PHASE_RECEIPT_SHA256"
+          fi
+          if test ! -f "$evidence/phase-rehearsal-receipt.json"; then
+            printf '%s\n' 'phase receipt unavailable; see retained partial evidence' \
+              > "$evidence/PHASE-RECEIPT-MISSING.txt"
+          fi
+          checksums="${RUNNER_TEMP}/provider-rehearsal-label.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload label-release rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-label-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-label-release
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  execute_analysis:
+    environment: confirmatory-rehearsal
+    name: rehearse-analysis
+    if: inputs.mode == 'candidate-rehearsal'
+    needs: plan
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+      - ${{ needs.plan.outputs.analysis_runner_label }}
+    timeout-minutes: 45
+    permissions:
+      actions: read
+
+    steps:
+      - name: Admit the exact candidate runner invocation
+        shell: bash
+        env:
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          HOST_PYTHON: ${{ needs.plan.outputs.analysis_host_python_path }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/${CANDIDATE_BRANCH}"
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test -x "$HOST_PYTHON"
+
+      - name: Verify the live job, scrub tokens, and run the networkless self-check
+        id: execute
+        shell: bash
+        env:
+          ADMISSION_JSON: ${{ needs.plan.outputs.analysis_admission_json }}
+          CANDIDATE_BRANCH: ${{ needs.plan.outputs.candidate_branch }}
+          GH_TOKEN: ${{ github.token }}
+          HOST_PYTHON: ${{ needs.plan.outputs.analysis_host_python_path }}
+        run: >-
+          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          execute
+          --admission-json "$ADMISSION_JSON"
+          --run-head-branch "$CANDIDATE_BRANCH"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-analysis"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Prepare analysis evidence even after failure
+        if: always()
+        shell: bash
+        env:
+          PHASE_RECEIPT: ${{ steps.execute.outputs.phase_receipt_path }}
+          PHASE_RECEIPT_SHA256: ${{ steps.execute.outputs.phase_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-analysis"
+          install -d -m 0700 "$evidence"
+          if test -n "$PHASE_RECEIPT"; then
+            [[ "$PHASE_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$PHASE_RECEIPT" = "$evidence/phase-rehearsal-receipt.json"
+            test -f "$PHASE_RECEIPT"
+            test "$(sha256sum "$PHASE_RECEIPT" | cut -d ' ' -f 1)" = "$PHASE_RECEIPT_SHA256"
+          fi
+          if test ! -f "$evidence/phase-rehearsal-receipt.json"; then
+            printf '%s\n' 'phase receipt unavailable; see retained partial evidence' \
+              > "$evidence/PHASE-RECEIPT-MISSING.txt"
+          fi
+          checksums="${RUNNER_TEMP}/provider-rehearsal-analysis.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload analysis rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-analysis-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-analysis
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  complete:
+    name: attest-provider-rehearsal
+    if: >-
+      inputs.mode == 'candidate-rehearsal'
+      && needs.plan.result == 'success'
+      && needs.execute_online.result == 'success'
+      && needs.execute_label_release.result == 'success'
+      && needs.execute_analysis.result == 'success'
+    needs:
+      - plan
+      - execute_online
+      - execute_label_release
+      - execute_analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the exact candidate verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the fixed completion verifier
+        run: uv sync --frozen --no-install-project
+
+      - name: Download the hosted admission
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-rehearsal-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-plan-readback
+
+      - name: Download online rehearsal evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-rehearsal-online-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-online-readback
+
+      - name: Download label-release rehearsal evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-rehearsal-label-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-label-release-readback
+
+      - name: Download analysis rehearsal evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: provider-rehearsal-analysis-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-analysis-readback
+
+      - name: Verify the exact three receipts and build one aggregate subject
+        id: complete
+        shell: bash
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.provider_rehearsal
+          complete
+          --online-receipt "${RUNNER_TEMP}/provider-rehearsal-online-readback/phase-rehearsal-receipt.json"
+          --label-release-receipt "${RUNNER_TEMP}/provider-rehearsal-label-release-readback/phase-rehearsal-receipt.json"
+          --analysis-receipt "${RUNNER_TEMP}/provider-rehearsal-analysis-readback/phase-rehearsal-receipt.json"
+          --candidate-closure "${RUNNER_TEMP}/provider-rehearsal-plan-readback/candidate-closure.json"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-complete"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify the aggregate subject bytes
+        shell: bash
+        env:
+          SUBJECT: ${{ steps.complete.outputs.attestation_subject_path }}
+          SUBJECT_SHA256: ${{ steps.complete.outputs.attestation_subject_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SUBJECT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$SUBJECT" | awk '{print $1}')" = "$SUBJECT_SHA256"
+
+      - name: Attest the non-production provider rehearsal
+        id: attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.complete.outputs.attestation_subject_path }}
+          create-storage-record: false
+
+      - name: Retain completion checksums and attestation
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-complete"
+          test -f "$ATTESTATION_BUNDLE"
+          cp -- "$ATTESTATION_BUNDLE" "$evidence/attestation-bundle.json"
+          checksums="${RUNNER_TEMP}/provider-rehearsal-complete.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload the attested provider rehearsal
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-complete-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-complete
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  incident:
+    name: record-provider-rehearsal-incident
+    if: >-
+      always()
+      && inputs.mode == 'candidate-rehearsal'
+      && (needs.plan.result != 'success'
+        || needs.execute_online.result != 'success'
+        || needs.execute_label_release.result != 'success'
+        || needs.execute_analysis.result != 'success')
+    needs:
+      - plan
+      - execute_online
+      - execute_label_release
+      - execute_analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out the exact incident recorder
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the fixed incident recorder
+        run: uv sync --frozen --no-install-project
+
+      - name: Write a typed artifact-only incident
+        id: incident
+        shell: bash
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          ONLINE_RESULT: ${{ needs.execute_online.result }}
+          LABEL_RELEASE_RESULT: ${{ needs.execute_label_release.result }}
+          ANALYSIS_RESULT: ${{ needs.execute_analysis.result }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.provider_rehearsal
+          incident
+          --workflow-sha "$GITHUB_WORKFLOW_SHA"
+          --run-head-branch "${GITHUB_REF#refs/heads/}"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+          --plan-result "$PLAN_RESULT"
+          --online-result "$ONLINE_RESULT"
+          --label-release-result "$LABEL_RELEASE_RESULT"
+          --analysis-result "$ANALYSIS_RESULT"
+          --output-dir "${RUNNER_TEMP}/provider-rehearsal-incident"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the artifact-only incident
+        id: incident_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.incident.outputs.incident_receipt_path }}
+          create-storage-record: false
+
+      - name: Retain incident checksums and attestation
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.incident_attestation.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/provider-rehearsal-incident"
+          test -f "$ATTESTATION_BUNDLE"
+          cp -- "$ATTESTATION_BUNDLE" "$evidence/attestation-bundle.json"
+          checksums="${RUNNER_TEMP}/provider-rehearsal-incident.PACKAGE-SHA256SUMS.tmp"
+          test ! -e "$checksums"
+          (
+            cd "$evidence"
+            find . -type f ! -name PACKAGE-SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 sha256sum > "$checksums"
+            test -s "$checksums"
+            sha256sum -c "$checksums"
+          )
+          install -m 0444 "$checksums" "$evidence/PACKAGE-SHA256SUMS"
+
+      - name: Upload the incident without provider state
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-rehearsal-incident-${{ github.run_id }}
+          path: ${{ runner.temp }}/provider-rehearsal-incident
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90

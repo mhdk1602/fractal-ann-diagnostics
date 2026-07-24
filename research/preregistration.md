@@ -52,6 +52,8 @@ filtered ANN, query-local difficulty, or adaptive HNSW effort.
   ([Amanbayev et al., 2026](https://arxiv.org/abs/2602.11443)).
 - Ada-ef selects per-query HNSW effort for a requested recall target
   ([PACMMOD 2026](https://doi.org/10.1145/3786639)).
+- RACORN-1 adds graph and exact fallback modes for low-selectivity, correlated filtered search
+  ([Kim and Choe, 2026](https://arxiv.org/abs/2607.00768)).
 - Fiber-Navigable Search connects local geometry to filtered-graph failure regimes
   ([Dang, 2026](https://arxiv.org/abs/2604.00102)).
 
@@ -102,6 +104,11 @@ Before freeze, the development owner must pin the policy generator and its outpu
 policy-complexity strata, mutation schedule, excluded subjects or empty grants, and corpus-specific
 counts. After freeze, no workload may be changed to improve low-effort action-failure prevalence,
 controller latency, relevance, or evidence sufficiency.
+
+Each policy state has a separately seeded baseline mask and one current mask over the same ordered
+document universe. Both immutable policy identities and both complete mask digests are frozen.
+`policy_churn` is their exact subject-specific Hamming fraction; the live OPA serves only the current
+mask. This seeded mutation is an experimental factor, not an estimate of enterprise policy change.
 
 ## Trial, target, and paired action matrix
 
@@ -224,6 +231,10 @@ Probe latency and declared work are pre-outcome system telemetry. Allow rate, au
 size, policy churn, and embedding drift remain system or policy variables according to the frozen
 feature schema. None may be described as geometric evidence.
 
+Embedding drift is derived separately for every query as one minus cosine similarity between its
+receipt-bound active and current-truth query rows. Neither embedding drift nor policy churn may enter
+the sealed runner as a caller-supplied scalar.
+
 The telemetry object contains authorized IDs, distances, metric, corpus counts, neighbor bound,
 latency, and work. It contains no vector matrix or query handle. An unavailable scale yields `NaN`;
 the row stays in the analysis, and the reference rule controller treats undefined geometry as risk.
@@ -253,6 +264,16 @@ group-disjoint from the sealed stage. The serialized JSON artifact records featu
 imputation, standardization, categorical levels, coefficients, Platt calibration, model digests,
 suite digest, and group hashes. No sealed intercept, coefficient, category level, threshold, or
 calibration parameter may be refit after labels become visible.
+
+Development cohort choice is itself prospective. For each corpus, the label-free selector ranks
+assignment components with the shared `query_cohort` algorithm and fixed SHA-256 seeds, then keeps
+exactly 200 fit families and 75 calibration families. It chooses one representative per component
+by the registered representative rank. The canonical selection receipt is published before any
+development qrel or evidence file is opened. Materialization must reproduce that receipt byte for
+byte, verify the paired old/current embedding receipt and document universe, and only then filter
+development labels. The development-freeze config directly pins this receipt and rejects a query
+set that differs from it. The exact operational contract is specified in
+[`development-cohort.md`](development-cohort.md).
 
 The corpus conformance check rejects an exact query family assigned to two stages. Before freeze,
 the custodian must also pin the prespecified near-duplicate procedure and its result.
@@ -294,11 +315,18 @@ The static comparator is chosen on the calibration split as the lowest-latency s
 satisfies the frozen fidelity constraints. Its runtime action name and artifact digest are pinned
 before sealed access.
 
-`GovernedRetriever.query` starts the request timer before input validation and the first policy
-decision. It stops after the fresh point-of-return decision, immediately before returning the
-result. End-to-end governed retrieval request latency therefore includes both PDP decisions,
-authorized-index refresh or cache check, bounded probe, geometry, controller choice, selected
-search, and local request overhead.
+Before the first action timer starts, the runner obtains one authorization for every distinct
+registered trial environment, loads the corresponding exact and HNSW objects, and seals the
+multi-mask cache. A canonical cache-preparation receipt binds each environment digest to its policy
+revision, mask digest, and authorized count. A timed decision that selects an unprepared mask or
+rebinds a prepared mask to another environment aborts the matrix.
+
+`GovernedRetriever.query` starts the request timer before input validation and the first timed
+policy decision. It stops after the fresh point-of-return decision, immediately before returning
+the result. Governed request latency includes both timed PDP decisions, the sealed-cache lookup,
+bounded probe, geometry, controller choice, selected search, and local request overhead. It
+excludes one-time index loading. H3 therefore estimates warm-service request latency under a
+fully admitted policy-state set, not cold-start deployment latency.
 
 The query arrives as an embedding vector. The timer excludes upstream query embedding, answer
 generation, UI work, and any network or consumer work after the result is returned. “End-to-end”
@@ -352,6 +380,14 @@ H3 succeeds only if all conditions hold:
 These are intersection-union conditions at \(\alpha=0.05\). Every condition must pass
 ([Berger and Hsu, 1996](https://doi.org/10.1214/ss/1032280304)).
 
+A prespecified carryover sensitivity fits paired log request-latency ratios against the actual
+proposed-minus-comparator execution position inside each corpus. Query families are bootstrapped,
+and the five zero-position-difference corpus contrasts receive equal weight. Its one-sided upper
+bound is compared with `log(1 - minimum_cost_reduction)`. The endpoint is always reported but
+cannot alter H3, the primary H2/H3 intersection, family-count selection, or title selection. The
+joint-power simulation reports the same endpoint's operating probability outside the primary-gate
+conjunction.
+
 ## Directional family bootstrap
 
 The sealed confirmatory analysis will use 10,000 deterministic paired bootstrap replicates unless a
@@ -386,10 +422,20 @@ analysis for low-effort action success, the complement of the intent-to-treat co
 study family clustering and paired residual coupling. It does not estimate power for H2, H3, or
 their conjunction, and its lower Monte Carlo bound cannot select the confirmatory family count.
 
-Before freeze, the pinned design report must use `development-family-cluster-resampling` and
-reproduce the exact registered endpoints, fixed-corpus weighting, family resampling, directional
-bounds, thresholds, noninferiority margins, and intersection-union rule. Its joint success event is
-`h2-and-h3-all-gates-pass`. The registered endpoints are, in order: H2 log-loss reduction, H2
+Before freeze, the pinned design report must use `development-family-cluster-resampling` with
+`registered-percentile-family-bootstrap-plug-in-calibration`. Whole families are resampled within
+the fixed corpus suite. Continuous lower gates add the fifth percentile of centered calibration
+error to an independently simulated study estimate; the p95 safety gate adds the 95th percentile.
+This approximates the registered directional percentile bounds for power planning. It does not
+replace the exact 10,000-replicate bootstrap used on sealed observations.
+
+The design module exposes `audit_percentile_approximation`, which reconstructs a seeded simulated
+study and compares all seven continuous plug-in gate decisions with the exact registered
+bootstrap. A frozen family-count claim requires the canonical exact selection certificate defined
+below. Any primary decision disagreement in a checked study aborts certification. The report
+retains the exact registered estimands, fixed-corpus weighting, thresholds, noninferiority margins,
+and intersection-union rule. Its joint success event is `h2-and-h3-all-gates-pass`. The registered
+endpoints are, in order: H2 log-loss reduction, H2
 Brier-score reduction, H2 AUPRC gain, H2 four-of-five consistency, H3 family-relative latency reduction,
 H3 retrieval-target noninferiority, H3 complete-evidence noninferiority, H3 family-mean p95 latency
 ratio, and H3 zero entitlement violations.
@@ -403,6 +449,29 @@ joint-gate calculations; its one-sided lower Monte Carlo bound must reach the fr
 target. Until those fields and the report are pinned, no power claim or family-count selection is
 permitted. Simulation-based planning for clustered models follows the approach illustrated by
 [Green and MacLeod](https://doi.org/10.1111/2041-210X.12504).
+
+The production selection certificate is fail-closed. The multiplicity family is fixed before
+simulation at six candidate counts by two required scenarios, or 12 cells. Let $M=5{,}000$, target
+$p_0=0.90$, familywise confidence 0.95, and Bonferroni cellwise alpha $0.05/12$. Let $k$ be the
+smallest integer whose one-sided Clopper-Pearson lower bound at that cellwise alpha is at least
+$p_0$; here $k=4{,}556$. A scenario-candidate cell qualifies only after 4,556 checked studies pass
+the exact joint gate. It is blocked after 445 checked studies fail the exact joint gate. This gives
+simultaneous coverage of at least 0.95 over the fixed grid without assuming independence among
+cells. Candidate counts are processed in the registered ascending order. Required scenarios are
+processed in canonical order. Approximate-pass indices are checked first for a provisional pass;
+approximate-fail indices are checked first for a provisional failure; ties retain ascending study
+index. Each checked study uses the registered 10,000-replicate bootstrap and records its exact
+family-draw digest. This stopping rule is sufficient because unchecked studies cannot lower a
+known pass count or erase a known failure count.
+
+`selection-audit.json` must bind the config SHA-256, all panel SHA-256 values, the complete plug-in
+selection basis, stopping thresholds, every checked index and draw digest, exact and approximate
+bounds and gate decisions, family size, familywise confidence, cellwise alpha, multiplicity method,
+the selected count, and the exact-bootstrap settings. Missing, partial, duplicate, reordered,
+stale, or substituted records are inadmissible. The freeze verifier must reproduce the file byte
+for byte before accepting `freeze_ready=true`. The action-position sensitivity remains outside the
+selection conjunction; its pointwise 95% result and any approximation disagreement are reported
+but cannot alter the family count.
 
 Observed sealed inference uses the directional family bootstrap, not the design simulator.
 
@@ -439,18 +508,28 @@ For each `stage="sealed"` normalized corpus, the custodian emits two digest-boun
 - a sealed label artifact containing answers, relevant IDs, evidence bundles, label metadata, and
   the execution-artifact SHA.
 
-The frozen manifest separately pins the source `sealed-inputs`, the canonical `online-execution`
-artifact delivered to the runner, and the canonical `sealed-labels` artifact for every corpus. The
-execution and label files do not embed the manifest digest, which would make their own pinned digest
-circular. The sealed label file binds the execution digest; the outer manifest binds both files to
-the study.
+The frozen manifest separately pins the source `sealed-inputs`, the `online-execution` package
+delivered to the runner, the canonical `sealed-labels` artifact, and a `sealed-label-ciphertext` for
+every corpus. For sharded execution, `sha256` pins the complete package tree and `revision` carries
+the canonical logical plan digest. The execution controls and label file do not embed the manifest
+digest, which would make their own pinned digest circular. The sealed label file binds the logical
+execution digest; the outer manifest binds the package and files to the study.
+
+A closed custody-seal receipt binds, per corpus, distinct online-execution, plaintext-label, and
+ciphertext digests. It also records one exact drand chain hash and positive integer release round,
+plus immutable timelock-tool and custody-builder digests. The manifest pins the exact
+newline-terminated receipt file. Durations and moving round aliases are inadmissible. The receipt
+proves agreement among named bytes; it does not prove correct encryption, deletion of every other
+plaintext copy, public-label ignorance, or independent administration.
 
 The online artifact rejects original IDs, labels, answers, evidence, relevance fields, and label
 metadata. It still contains query text. Public benchmark queries may therefore be reidentified by
 an operator who already knows the benchmark. Label custody prevents direct label delivery; it does
 not make public queries unknowable. A frozen noninteractive runner, restricted egress, immutable
-artifacts, and post-receipt label joining mitigate this residual channel. The custodian retains the
-sealed label artifact.
+artifacts, and post-receipt label joining attenuate this residual channel. The custodian retains the
+sealed label artifact outside the online process. Independent organizational custody would require
+separate ultimate administrative authority, not merely a second job or credential under the same
+administrator. This study has common administrative control and does not claim that independence.
 
 After the one-shot run receipt exists, the online runner may emit immutable prediction and raw
 action-panel artifacts. The prediction artifact binds manifest digest, receipt digest,
@@ -482,7 +561,10 @@ abstention, and every trial requires a completed `exact-authorized` oracle. The 
 trusted audit-chain head, frozen query-partition-audit digest, and `primary` partition label. The
 receipt schema may encode `reserve` for nonconfirmatory engineering work, but v0.3 cannot admit it
 as a replacement confirmatory sample. Every governed row must form the verified chain ending at
-that head.
+that head. Registered `action_order` and actual `execution_position` are separate fields. The
+frozen seed produces SHA-256-ranked cyclic Latin rows. Admission rejects an incomplete per-trial
+permutation or position counts that differ by more than one within a corpus or opaque query
+family.
 
 `action_panel_from_governed_executions` returns the panel with a detached
 `ActionPanelAdmissionReceipt`. The receipt binds the exact panel digest, manifest, run, online
@@ -496,7 +578,10 @@ An independently administered HTTPS anchor then issues a canonical prediction-co
 bound to the exact prediction digest and a typed action-panel binding: manifest, run receipt,
 online-execution digest, corpus, stage, and raw panel digest. The receipt also records prediction
 count, anchor identity, URI, and UTC time. The custodian releases labels only after that completion
-receipt exists, and the offline join must present that same panel binding.
+receipt exists and the registered drand round is available, and the offline join must present that
+same panel binding. The drand condition is a time embargo, not an event gate. If the registered
+round becomes available before a valid completion anchor, the confirmatory run terminates without
+scoring.
 `join_predictions_after_receipt` verifies both receipts, all artifact digests, and exact trial keys
 before it joins predictions to labels for scoring. For each action, the analysis input builder
 derives ANN recall against the completed `exact-authorized` row in the same anchored action panel;
@@ -507,8 +592,9 @@ runner.
 The scorer must load each custody file through `load_sealed_label_artifact`; reconstructing an
 object from copied label fields or a digest string is not byte admission.
 `ConfirmatoryInputArtifact` derives the analysis configuration from the frozen manifest and checks
-the run receipt, exact artifact-verification receipt, fixed corpus set, each panel's separately
-pinned online-execution digest, and each actual sealed-label artifact's canonical bytes. It also
+the run receipt, exact artifact-verification receipt, fixed corpus set, each panel's execution
+digest against the `online-execution` logical revision, and each actual sealed-label artifact's
+canonical bytes. The artifact-verification receipt separately binds the outer package tree. It also
 requires the joined label objects to equal the admitted sealed payload, rather than trusting a
 copied digest string. One detached action-panel admission receipt is mandatory for each corpus. The
 input verifies its exact panel coverage, primary-partition label, frozen query-partition-audit
@@ -522,17 +608,20 @@ covers the full-model artifact, and the H2 pin covers the complete suite. This b
 distinct from the newline-terminated custody files below.
 
 Custody files are canonical JSON followed by exactly one newline. The online, sealed-label,
-prediction, completion-receipt, offline-evaluation, action-panel, action-panel-admission,
-analysis-attempt, analysis-result-receipt, and confirmatory-result loaders reject the applicable
-duplicate-key, nonfinite, schema, canonical-byte, location, digest, symlink, and hard-link failures.
-Their writers create new files exclusively rather than replacing an existing path.
+custody-seal, online-custody-admission, prediction, completion-receipt, offline-evaluation,
+action-panel, action-panel-admission, analysis-attempt, analysis-result-receipt, and
+confirmatory-result loaders reject the applicable duplicate-key, nonfinite, schema, canonical-byte,
+location, digest, symlink, and hard-link failures. Their writers create new files exclusively rather
+than replacing an existing path. The machine-readable custody procedure and its proof limits are in
+[label-custody.md](label-custody.md).
 
 ## Freeze, receipt, and single analysis
 
 The manifest remains `draft`. Freeze requires every declared input and component role to have a
 non-placeholder URI, immutable revision, SHA-256, and license; separate sealed-input,
-online-execution, and sealed-label artifacts for every corpus; a pinned hardware object; exact
-runner identity; code commit; OCI image digest; stores; and no unresolved blockers.
+online-execution, sealed-label, and sealed-label-ciphertext artifacts for every corpus; a pinned
+custody receipt, timelock tool, and custody builder; a pinned hardware object; exact runner identity;
+code commit; OCI image digest; stores; and no unresolved blockers.
 
 Required component roles include corpus normalizers, corpus-specific policy workloads,
 development-fit and calibration data, the connected query-partition audit with exact and
@@ -543,6 +632,37 @@ analysis runner, and source code.
 The closed manifest also pins the action names, corpus suite, endpoints, weights, margins,
 resampling counts, power model, and receipt URI template.
 
+The root `production_workloads` field is part of C1. While the repository is a draft, its sole
+permitted unresolved value is `unresolved-before-c1`. A frozen manifest instead contains exactly
+five rows in the registered corpus order. Each row discloses the complete label-free
+`ProductionCorpusWorkloadSpec` object and the SHA-256 of its canonical UTF-8 JSON file, including
+the terminal newline. The wrapper corpus, embedded corpus, runner image, runner identity, code
+commit, and platform cannot vary independently. Before C1, the materializer writes those exact
+files, one canonical `production_workloads` fragment, and the runtime-plan templates. Its blueprint
+receipt binds the fragment hash and the exact blueprint inventory. After registration, the
+finalizer requires equality among the public object, the preserved pre-C1 fragment, each individual
+WorkloadSpec file, the blueprint binding, and the transitioned plan's workload digest. C1 therefore
+registers the executable scientific workload rather than only naming its surrounding artifact
+packages.
+
+The manifest also contains a closed `sealed_execution.production_controls` object. It records the
+materialization-config file SHA-256, the blueprint receipt's canonical-object SHA-256, and the
+blueprint receipt file SHA-256. Those fields are part of the signed C1 manifest and its public
+registry digest. They prevent a replacement config and replacement blueprint from becoming a new
+local authority merely because the two replacement files agree with each other. No extra Zenodo
+member is needed; the existing manifest, predicate, and registry record carry the binding.
+
+The same pre-C1 blueprint writes a canonical `sealed_execution.hardware` fragment. Provider,
+instance type, accelerator, and region are closed operator claims; CPU model and operating-system
+identity are also declared before C1, then checked against all five independent preflight receipts.
+Logical cores come from the admitted CPU set, and memory GiB comes from the byte-exact container
+limit. The finalizer requires the five observations to agree, verifies an ARM64 final plan for each
+corpus, and rejects any difference between those observations, the pre-C1 fragment, and C1.
+It also reproduces every launcher-geometry field, mount, root, environment value, image, commit,
+resource limit, provisional plan byte, control-tree digest, and preflight-contract field from C0
+factory evidence, the C1 WorkloadSpecs, the pre-C1 config and blueprint, and fixed runtime
+constants. Equality of a few selected hashes is not sufficient for launch admission.
+
 The sole run-receipt URI is derived from the canonical frozen-manifest SHA-256. Before opening, the
 frozen digest must appear in an independently administered registration. OSF describes a
 preregistration as a time-stamped, read-only study plan posted before collection or analysis
@@ -550,6 +670,11 @@ preregistration as a time-stamped, read-only study plan posted before collection
 canonical local copy of the registry record plus a closed receipt that binds the registry identity,
 HTTPS URI, UTC timestamp, and exact record-file digest. The local receipt is not evidence of
 registration without the matching registry record.
+
+The online provider plan also registers `registered_online_runtime_budget_seconds`. This value is
+fixed from development-only capacity planning before sealed confirmatory inputs are opened; it is
+not an empirical full-suite timing from those inputs. The registered value must be positive and no
+greater than the 72,000-second online phase ceiling.
 The runner must also verify exact local coverage of every manifest artifact and write a canonical
 artifact-verification receipt. The approved runner must match the pinned identity and present the
 manifest lock plus both receipts. In production, `begin-sealed-run` also requires `--artifact-root`

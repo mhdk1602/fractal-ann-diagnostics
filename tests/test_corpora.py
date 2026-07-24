@@ -186,9 +186,7 @@ def test_hotpot_fullwiki_uses_separate_corpus(tmp_path: Path) -> None:
     corpus.write_text(
         "\n".join(
             [
-                json.dumps(
-                    {"id": "alpha", "title": "Alpha", "sentences": ["a0", "a1"]}
-                ),
+                json.dumps({"id": "alpha", "title": "Alpha", "sentences": ["a0", "a1"]}),
                 json.dumps({"id": "beta", "title": "Beta", "sentences": ["b0"]}),
             ]
         )

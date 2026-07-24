@@ -1,4 +1,5 @@
 """Exact and HNSW retrieval paths with explicit authorization boundaries."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,6 +10,190 @@ from typing import Literal, Protocol
 import numpy as np
 
 DistanceMetric = Literal["euclidean", "cosine"]
+QUERY_CONTROL_FEATURE_SCHEMA = "fractal-query-control-features-v1"
+
+
+def _lower_sha256(name: str, value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _canonical_mask(mask: np.ndarray, *, name: str) -> np.ndarray:
+    value = np.asarray(mask)
+    if value.dtype != np.dtype(bool) or value.ndim != 1 or value.size == 0:
+        raise ValueError(f"{name} must be one non-empty Boolean decision vector")
+    return value
+
+
+def packed_policy_mask_sha256(mask: np.ndarray) -> str:
+    """Hash one decision vector using the compiled-policy wire encoding."""
+
+    value = _canonical_mask(mask, name="policy mask")
+    encoded = np.packbits(value, bitorder="little").tobytes(order="C")
+    import hashlib
+
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def policy_mask_churn(baseline: np.ndarray, current: np.ndarray) -> float:
+    """Return the registered document-level Hamming fraction for one subject.
+
+    The two vectors are complete authorization decisions over the same ordered
+    document universe. An allow-rate scalar, changed-count scalar, or aggregate
+    percentage is not an admissible substitute for either vector.
+    """
+
+    before = _canonical_mask(baseline, name="baseline policy mask")
+    after = _canonical_mask(current, name="current policy mask")
+    if before.shape != after.shape:
+        raise ValueError("baseline and current policy masks cover different universes")
+    return float(np.count_nonzero(before != after) / before.size)
+
+
+def dual_epoch_query_drift(active: np.ndarray, current: np.ndarray) -> float:
+    """Derive per-query drift as one minus dual-epoch cosine similarity."""
+
+    before = np.asarray(active, dtype=np.float64)
+    after = np.asarray(current, dtype=np.float64)
+    if (
+        before.ndim != 1
+        or before.size == 0
+        or after.shape != before.shape
+        or not np.all(np.isfinite(before))
+        or not np.all(np.isfinite(after))
+    ):
+        raise ValueError("active and current query epochs must be finite matched rows")
+    denominator = float(np.linalg.norm(before) * np.linalg.norm(after))
+    if not np.isfinite(denominator) or denominator == 0.0:
+        raise ValueError("dual-epoch query rows must have finite non-zero norms")
+    cosine = float(np.clip(np.dot(before, after) / denominator, -1.0, 1.0))
+    drift = 1.0 - cosine
+    if not np.isfinite(drift):
+        raise ValueError("query drift derivation produced a non-finite value")
+    return drift
+
+
+@dataclass(frozen=True, init=False)
+class PolicyTransitionEvidence:
+    """Source-bound synthetic policy mutation for one frozen environment.
+
+    Instances can be created only from complete baseline and current masks via
+    :meth:`derive`. The class deliberately has no constructor that accepts a
+    churn scalar.
+    """
+
+    environment_sha256: str
+    baseline_policy_revision: str
+    current_policy_revision: str
+    baseline_mask_sha256: str
+    current_mask_sha256: str
+    baseline_authorized_count: int
+    current_authorized_count: int
+    document_count: int
+    policy_churn: float
+    schema_version: str = QUERY_CONTROL_FEATURE_SCHEMA
+
+    def __post_init__(self) -> None:
+        _lower_sha256("environment_sha256", self.environment_sha256)
+        _lower_sha256("baseline_mask_sha256", self.baseline_mask_sha256)
+        _lower_sha256("current_mask_sha256", self.current_mask_sha256)
+        for name in ("baseline_policy_revision", "current_policy_revision"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.startswith("sha256:"):
+                raise ValueError(f"{name} must be an immutable sha256 revision")
+            _lower_sha256(name, value.removeprefix("sha256:"))
+        if self.baseline_policy_revision == self.current_policy_revision:
+            raise ValueError("baseline and current policy revisions must differ")
+        if type(self.document_count) is not int or self.document_count <= 0:
+            raise ValueError("document_count must be a positive integer")
+        for name in ("baseline_authorized_count", "current_authorized_count"):
+            value = getattr(self, name)
+            if type(value) is not int or not 0 < value < self.document_count:
+                raise ValueError(f"{name} must be strictly within the document universe")
+        if not np.isfinite(self.policy_churn) or not 0.0 < self.policy_churn <= 1.0:
+            raise ValueError("policy_churn must be finite and non-zero in (0, 1]")
+        if self.schema_version != QUERY_CONTROL_FEATURE_SCHEMA:
+            raise ValueError("query control feature schema differs")
+
+    @classmethod
+    def derive(
+        cls,
+        *,
+        environment_sha256: str,
+        baseline_policy_revision: str,
+        current_policy_revision: str,
+        baseline_mask: np.ndarray,
+        current_mask: np.ndarray,
+        expected_baseline_mask_sha256: str,
+        expected_current_mask_sha256: str,
+        expected_baseline_authorized_count: int,
+        expected_current_authorized_count: int,
+    ) -> PolicyTransitionEvidence:
+        """Recompute all numeric values from complete pinned decision vectors."""
+
+        before = _canonical_mask(baseline_mask, name="baseline policy mask")
+        after = _canonical_mask(current_mask, name="current policy mask")
+        if before.shape != after.shape:
+            raise ValueError("baseline and current policy masks cover different universes")
+        before_sha256 = packed_policy_mask_sha256(before)
+        after_sha256 = packed_policy_mask_sha256(after)
+        if before_sha256 != _lower_sha256(
+            "expected_baseline_mask_sha256", expected_baseline_mask_sha256
+        ):
+            raise ValueError("baseline policy mask differs from its frozen digest")
+        if after_sha256 != _lower_sha256(
+            "expected_current_mask_sha256", expected_current_mask_sha256
+        ):
+            raise ValueError("current policy mask differs from its frozen digest")
+        baseline_count = int(np.count_nonzero(before))
+        current_count = int(np.count_nonzero(after))
+        if baseline_count != expected_baseline_authorized_count:
+            raise ValueError("baseline authorized count differs from its frozen row")
+        if current_count != expected_current_authorized_count:
+            raise ValueError("current authorized count differs from its frozen row")
+        instance = object.__new__(cls)
+        values: dict[str, object] = {
+            "environment_sha256": environment_sha256,
+            "baseline_policy_revision": baseline_policy_revision,
+            "current_policy_revision": current_policy_revision,
+            "baseline_mask_sha256": before_sha256,
+            "current_mask_sha256": after_sha256,
+            "baseline_authorized_count": baseline_count,
+            "current_authorized_count": current_count,
+            "document_count": before.size,
+            "policy_churn": policy_mask_churn(before, after),
+            "schema_version": QUERY_CONTROL_FEATURE_SCHEMA,
+        }
+        for name, value in values.items():
+            object.__setattr__(instance, name, value)
+        instance.__post_init__()
+        return instance
+
+    def verify_current_mask(
+        self,
+        mask: np.ndarray,
+        *,
+        policy_revision: str,
+        environment_sha256: str,
+    ) -> None:
+        """Bind the live PDP decision to the frozen current mutation endpoint."""
+
+        if environment_sha256 != self.environment_sha256:
+            raise ValueError("policy transition belongs to another environment")
+        if policy_revision != self.current_policy_revision:
+            raise ValueError("live policy revision differs from the transition endpoint")
+        current = _canonical_mask(mask, name="live current policy mask")
+        if current.size != self.document_count:
+            raise ValueError("live policy mask covers another document universe")
+        if packed_policy_mask_sha256(current) != self.current_mask_sha256:
+            raise ValueError("live policy mask differs from the transition endpoint")
+        if int(np.count_nonzero(current)) != self.current_authorized_count:
+            raise ValueError("live authorized count differs from the transition endpoint")
 
 
 @dataclass(frozen=True)
@@ -183,6 +368,20 @@ class SearchIndex(Protocol):
     def query(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]: ...
 
 
+class LoadedHNSWBackend(Protocol):
+    """Minimal interface for one digest-verified, already-built HNSW index."""
+
+    def set_ef(self, value: int) -> None: ...
+
+    def knn_query(
+        self,
+        vectors: np.ndarray,
+        *,
+        k: int,
+        num_threads: int,
+    ) -> tuple[np.ndarray, np.ndarray]: ...
+
+
 def snapshot_query(query: np.ndarray, dimension: int) -> np.ndarray:
     """Own and freeze one validated query vector for a governed request.
 
@@ -347,9 +546,7 @@ class HNSWSearchIndex:
         k: int,
     ) -> tuple[np.ndarray, np.ndarray]:
         keep = min(k, self.n_documents)
-        labels, distances = self._index.knn_query(
-            vector.reshape(1, -1), k=keep, num_threads=1
-        )
+        labels, distances = self._index.knn_query(vector.reshape(1, -1), k=keep, num_threads=1)
         return labels[0].astype(np.int64), distances[0].astype(np.float32)
 
     def query(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -377,6 +574,76 @@ class HNSWSearchIndex:
             return self._query_unlocked(vector, k)
 
 
+class LoadedHNSWSearchIndex:
+    """Query wrapper for immutable HNSW bytes loaded by the freeze verifier."""
+
+    def __init__(
+        self,
+        backend: LoadedHNSWBackend,
+        *,
+        n_documents: int,
+        dimension: int,
+        metric: DistanceMetric,
+    ) -> None:
+        if not isinstance(n_documents, int) or isinstance(n_documents, bool) or n_documents <= 0:
+            raise ValueError("n_documents must be a positive integer")
+        if not isinstance(dimension, int) or isinstance(dimension, bool) or dimension <= 0:
+            raise ValueError("dimension must be a positive integer")
+        if metric not in {"euclidean", "cosine"}:
+            raise ValueError(f"unsupported distance metric: {metric!r}")
+        self._backend = backend
+        self.n_documents = n_documents
+        self.dimension = dimension
+        self.metric = metric
+        self._query_lock = RLock()
+
+    def _query_unlocked(
+        self,
+        vector: np.ndarray,
+        k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        keep = min(k, self.n_documents)
+        labels, distances = self._backend.knn_query(
+            vector.reshape(1, -1),
+            k=keep,
+            num_threads=1,
+        )
+        labels = np.asarray(labels)
+        distances = np.asarray(distances)
+        if labels.shape != (1, keep) or distances.shape != (1, keep):
+            raise RuntimeError("loaded HNSW backend returned a malformed result")
+        ids = labels[0].astype(np.int64, copy=True)
+        values = distances[0].astype(np.float32, copy=True)
+        if (
+            np.any(ids < 0)
+            or np.any(ids >= self.n_documents)
+            or len(np.unique(ids)) != len(ids)
+            or not np.all(np.isfinite(values))
+            or np.any(values < 0)
+        ):
+            raise RuntimeError("loaded HNSW backend returned an invalid result")
+        return ids, values
+
+    def query(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+        return self.query_with_ef(query, k, ef_search=max(k, 10))
+
+    def query_with_ef(
+        self,
+        query: np.ndarray,
+        k: int,
+        *,
+        ef_search: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if k <= 0:
+            raise ValueError("k must be positive")
+        if ef_search <= 0:
+            raise ValueError("ef_search must be positive")
+        vector = _as_query(query, self.dimension)
+        with self._query_lock:
+            self._backend.set_ef(max(ef_search, 10))
+            return self._query_unlocked(vector, k)
+
+
 class AuthorizedHNSWIndex:
     """HNSW built only over one live policy-authorized universe."""
 
@@ -398,6 +665,43 @@ class AuthorizedHNSWIndex:
         self.n_documents = len(matrix)
         self.n_authorized = len(self.original_ids)
         self.metric = metric
+
+    @classmethod
+    def from_loaded_backend(
+        cls,
+        backend: LoadedHNSWBackend,
+        original_ids: np.ndarray,
+        *,
+        n_documents: int,
+        dimension: int,
+        metric: DistanceMetric,
+    ) -> AuthorizedHNSWIndex:
+        """Bind a verified local-label index to its ordered global row map."""
+
+        if not isinstance(n_documents, int) or isinstance(n_documents, bool) or n_documents <= 0:
+            raise ValueError("n_documents must be a positive integer")
+        rows = np.array(original_ids, dtype=np.int64, copy=True)
+        if (
+            rows.ndim != 1
+            or len(rows) == 0
+            or np.any(rows < 0)
+            or np.any(rows >= n_documents)
+            or np.any(rows[1:] <= rows[:-1])
+        ):
+            raise ValueError("original_ids must be strictly increasing rows in the universe")
+        rows.setflags(write=False)
+        instance = cls.__new__(cls)
+        instance.original_ids = rows
+        instance._inner = LoadedHNSWSearchIndex(
+            backend,
+            n_documents=len(rows),
+            dimension=dimension,
+            metric=metric,
+        )
+        instance.n_documents = n_documents
+        instance.n_authorized = len(rows)
+        instance.metric = metric
+        return instance
 
     def set_ef(self, ef_search: int) -> None:
         self._inner.set_ef(ef_search)

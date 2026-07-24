@@ -4,6 +4,7 @@ The corpus suite is treated as fixed. Query families are the independent
 resampling unit; every nested policy, seed, drift condition, and paired action
 row stays attached to its family.
 """
+
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterable, Sequence
@@ -650,9 +651,7 @@ def simulate_clustered_binary_power(
         n_corpora = len(design.comparator_probabilities)
 
         for comparator_probability in design.comparator_probabilities:
-            proposed_probability = (
-                comparator_probability + design.proposed_probability_difference
-            )
+            proposed_probability = comparator_probability + design.proposed_probability_difference
             if design.intraclass_correlation == 0.0:
                 comparator_latent = np.full(
                     (batch, design.families_per_corpus),
@@ -685,9 +684,7 @@ def simulate_clustered_binary_power(
             ) / design.nested_rows_per_family
             estimates += family_differences.mean(axis=1) / n_corpora
             variances += (
-                family_differences.var(axis=1, ddof=1)
-                / design.families_per_corpus
-                / n_corpora**2
+                family_differences.var(axis=1, ddof=1) / design.families_per_corpus / n_corpora**2
             )
 
         standard_errors = np.sqrt(np.clip(variances, 0.0, None))

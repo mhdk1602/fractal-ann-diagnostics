@@ -133,6 +133,52 @@ def test_h3_metric_bootstrap_uses_registered_estimand_scales() -> None:
     assert upper_limit_decision(latency.interval, maximum=1.25).passed
 
 
+def test_p95_ratio_uses_family_means_then_corpus_quantiles_then_equal_corpus_mean() -> None:
+    result = paired_stratified_metric_bootstrap(
+        proposed=(1.0, 9.0, 30.0, 10.0, 10.0),
+        comparator=(2.0, 18.0, 20.0, 10.0, 10.0),
+        corpus_ids=("a", "a", "a", "b", "b"),
+        family_ids=("a1", "a1", "a2", "b1", "b2"),
+        proposed_pair_ids=("a1-1", "a1-2", "a2", "b1", "b2"),
+        comparator_pair_ids=("a1-1", "a1-2", "a2", "b1", "b2"),
+        metric="p95-ratio",
+        config=ClusterBootstrapConfig(n_resamples=100, seed=5),
+    )
+
+    corpus_a = np.quantile((5.0, 30.0), 0.95) / np.quantile((10.0, 20.0), 0.95)
+    expected = (corpus_a + 1.0) / 2.0
+    row_level_wrong = (
+        np.quantile((1.0, 9.0, 30.0), 0.95) / np.quantile((2.0, 18.0, 20.0), 0.95) + 1.0
+    ) / 2.0
+
+    assert np.isclose(result.interval.estimate, expected)
+    assert not np.isclose(result.interval.estimate, row_level_wrong)
+
+
+def test_directional_bootstrap_uses_fifth_and_ninety_fifth_percentiles() -> None:
+    proposed = tuple(float(value) for value in range(10)) + tuple(
+        float(value**2) for value in range(10)
+    )
+    pair_ids = tuple(f"a-{value}" for value in range(10)) + tuple(
+        f"b-{value}" for value in range(10)
+    )
+    result = paired_stratified_family_bootstrap(
+        proposed=proposed,
+        comparator=(0.0,) * len(proposed),
+        corpus_ids=("a",) * 10 + ("b",) * 10,
+        family_ids=pair_ids,
+        proposed_pair_ids=pair_ids,
+        comparator_pair_ids=pair_ids,
+        config=ClusterBootstrapConfig(n_resamples=1_000, confidence=0.95, seed=71),
+    )
+
+    assert result.interval.construction == "directional-one-sided"
+    assert np.isclose(result.interval.lower, np.quantile(result.replicates, 0.05))
+    assert np.isclose(result.interval.upper, np.quantile(result.replicates, 0.95))
+    assert not np.isclose(result.interval.lower, np.quantile(result.replicates, 0.025))
+    assert not np.isclose(result.interval.upper, np.quantile(result.replicates, 0.975))
+
+
 def test_ratio_metrics_reject_nonpositive_comparator_values() -> None:
     with pytest.raises(ValueError, match="must be positive"):
         paired_stratified_metric_bootstrap(
@@ -183,6 +229,27 @@ def test_interval_helpers_apply_superiority_and_noninferiority_margins() -> None
         minimum_effect=0.05,
         direction="less",
     ).passed
+
+
+def test_noninferiority_uses_proposed_minus_comparator_and_a_strict_lower_gate() -> None:
+    at_margin = ConfidenceInterval(
+        estimate=-0.005,
+        lower=-0.01,
+        upper=0.0,
+        confidence=0.95,
+    )
+    inside_margin = ConfidenceInterval(
+        estimate=-0.004,
+        lower=-0.009,
+        upper=0.0,
+        confidence=0.95,
+    )
+
+    boundary = noninferiority_decision(at_margin, margin=0.01)
+    admitted = noninferiority_decision(inside_margin, margin=0.01)
+    assert boundary.threshold == -0.01
+    assert not boundary.passed
+    assert admitted.passed
 
 
 def test_freeze_ready_power_config_enforces_5000_simulations() -> None:

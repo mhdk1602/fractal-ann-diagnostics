@@ -1,4 +1,5 @@
 """Permutation-invariant query geometry for filtered retrieval risk."""
+
 from __future__ import annotations
 
 import warnings
@@ -241,9 +242,7 @@ def offline_oracle_query_geometry(
     distances = _distances(authorized_vectors, vector, metric)
     order = np.argsort(distances, kind="stable")
     sorted_distances = (
-        np.sqrt(np.clip(distances[order], 0.0, None))
-        if metric == "euclidean"
-        else distances[order]
+        np.sqrt(np.clip(distances[order], 0.0, None)) if metric == "euclidean" else distances[order]
     )
     selected_primary_scale = scales[-1] if primary_scale is None else primary_scale
     lid, instability, contrast, expansion, lid_by_scale = _summarize_sorted_distances(

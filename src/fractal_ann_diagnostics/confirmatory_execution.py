@@ -26,9 +26,7 @@ from .confirmatory_analysis import (
 from .confirmatory_modeling import FrozenModelSuite
 
 CONFIRMATORY_ANALYSIS_ATTEMPT_SCHEMA = "fractal-confirmatory-analysis-attempt-v1"
-CONFIRMATORY_ANALYSIS_RESULT_RECEIPT_SCHEMA = (
-    "fractal-confirmatory-analysis-result-receipt-v1"
-)
+CONFIRMATORY_ANALYSIS_RESULT_RECEIPT_SCHEMA = "fractal-confirmatory-analysis-result-receipt-v1"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _ATTEMPT_SUFFIX = ".confirmatory-analysis-attempt.json"
@@ -53,29 +51,21 @@ def _canonical_bytes(payload: Mapping[str, Any]) -> bytes:
 
 def _require_sha256(name: str, value: object) -> str:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
-        raise ConfirmatoryAnalysisError(
-            f"{name} must be a lowercase SHA-256 hex digest"
-        )
+        raise ConfirmatoryAnalysisError(f"{name} must be a lowercase SHA-256 hex digest")
     return value
 
 
 def _require_identity(value: object) -> str:
     if not isinstance(value, str) or not value or value != value.strip():
-        raise ConfirmatoryAnalysisError(
-            "runner_identity must be a non-empty canonical string"
-        )
+        raise ConfirmatoryAnalysisError("runner_identity must be a non-empty canonical string")
     if unicodedata.normalize("NFC", value) != value:
         raise ConfirmatoryAnalysisError("runner_identity must use NFC normalization")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
-        raise ConfirmatoryAnalysisError(
-            "runner_identity cannot contain control characters"
-        )
+        raise ConfirmatoryAnalysisError("runner_identity cannot contain control characters")
     try:
         value.encode("utf-8", errors="strict")
     except UnicodeEncodeError as exc:
-        raise ConfirmatoryAnalysisError(
-            "runner_identity must contain valid Unicode"
-        ) from exc
+        raise ConfirmatoryAnalysisError("runner_identity must contain valid Unicode") from exc
     return value
 
 
@@ -85,9 +75,7 @@ def _closed_mapping(
     fields: set[str],
     label: str,
 ) -> Mapping[str, Any]:
-    if not isinstance(payload, Mapping) or not all(
-        isinstance(key, str) for key in payload
-    ):
+    if not isinstance(payload, Mapping) or not all(isinstance(key, str) for key in payload):
         raise ConfirmatoryAnalysisError(f"{label} must be a JSON object")
     missing = fields - set(payload)
     unexpected = set(payload) - fields
@@ -113,16 +101,12 @@ def _decode_canonical_object(
         decoded: dict[str, Any] = {}
         for key, value in pairs:
             if key in decoded:
-                raise ConfirmatoryAnalysisError(
-                    f"{label} contains duplicate key {key!r}"
-                )
+                raise ConfirmatoryAnalysisError(f"{label} contains duplicate key {key!r}")
             decoded[key] = value
         return decoded
 
     def reject_nonfinite(value: str) -> None:
-        raise ConfirmatoryAnalysisError(
-            f"{label} contains non-finite number {value!r}"
-        )
+        raise ConfirmatoryAnalysisError(f"{label} contains non-finite number {value!r}")
 
     try:
         payload = json.loads(
@@ -131,9 +115,7 @@ def _decode_canonical_object(
             parse_constant=reject_nonfinite,
         )
     except json.JSONDecodeError as exc:
-        raise ConfirmatoryAnalysisError(
-            f"{label} must contain valid JSON: {exc.msg}"
-        ) from exc
+        raise ConfirmatoryAnalysisError(f"{label} must contain valid JSON: {exc.msg}") from exc
     if not isinstance(payload, Mapping):
         raise ConfirmatoryAnalysisError(f"{label} must contain one JSON object")
     return payload
@@ -164,9 +146,7 @@ def _canonical_file_uri_path(uri: object, *, label: str) -> Path:
     try:
         decoded = unquote_to_bytes(parsed.path).decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
-        raise ConfirmatoryAnalysisError(
-            f"{label} path must be valid UTF-8"
-        ) from exc
+        raise ConfirmatoryAnalysisError(f"{label} path must be valid UTF-8") from exc
     if (
         not decoded.startswith("/")
         or "\\" in decoded
@@ -179,9 +159,7 @@ def _canonical_file_uri_path(uri: object, *, label: str) -> Path:
             raise ConfirmatoryAnalysisError(
                 f"{label} path cannot contain empty, dot, or parent components"
             )
-    if any(
-        ord(character) < 32 or ord(character) == 127 for character in decoded
-    ):
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
         raise ConfirmatoryAnalysisError(f"{label} path contains a control character")
     path = Path(decoded)
     if not path.is_absolute() or path.anchor != "/" or path.as_uri() != uri:
@@ -205,6 +183,22 @@ def _results_store_directory(inputs: ConfirmatoryInputArtifact) -> Path:
 
 def _manifest_digest(inputs: ConfirmatoryInputArtifact) -> str:
     return _require_sha256("manifest_sha256", inputs.manifest_sha256)
+
+
+def confirmatory_output_filenames(manifest_sha256: str) -> tuple[str, str, str]:
+    """Return the three registered outcome filenames in bytewise order."""
+
+    digest = _require_sha256("manifest_sha256", manifest_sha256)
+    return tuple(
+        sorted(
+            (
+                f"{digest}{_ATTEMPT_SUFFIX}",
+                f"{digest}{_RESULT_RECEIPT_SUFFIX}",
+                f"{digest}{_RESULT_SUFFIX}",
+            ),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )  # type: ignore[return-value]
 
 
 def confirmatory_attempt_path(inputs: ConfirmatoryInputArtifact) -> Path:
@@ -260,9 +254,7 @@ class ConfirmatoryAnalysisAttemptReceipt:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "confirmatory_input_artifact_sha256": (
-                self.confirmatory_input_artifact_sha256
-            ),
+            "confirmatory_input_artifact_sha256": (self.confirmatory_input_artifact_sha256),
             "manifest_sha256": self.manifest_sha256,
             "model_suite_sha256": self.model_suite_sha256,
             "result_uri": self.result_uri,
@@ -296,9 +288,7 @@ class ConfirmatoryAnalysisAttemptReceipt:
         return cls(
             manifest_sha256=row["manifest_sha256"],
             run_receipt_sha256=row["run_receipt_sha256"],
-            confirmatory_input_artifact_sha256=row[
-                "confirmatory_input_artifact_sha256"
-            ],
+            confirmatory_input_artifact_sha256=row["confirmatory_input_artifact_sha256"],
             model_suite_sha256=row["model_suite_sha256"],
             runner_identity=row["runner_identity"],
             result_uri=row["result_uri"],
@@ -319,8 +309,7 @@ class ConfirmatoryAnalysisResultReceipt:
     def __post_init__(self) -> None:
         if self.schema_version != CONFIRMATORY_ANALYSIS_RESULT_RECEIPT_SCHEMA:
             raise ConfirmatoryAnalysisError(
-                "schema_version must equal "
-                f"{CONFIRMATORY_ANALYSIS_RESULT_RECEIPT_SCHEMA!r}"
+                f"schema_version must equal {CONFIRMATORY_ANALYSIS_RESULT_RECEIPT_SCHEMA!r}"
             )
         for name in (
             "manifest_sha256",
@@ -479,15 +468,11 @@ def load_confirmatory_result_artifact_bytes(
     try:
         encoded = read_secure_control_file(target, label="confirmatory result artifact")
     except ArtifactIntegrityError as exc:
-        raise ConfirmatoryAnalysisError(
-            f"cannot load confirmatory result artifact: {exc}"
-        ) from exc
+        raise ConfirmatoryAnalysisError(f"cannot load confirmatory result artifact: {exc}") from exc
     payload = _decode_canonical_object(encoded, label="confirmatory result artifact")
     canonical = _canonical_bytes(payload)
     if encoded != canonical + b"\n":
-        raise ConfirmatoryAnalysisError(
-            "confirmatory result artifact bytes are not canonical"
-        )
+        raise ConfirmatoryAnalysisError("confirmatory result artifact bytes are not canonical")
     if hashlib.sha256(canonical).hexdigest() != receipt.result_artifact_sha256:
         raise ConfirmatoryAnalysisError(
             "confirmatory result artifact does not match its detached receipt"
@@ -495,9 +480,7 @@ def load_confirmatory_result_artifact_bytes(
     expected_result_bindings = {
         "manifest_sha256": attempt.manifest_sha256,
         "run_receipt_sha256": attempt.run_receipt_sha256,
-        "confirmatory_input_artifact_sha256": (
-            attempt.confirmatory_input_artifact_sha256
-        ),
+        "confirmatory_input_artifact_sha256": (attempt.confirmatory_input_artifact_sha256),
         "model_suite_sha256": attempt.model_suite_sha256,
     }
     for name, expected in expected_result_bindings.items():
@@ -515,9 +498,7 @@ def _attempt_receipt(
 ) -> ConfirmatoryAnalysisAttemptReceipt:
     return ConfirmatoryAnalysisAttemptReceipt(
         manifest_sha256=_manifest_digest(inputs),
-        run_receipt_sha256=_require_sha256(
-            "run_receipt_sha256", inputs.run_receipt_sha256
-        ),
+        run_receipt_sha256=_require_sha256("run_receipt_sha256", inputs.run_receipt_sha256),
         confirmatory_input_artifact_sha256=_require_sha256(
             "confirmatory_input_artifact_sha256", inputs.artifact_sha256
         ),
@@ -533,15 +514,11 @@ def _assert_result_binding(
     attempt: ConfirmatoryAnalysisAttemptReceipt,
 ) -> None:
     if not isinstance(result, ConfirmatoryResultArtifact):
-        raise ConfirmatoryAnalysisError(
-            "analysis runner must return a ConfirmatoryResultArtifact"
-        )
+        raise ConfirmatoryAnalysisError("analysis runner must return a ConfirmatoryResultArtifact")
     expected = {
         "manifest_sha256": attempt.manifest_sha256,
         "run_receipt_sha256": attempt.run_receipt_sha256,
-        "confirmatory_input_artifact_sha256": (
-            attempt.confirmatory_input_artifact_sha256
-        ),
+        "confirmatory_input_artifact_sha256": (attempt.confirmatory_input_artifact_sha256),
         "model_suite_sha256": attempt.model_suite_sha256,
     }
     for name, value in expected.items():
@@ -551,17 +528,49 @@ def _assert_result_binding(
             )
 
 
+def _require_suite_labels_released(
+    token: object,
+    *,
+    manifest_digest: str,
+    run_receipt_sha256: str,
+) -> None:
+    """Admit analysis only from the file-backed all-five release capability."""
+
+    try:
+        from .suite_attempt import SuiteAttemptError, require_verified_labels_released
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise ConfirmatoryAnalysisError("suite attempt verifier is unavailable") from exc
+    try:
+        require_verified_labels_released(
+            token,
+            manifest_digest=manifest_digest,
+            run_receipt_sha256=run_receipt_sha256,
+        )
+    except SuiteAttemptError as exc:
+        raise ConfirmatoryAnalysisError(f"suite label-release gate failed: {exc}") from exc
+
+
 def run_confirmatory_analysis_once(
     inputs: ConfirmatoryInputArtifact,
     *,
     suite: FrozenModelSuite,
+    verified_labels_released: object | None = None,
 ) -> ConfirmatoryResultArtifact:
-    """Admit one attempt before computation, then persist its bound result."""
+    """After all-five release attestation, admit and persist one analysis."""
 
     if not isinstance(inputs, ConfirmatoryInputArtifact):
         raise ConfirmatoryAnalysisError("inputs must be a ConfirmatoryInputArtifact")
     if not isinstance(suite, FrozenModelSuite):
         raise ConfirmatoryAnalysisError("suite must be a FrozenModelSuite")
+
+    _require_suite_labels_released(
+        verified_labels_released,
+        manifest_digest=_manifest_digest(inputs),
+        run_receipt_sha256=_require_sha256(
+            "run_receipt_sha256",
+            inputs.run_receipt_sha256,
+        ),
+    )
 
     # Admission validation may inspect frozen bytes, but outcome analysis must not start
     # until the exclusive attempt receipt is durable.
@@ -575,8 +584,7 @@ def run_confirmatory_analysis_once(
         )
     except ArtifactIntegrityError as exc:
         raise ConfirmatoryAnalysisError(
-            "confirmatory analysis attempt was not admitted exclusively at "
-            f"{attempt_target}: {exc}"
+            f"confirmatory analysis attempt was not admitted exclusively at {attempt_target}: {exc}"
         ) from exc
 
     result = run_confirmatory_analysis(inputs, suite=suite)
@@ -598,7 +606,5 @@ def run_confirmatory_analysis_once(
         )
         write_exclusive_receipt_bytes(result.canonical_bytes() + b"\n", result_target)
     except ArtifactIntegrityError as exc:
-        raise ConfirmatoryAnalysisError(
-            f"confirmatory result custody write failed: {exc}"
-        ) from exc
+        raise ConfirmatoryAnalysisError(f"confirmatory result custody write failed: {exc}") from exc
     return result

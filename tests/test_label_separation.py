@@ -5,6 +5,7 @@ import inspect
 import json
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,11 @@ from fractal_ann_diagnostics.evidence import (
     EvidenceLocation,
     GoldEvidence,
 )
+from fractal_ann_diagnostics.external_anchors import (
+    PredictionCompletionAnchorReceipt,
+    PredictionCompletionAnchorRecord,
+    VerifiedPredictionCompletionAnchor,
+)
 from fractal_ann_diagnostics.label_separation import (
     ActionPanelBinding,
     LabelSeparationError,
@@ -32,7 +38,12 @@ from fractal_ann_diagnostics.label_separation import (
     split_custodian_corpus,
     write_prediction_completion_receipt,
 )
+from fractal_ann_diagnostics.sealed_online_execution import (
+    OnlineOutputPin,
+    SealedOnlineResultReceipt,
+)
 from fractal_ann_diagnostics.study import SealedRunReceipt
+from fractal_ann_diagnostics.timelock_release import VerifiedTimelockRelease
 
 MANIFEST_SHA256 = "a" * 64
 OTHER_MANIFEST_SHA256 = "b" * 64
@@ -145,9 +156,7 @@ def _receipt(
         runner_identity=runner_identity,
         code_commit="c" * 40,
         runner_image=f"ghcr.io/example/runner@sha256:{'d' * 64}",
-        protocol_registration_receipt_uri=(
-            "file:///sealed/receipts/protocol-registration.json"
-        ),
+        protocol_registration_receipt_uri=("file:///sealed/receipts/protocol-registration.json"),
         protocol_registration_receipt_sha256="f" * 64,
         protocol_registration_record_uri=(
             "file:///sealed/receipts/protocol-registration-record.json"
@@ -184,6 +193,47 @@ def _panel_binding(
     )
 
 
+def _online_result_receipt(
+    predictions,
+    action_panel_binding: ActionPanelBinding,
+) -> SealedOnlineResultReceipt:
+    semantic = {
+        "action-panel": action_panel_binding.action_panel_artifact_sha256,
+        "predictions": predictions.artifact_sha256,
+    }
+    outputs = tuple(
+        OnlineOutputPin(
+            role=role,
+            filename=f"{role}.json",
+            byte_count=1,
+            file_sha256=hashlib.sha256(f"file:{role}".encode()).hexdigest(),
+            semantic_sha256=semantic.get(
+                role,
+                hashlib.sha256(f"semantic:{role}".encode()).hexdigest(),
+            ),
+        )
+        for role in sorted(
+            {
+                "action-panel",
+                "action-panel-admission",
+                "audit-chain",
+                "cache-preparation",
+                "execution-order",
+                "predictions",
+            }
+        )
+    )
+    return SealedOnlineResultReceipt(
+        manifest_sha256=predictions.manifest_sha256,
+        run_receipt_sha256=predictions.run_receipt_sha256,
+        execution_artifact_sha256=predictions.execution_artifact_sha256,
+        attempt_receipt_sha256="7" * 64,
+        audit_head_sha256="8" * 64,
+        audit_record_count=1,
+        outputs=outputs,
+    )
+
+
 def _prediction_artifact(split=None, *, receipt: SealedRunReceipt | None = None):
     split = split or _split()
     return emit_online_predictions(
@@ -203,16 +253,62 @@ def _completion_receipt(
     split = split or _split()
     receipt = receipt or _receipt()
     predictions = predictions or _prediction_artifact(split, receipt=receipt)
+    panel = _panel_binding(split, receipt)
     return create_prediction_completion_receipt(
         predictions,
         execution=split.execution,
         receipt=receipt,
         manifest_sha256=MANIFEST_SHA256,
-        action_panel_binding=_panel_binding(split, receipt),
+        action_panel_binding=panel,
+        online_execution_result_receipt=_online_result_receipt(predictions, panel),
         external_anchor_identity=ANCHOR_IDENTITY,
         external_anchor_uri=ANCHOR_URI,
         anchored_at_utc=ANCHORED_AT_UTC,
     )
+
+
+def _verified_anchor(
+    completion: PredictionCompletionReceipt,
+) -> VerifiedPredictionCompletionAnchor:
+    record = PredictionCompletionAnchorRecord.from_completion_receipt(completion)
+    return VerifiedPredictionCompletionAnchor(
+        record=record,
+        receipt=PredictionCompletionAnchorReceipt.from_record(record),
+    )
+
+
+def _verified_timelock_release(
+    tmp_path: Path,
+    sealed_labels: SealedLabelArtifact,
+    predictions,
+    completion: PredictionCompletionReceipt,
+) -> VerifiedTimelockRelease:
+    encoded = sealed_labels.canonical_bytes() + b"\n"
+    anchor = _verified_anchor(completion)
+    online_result = _online_result_receipt(
+        predictions,
+        completion.action_panel_binding,
+    )
+    plaintext_path = (tmp_path / f"labels-{hashlib.sha256(encoded).hexdigest()}.json").resolve()
+    plaintext_path.write_bytes(encoded)
+    release = object.__new__(VerifiedTimelockRelease)
+    object.__setattr__(
+        release,
+        "receipt",
+        SimpleNamespace(
+            manifest_sha256=MANIFEST_SHA256,
+            corpus_id=predictions.corpus,
+            prediction_completion_anchor_record_sha256=anchor.record.record_sha256,
+            prediction_completion_anchor_receipt_sha256=anchor.receipt.receipt_sha256,
+            online_execution_result_receipt_sha256=online_result.receipt_sha256,
+            receipt_sha256="6" * 64,
+            plaintext_byte_count=len(encoded),
+            plaintext_sha256=hashlib.sha256(encoded).hexdigest(),
+        ),
+    )
+    object.__setattr__(release, "plaintext_path", plaintext_path)
+    object.__setattr__(release, "_capability", object())
+    return release
 
 
 def test_custodian_split_removes_every_query_label_and_original_identifier() -> None:
@@ -294,9 +390,7 @@ def test_key_and_key_id_are_bound_into_opaque_keys() -> None:
 
     baseline_keys = {trial.trial_key for trial in baseline.execution.trials}
     assert baseline_keys.isdisjoint({trial.trial_key for trial in other_key.execution.trials})
-    assert baseline_keys.isdisjoint(
-        {trial.trial_key for trial in other_key_id.execution.trials}
-    )
+    assert baseline_keys.isdisjoint({trial.trial_key for trial in other_key_id.execution.trials})
 
 
 @pytest.mark.parametrize(
@@ -481,6 +575,10 @@ def test_prediction_completion_receipt_is_canonical_and_externally_anchored() ->
         "external_anchor_identity": ANCHOR_IDENTITY,
         "external_anchor_uri": ANCHOR_URI,
         "manifest_sha256": MANIFEST_SHA256,
+        "online_execution_result_receipt_sha256": _online_result_receipt(
+            predictions,
+            _panel_binding(split, receipt),
+        ).receipt_sha256,
         "prediction_artifact_sha256": predictions.artifact_sha256,
         "prediction_count": len(predictions.predictions),
         "run_receipt_sha256": separation.sealed_run_receipt_sha256(receipt),
@@ -492,9 +590,7 @@ def test_prediction_completion_receipt_is_canonical_and_externally_anchored() ->
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    assert completion.receipt_sha256 == hashlib.sha256(
-        completion.canonical_bytes()
-    ).hexdigest()
+    assert completion.receipt_sha256 == hashlib.sha256(completion.canonical_bytes()).hexdigest()
 
 
 def test_prediction_completion_requires_a_canonical_prelabel_action_panel() -> None:
@@ -508,6 +604,10 @@ def test_prediction_completion_requires_a_canonical_prelabel_action_panel() -> N
             receipt=receipt,
             manifest_sha256=MANIFEST_SHA256,
             action_panel_binding="not-a-binding",  # type: ignore[arg-type]
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                _panel_binding(split, receipt),
+            ),
             external_anchor_identity=ANCHOR_IDENTITY,
             external_anchor_uri=ANCHOR_URI,
             anchored_at_utc=ANCHORED_AT_UTC,
@@ -541,6 +641,10 @@ def test_prediction_completion_writer_is_exclusive_and_does_not_follow_links(
         ({"run_receipt_sha256": "c" * 64}, "run_receipt_sha256"),
         ({"execution_artifact_sha256": "c" * 64}, "execution_artifact_sha256"),
         ({"prediction_artifact_sha256": "c" * 64}, "prediction_artifact_sha256"),
+        (
+            {"online_execution_result_receipt_sha256": "c" * 64},
+            "online_execution_result_receipt_sha256",
+        ),
         ({"prediction_count": 3}, "prediction_count"),
         ({"corpus": "another-corpus"}, "corpus"),
     ],
@@ -548,6 +652,7 @@ def test_prediction_completion_writer_is_exclusive_and_does_not_follow_links(
 def test_join_rejects_mismatched_prediction_completion_bindings(
     updates: dict[str, object],
     message: str,
+    tmp_path: Path,
 ) -> None:
     split = _split()
     receipt = _receipt()
@@ -576,6 +681,17 @@ def test_join_rejects_mismatched_prediction_completion_bindings(
             receipt=receipt,
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                split.sealed_labels,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
@@ -615,6 +731,10 @@ def test_completion_receipt_rejects_nonexternal_or_noncanonical_anchor(
             receipt=receipt,
             manifest_sha256=MANIFEST_SHA256,
             action_panel_binding=_panel_binding(split, receipt),
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                _panel_binding(split, receipt),
+            ),
             external_anchor_identity=ANCHOR_IDENTITY,
             external_anchor_uri=anchor_uri,
             anchored_at_utc=anchored_at_utc,
@@ -636,7 +756,9 @@ def test_bare_prediction_artifact_cannot_unlock_labels() -> None:
         )
 
 
-def test_label_release_rejects_a_panel_not_bound_before_completion() -> None:
+def test_label_release_rejects_a_panel_not_bound_before_completion(
+    tmp_path: Path,
+) -> None:
     split = _split()
     receipt = _receipt()
     predictions = _prediction_artifact(split, receipt=receipt)
@@ -654,11 +776,24 @@ def test_label_release_rejects_a_panel_not_bound_before_completion() -> None:
             receipt=receipt,
             completion_receipt=completion,
             action_panel_binding=later_panel,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                split.sealed_labels,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
 
-def test_post_completion_join_is_exact_and_exposes_labels_only_offline() -> None:
+def test_post_completion_join_is_exact_and_exposes_labels_only_offline(
+    tmp_path: Path,
+) -> None:
     split = _split()
     receipt = _receipt()
     predictions = _prediction_artifact(split, receipt=receipt)
@@ -671,6 +806,17 @@ def test_post_completion_join_is_exact_and_exposes_labels_only_offline() -> None
         receipt=receipt,
         completion_receipt=completion,
         action_panel_binding=completion.action_panel_binding,
+        online_execution_result_receipt=_online_result_receipt(
+            predictions,
+            completion.action_panel_binding,
+        ),
+        verified_completion_anchor=_verified_anchor(completion),
+        verified_timelock_release=_verified_timelock_release(
+            tmp_path,
+            split.sealed_labels,
+            predictions,
+            completion,
+        ),
         manifest_sha256=MANIFEST_SHA256,
     )
 
@@ -678,18 +824,15 @@ def test_post_completion_join_is_exact_and_exposes_labels_only_offline() -> None
     assert joined.execution_artifact_sha256 == split.execution.artifact_sha256
     assert joined.prediction_artifact_sha256 == predictions.artifact_sha256
     assert joined.prediction_completion_receipt_sha256 == completion.receipt_sha256
+    assert joined.timelock_decryption_receipt_sha256 == "6" * 64
     assert joined.sealed_label_artifact_sha256 == split.sealed_labels.artifact_sha256
     assert any(row.labels.answer == "SENTINEL_GOLD_ANSWER" for row in joined.trials)
-    assert all(
-        row.prediction.trial_key == row.labels.trial_key for row in joined.trials
-    )
-    assert all(
-        row.prediction.family_key == row.labels.family_key for row in joined.trials
-    )
+    assert all(row.prediction.trial_key == row.labels.trial_key for row in joined.trials)
+    assert all(row.prediction.family_key == row.labels.family_key for row in joined.trials)
     assert not hasattr(predictions.predictions[0], "labels")
 
 
-def test_join_requires_an_immutable_prediction_artifact() -> None:
+def test_join_requires_an_immutable_prediction_artifact(tmp_path: Path) -> None:
     split = _split()
     predictions = _prediction_artifact(split)
     completion = _completion_receipt(split, predictions)
@@ -701,11 +844,22 @@ def test_join_requires_an_immutable_prediction_artifact() -> None:
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                split.sealed_labels,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
 
-def test_join_rejects_missing_extra_and_duplicate_label_keys() -> None:
+def test_join_rejects_missing_extra_and_duplicate_label_keys(tmp_path: Path) -> None:
     split = _split()
     predictions = _prediction_artifact(split)
     labels = split.sealed_labels
@@ -720,6 +874,17 @@ def test_join_rejects_missing_extra_and_duplicate_label_keys() -> None:
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                missing,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
@@ -733,6 +898,17 @@ def test_join_rejects_missing_extra_and_duplicate_label_keys() -> None:
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                extra,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
@@ -752,11 +928,24 @@ def test_join_rejects_missing_extra_and_duplicate_label_keys() -> None:
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                both_truncated_labels,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
 
-def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings() -> None:
+def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings(
+    tmp_path: Path,
+) -> None:
     split = _split()
     predictions = _prediction_artifact(split)
     labels = split.sealed_labels
@@ -770,6 +959,17 @@ def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings() -
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                replace(labels, corpus="another-corpus"),
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
     with pytest.raises(LabelSeparationError, match="mismatched stage"):
@@ -780,6 +980,17 @@ def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings() -
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                replace(labels, stage="another-stage"),
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
     with pytest.raises(LabelSeparationError, match="different execution artifacts"):
@@ -790,6 +1001,17 @@ def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings() -
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                replace(labels, execution_artifact_sha256="e" * 64),
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
     with pytest.raises(LabelSeparationError, match="another sealed run"):
@@ -803,11 +1025,22 @@ def test_join_rejects_cross_manifest_corpus_stage_execution_and_run_bindings() -
             ),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                labels,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 
 
-def test_join_rejects_family_key_rebinding() -> None:
+def test_join_rejects_family_key_rebinding(tmp_path: Path) -> None:
     split = _split()
     predictions = _prediction_artifact(split)
     labels = split.sealed_labels
@@ -823,6 +1056,17 @@ def test_join_rejects_family_key_rebinding() -> None:
             receipt=_receipt(),
             completion_receipt=completion,
             action_panel_binding=completion.action_panel_binding,
+            online_execution_result_receipt=_online_result_receipt(
+                predictions,
+                completion.action_panel_binding,
+            ),
+            verified_completion_anchor=_verified_anchor(completion),
+            verified_timelock_release=_verified_timelock_release(
+                tmp_path,
+                rebound,
+                predictions,
+                completion,
+            ),
             manifest_sha256=MANIFEST_SHA256,
         )
 

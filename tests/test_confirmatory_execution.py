@@ -20,9 +20,7 @@ RUNNER_IDENTITY = "confirmatory-runner@example.test"
 
 class _FakeInput:
     def __init__(self, results_store: str) -> None:
-        self.frozen_manifest = {
-            "sealed_execution": {"results_store": results_store}
-        }
+        self.frozen_manifest = {"sealed_execution": {"results_store": results_store}}
         self.manifest_sha256 = MANIFEST_SHA256
         self.run_receipt_sha256 = RUN_RECEIPT_SHA256
         self.artifact_sha256 = INPUT_SHA256
@@ -48,9 +46,7 @@ class _FakeResult:
     def canonical_bytes(self) -> bytes:
         return json.dumps(
             {
-                "confirmatory_input_artifact_sha256": (
-                    self.confirmatory_input_artifact_sha256
-                ),
+                "confirmatory_input_artifact_sha256": (self.confirmatory_input_artifact_sha256),
                 "manifest_sha256": self.manifest_sha256,
                 "h1": {"passed": False},
                 "h2": {"passed": False},
@@ -74,12 +70,34 @@ def _install_types(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(execution, "ConfirmatoryInputArtifact", _FakeInput)
     monkeypatch.setattr(execution, "FrozenModelSuite", _FakeSuite)
     monkeypatch.setattr(execution, "ConfirmatoryResultArtifact", _FakeResult)
+    monkeypatch.setattr(
+        execution,
+        "_require_suite_labels_released",
+        lambda *args, **kwargs: None,
+    )
 
 
 def _inputs(tmp_path: Path) -> _FakeInput:
     results = tmp_path / "sealed-results"
     results.mkdir(mode=0o700)
     return _FakeInput(results.as_uri())
+
+
+def test_analysis_gate_rejects_bare_in_memory_object_before_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(execution, "ConfirmatoryInputArtifact", _FakeInput)
+    monkeypatch.setattr(execution, "FrozenModelSuite", _FakeSuite)
+    monkeypatch.setattr(execution, "ConfirmatoryResultArtifact", _FakeResult)
+    inputs = _inputs(tmp_path)
+    with pytest.raises(ConfirmatoryAnalysisError, match="canonical files"):
+        execution.run_confirmatory_analysis_once(
+            inputs,
+            suite=_FakeSuite(),
+            verified_labels_released=object(),
+        )
+    assert not execution.confirmatory_attempt_path(inputs).exists()
 
 
 def test_attempt_is_durable_before_computation_and_result_is_bound(
@@ -98,9 +116,7 @@ def test_attempt_is_durable_before_computation_and_result_is_bound(
         attempt_target = execution.confirmatory_attempt_path(inputs)
         assert attempt_target.is_file()
         assert not execution.confirmatory_result_path(inputs).exists()
-        observations.append(
-            execution.load_confirmatory_analysis_attempt_receipt(attempt_target)
-        )
+        observations.append(execution.load_confirmatory_analysis_attempt_receipt(attempt_target))
         return result
 
     monkeypatch.setattr(execution, "run_confirmatory_analysis", compute)
@@ -146,9 +162,7 @@ def test_preexisting_attempt_blocks_before_analysis_computation(
     inputs = _inputs(tmp_path)
     suite = _FakeSuite()
     attempt = execution._attempt_receipt(inputs, suite=suite)
-    execution.confirmatory_attempt_path(inputs).write_bytes(
-        attempt.canonical_bytes() + b"\n"
-    )
+    execution.confirmatory_attempt_path(inputs).write_bytes(attempt.canonical_bytes() + b"\n")
     compute_calls = 0
 
     def compute(*args: object, **kwargs: object) -> _FakeResult:
@@ -424,9 +438,7 @@ def test_result_loader_ignores_forged_in_memory_receipt_for_nested_substitution(
     execution.run_confirmatory_analysis_once(inputs, suite=_FakeSuite())
     result_target = execution.confirmatory_result_path(inputs)
     result_receipt_target = execution.confirmatory_result_receipt_path(inputs)
-    durable_receipt = execution.load_confirmatory_analysis_result_receipt(
-        result_receipt_target
-    )
+    durable_receipt = execution.load_confirmatory_analysis_result_receipt(result_receipt_target)
     substituted = json.loads(result_target.read_text(encoding="utf-8"))
     original_bindings = {
         name: substituted[name]
@@ -455,9 +467,7 @@ def test_result_loader_ignores_forged_in_memory_receipt_for_nested_substitution(
         result_artifact_sha256=hashlib.sha256(substituted_bytes).hexdigest(),
         result_uri=durable_receipt.result_uri,
     )
-    assert forged_receipt.result_artifact_sha256 != (
-        durable_receipt.result_artifact_sha256
-    )
+    assert forged_receipt.result_artifact_sha256 != (durable_receipt.result_artifact_sha256)
 
     with pytest.raises(
         ConfirmatoryAnalysisError,

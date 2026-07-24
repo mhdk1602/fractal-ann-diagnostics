@@ -1,0 +1,1140 @@
+name: Publish immutable C0 evidence release
+
+on:
+  workflow_dispatch:
+    inputs:
+      c0_sha:
+        description: Full lowercase commit at confirmatory-apparatus-c0
+        required: true
+        type: string
+      image_run_id:
+        description: Successful production confirmatory-image workflow run
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  attestations: read
+  contents: write
+
+concurrency:
+  group: confirmatory-c0-evidence-release
+  cancel-in-progress: false
+
+env:
+  C0_TAG: confirmatory-apparatus-c0
+  GH_TOKEN: ${{ github.token }}
+  REPOSITORY: mhdk1602/fractal-ann-diagnostics
+
+jobs:
+  publish:
+    environment: confirmatory
+    name: Draft, attach, publish, and verify C0 evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      release_id: ${{ steps.draft.outputs.release_id }}
+
+    steps:
+      - name: Admit only the fixed C0 tag and sole operator
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$C0_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$IMAGE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "refs/tags/${C0_TAG}"
+          test "$GITHUB_SHA" = "$C0_SHA"
+          test "$GITHUB_WORKFLOW_SHA" = "$C0_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${REPOSITORY}/.github/workflows/confirmatory-c0-evidence-release.yml@refs/tags/${C0_TAG}"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}" --jq .full_name)" = "$GITHUB_REPOSITORY"
+
+      - name: Check out the exact C0 source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: confirmatory-apparatus-c0
+          fetch-depth: 1
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Require repository release immutability and exact tag target
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$C0_SHA"
+          test "$(git rev-parse "refs/tags/${C0_TAG}^{commit}")" = "$C0_SHA"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/immutable-releases" \
+            | jq -S -c . > "${RUNNER_TEMP}/immutable-release-settings.json"
+          jq -e '.enabled == true' \
+            "${RUNNER_TEMP}/immutable-release-settings.json" >/dev/null
+
+      - name: Download and authenticate the production image evidence
+        id: source
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: |
+          set -euo pipefail
+          source_root="${RUNNER_TEMP}/image-evidence-source"
+          install -d -m 0700 "$source_root"
+          run_json="$source_root/image-run-api.json"
+          artifacts_json="$source_root/image-artifacts-api.json"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${REPOSITORY}/actions/runs/${IMAGE_RUN_ID}" \
+            | jq -S -c . > "$run_json"
+          jq -e \
+            --arg sha "$C0_SHA" \
+            --argjson run_id "$IMAGE_RUN_ID" '
+              .id == $run_id
+              and .run_attempt == 1
+              and .event == "workflow_dispatch"
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_sha == $sha
+              and .head_branch == "confirmatory-apparatus-c0"
+              and .actor.login == "mhdk1602"
+              and .triggering_actor.login == "mhdk1602"
+              and .repository.full_name == "mhdk1602/fractal-ann-diagnostics"
+              and .head_repository.full_name == "mhdk1602/fractal-ann-diagnostics"
+              and .path == ".github/workflows/confirmatory-image.yml"
+            ' "$run_json" >/dev/null
+          artifact_name="confirmatory-image-production-${C0_SHA}"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${REPOSITORY}/actions/runs/${IMAGE_RUN_ID}/artifacts?per_page=100" \
+            | jq -S -c . > "$artifacts_json"
+          jq -e \
+            --arg name "$artifact_name" \
+            --arg sha "$C0_SHA" \
+            --argjson run_id "$IMAGE_RUN_ID" '
+              [.artifacts[] | select(.name == $name)] as $matches
+              | ($matches | length) == 1
+              and $matches[0].expired == false
+              and $matches[0].size_in_bytes > 0
+              and ($matches[0].digest | test("^sha256:[0-9a-f]{64}$"))
+              and $matches[0].workflow_run.id == $run_id
+              and $matches[0].workflow_run.head_sha == $sha
+              and $matches[0].workflow_run.head_branch == "confirmatory-apparatus-c0"
+            ' "$artifacts_json" >/dev/null
+          artifact_id="$(jq -r --arg name "$artifact_name" \
+            '.artifacts[] | select(.name == $name) | .id' "$artifacts_json")"
+          artifact_digest="$(jq -r --arg name "$artifact_name" \
+            '.artifacts[] | select(.name == $name) | .digest' "$artifacts_json")"
+          archive="$source_root/image-evidence.zip"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "/repos/${REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "$archive"
+          printf '%s  %s\n' "${artifact_digest#sha256:}" "$archive" | sha256sum -c -
+          printf 'source_root=%s\n' "$source_root" >> "$GITHUB_OUTPUT"
+
+      - name: Extract the closed artifact and verify every retained byte
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+          SOURCE_ROOT: ${{ steps.source.outputs.source_root }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/c0-evidence"
+          install -d -m 0700 "$evidence"
+          /usr/bin/python3 - "$SOURCE_ROOT/image-evidence.zip" "$evidence" <<'PY'
+          import pathlib
+          import stat
+          import sys
+          import zipfile
+
+          archive_path = pathlib.Path(sys.argv[1])
+          output = pathlib.Path(sys.argv[2])
+          total = 0
+          names: set[str] = set()
+          with zipfile.ZipFile(archive_path) as archive:
+              for member in archive.infolist():
+                  path = pathlib.PurePosixPath(member.filename)
+                  canonical_name = path.as_posix()
+                  mode = member.external_attr >> 16
+                  if (
+                      member.is_dir()
+                      or path.is_absolute()
+                      or not path.parts
+                      or any(part in {"", ".", ".."} for part in path.parts)
+                      or member.filename != canonical_name
+                      or canonical_name in names
+                      or stat.S_ISLNK(mode)
+                      or not stat.S_ISREG(mode)
+                      or member.file_size > 128 * 1024 * 1024
+                  ):
+                      raise SystemExit("image evidence ZIP contains an unsafe member")
+                  names.add(canonical_name)
+                  total += member.file_size
+                  if total > 2 * 1024 * 1024 * 1024:
+                      raise SystemExit("image evidence ZIP exceeds the closed size limit")
+                  payload = archive.read(member)
+                  if len(payload) != member.file_size:
+                      raise SystemExit("image evidence ZIP member changed while read")
+                  target = output.joinpath(*path.parts)
+                  target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                  target.write_bytes(payload)
+                  target.chmod(0o444)
+          required = {"C0-ARTIFACT-SHA256SUMS", "PACKAGE-SHA256SUMS"}
+          if not required.issubset(names):
+              raise SystemExit("image evidence ZIP omits the closed checksum manifests")
+          PY
+          (
+            cd "$evidence"
+            test "$(find . -type l -o -type p -o -type b -o -type c -o -type s | wc -l)" -eq 0
+            test "$(find . -type f -links +1 | wc -l)" -eq 0
+            sha256sum -c PACKAGE-SHA256SUMS
+            sha256sum -c C0-ARTIFACT-SHA256SUMS
+            test -f candidate-production-byte-identity.json
+            jq -e '
+              .schema_version == "fractal-c0-candidate-production-byte-identity-v1"
+              and (.candidate_run_id | type == "number" and . > 0)
+              and (.scientific_linux_amd64_manifest_digest
+                | test("^sha256:[0-9a-f]{64}$"))
+              and (.scientific_linux_arm64_manifest_digest
+                | test("^sha256:[0-9a-f]{64}$"))
+              and (.release_linux_arm64_manifest_digest
+                | test("^sha256:[0-9a-f]{64}$"))
+            ' candidate-production-byte-identity.json >/dev/null
+            test -f oci-promotion-receipt.json
+            jq -e '
+              .schema_version == "fractal-c0-oci-promotion-v1"
+              and (.bootstrap_candidate_run_id | type == "number" and . > 0)
+              and (.bootstrap_candidate_source_commit | test("^[0-9a-f]{40}$"))
+              and (.current_c0_commit | test("^[0-9a-f]{40}$"))
+              and (.build_context_tree_sha256 | test("^[0-9a-f]{64}$"))
+              and (.scientific_index_digest | test("^sha256:[0-9a-f]{64}$"))
+              and (.release_index_digest | test("^sha256:[0-9a-f]{64}$"))
+              and .scientific_anonymous_observed_digest == .scientific_index_digest
+              and .release_anonymous_observed_digest == .release_index_digest
+              and .scientific_raw_index_equal == true
+              and .release_raw_index_equal == true
+              and .scientific_anonymous_readback_equal == true
+              and .release_anonymous_readback_equal == true
+            ' oci-promotion-receipt.json >/dev/null
+            gate='provider-rehearsal-readback/provider-rehearsal-production-gate.json'
+            rehearsal='provider-rehearsal-readback/provider-rehearsal-receipt.json'
+            candidate='candidate-rehearsal-readback/candidate-closure.json'
+            control_instantiation='production-control-instantiation/c0-control-instantiation-receipt.json'
+            environment_control='github-environment-control-receipt.json'
+            verification='provider-rehearsal-readback/rehearsal-attestation-verification.json'
+            test -f "$gate"
+            test -f "$rehearsal"
+            test -f "$candidate"
+            test -f "$control_instantiation"
+            test -f "$environment_control"
+            test -f "$verification"
+            PYTHONPATH="$GITHUB_WORKSPACE/src" /usr/bin/python3 - \
+              "$PWD/$environment_control" <<'PY'
+          import hashlib
+          import pathlib
+          import sys
+
+          from fractal_ann_diagnostics.github_environment_control import (
+              load_github_environment_control_receipt,
+          )
+
+          path = pathlib.Path(sys.argv[1]).resolve()
+          receipt = load_github_environment_control_receipt(path)
+          if receipt.file_sha256 != hashlib.sha256(path.read_bytes()).hexdigest():
+              raise SystemExit("environment-control receipt file digest differs")
+          if tuple(row.name for row in receipt.environments) != (
+              "confirmatory",
+              "confirmatory-rehearsal",
+          ):
+              raise SystemExit("environment-control receipt names another environment set")
+          PY
+            jq -e \
+              --arg c0 "$C0_SHA" '
+                .schema_version == "fractal-provider-rehearsal-aggregate-v1"
+                and .repository == "mhdk1602/fractal-ann-diagnostics"
+                and .workflow_path == ".github/workflows/confirmatory-provider-rehearsal.yml"
+                and .workflow_sha == $c0
+                and .c0_commit == $c0
+                and .run_attempt == 1
+                and (.run_id | type == "number" and . > 0)
+                and (.candidate_image_source_commit | test("^[0-9a-f]{40}$"))
+                and (.candidate_image_closure_file_sha256 | test("^[0-9a-f]{64}$"))
+                and (.candidate_bootstrap_closure_sha256 | test("^[0-9a-f]{64}$"))
+                and (.build_context_tree_sha256 | test("^[0-9a-f]{64}$"))
+                and (.manifest_sha256 | test("^[0-9a-f]{64}$"))
+                and (.plan_closure_sha256 | test("^[0-9a-f]{64}$"))
+                and .scientific_inputs_opened == false
+                and .provider_state_mutated == false
+                and .suite_attempt_id == null
+                and (.phase_receipt_file_sha256 | keys | sort)
+                  == ["analysis", "label-release", "online"]
+                and (.phase_execute_job_ids | keys | sort)
+                  == ["analysis", "label-release", "online"]
+              ' "$rehearsal" >/dev/null
+            jq -e '
+              .schema_version == "fractal-c0-provider-rehearsal-gate-v2"
+              and (.rehearsal_run_id | type == "number" and . > 0)
+              and (.candidate_branch | test("^c0-candidate/[a-z0-9._-]+$"))
+              and (.build_context_tree_sha256 | test("^[0-9a-f]{64}$"))
+              and (.candidate_bootstrap_closure_sha256 | test("^[0-9a-f]{64}$"))
+              and (.candidate_image_closure_file_sha256 | test("^[0-9a-f]{64}$"))
+              and (.candidate_image_source_commit | test("^[0-9a-f]{40}$"))
+              and (.provider_rehearsal_receipt_sha256 | test("^[0-9a-f]{64}$"))
+              and (.rehearsal_attestation_verification_sha256
+                | test("^[0-9a-f]{64}$"))
+            ' "$gate" >/dev/null
+            test "$(sha256sum "$candidate" | cut -d ' ' -f 1)" = \
+              "$(jq -r .candidate_image_closure_file_sha256 "$gate")"
+            test "$(jq -r .build_context_tree_sha256 "$candidate")" = \
+              "$(jq -r .build_context_tree_sha256 "$gate")"
+            test "$(jq -r .github_sha "$candidate")" = \
+              "$(jq -r .candidate_image_source_commit "$gate")"
+            test "$(jq -r .candidate_image_source_commit "$rehearsal")" = \
+              "$(jq -r .candidate_image_source_commit "$gate")"
+            test "$(jq -r .candidate_bootstrap_closure_sha256 "$rehearsal")" = \
+              "$(jq -r .candidate_bootstrap_closure_sha256 "$gate")"
+            test "$(jq -r .candidate_image_closure_file_sha256 "$rehearsal")" = \
+              "$(jq -r .candidate_image_closure_file_sha256 "$gate")"
+            test "$(jq -r .build_context_tree_sha256 "$rehearsal")" = \
+              "$(jq -r .build_context_tree_sha256 "$gate")"
+            test "$(jq -r .run_id "$rehearsal")" = \
+              "$(jq -r .rehearsal_run_id "$gate")"
+            test "$(sha256sum "$rehearsal" | cut -d ' ' -f 1)" = \
+              "$(jq -r .provider_rehearsal_receipt_sha256 "$gate")"
+            test "$(sha256sum "$verification" | cut -d ' ' -f 1)" = \
+              "$(jq -r .rehearsal_attestation_verification_sha256 "$gate")"
+            jq -e \
+              --arg c0 "$C0_SHA" '
+                .schema_version
+                  == "fractal-production-control-c0-instantiation-receipt-v4"
+                and .apparatus_commit == $c0
+                and .approval_environment == "confirmatory"
+                and (.candidate_image_source_commit | test("^[0-9a-f]{40}$"))
+                and (.candidate_manifest_sha256 | test("^[0-9a-f]{64}$"))
+                and (.instantiated_payload_tree_sha256 | test("^[0-9a-f]{64}$"))
+                and (.workloads | type == "array" and length == 5)
+              ' "$control_instantiation" >/dev/null
+            candidate_manifest_relative="$(jq -er .candidate_manifest_relative_path \
+              "$control_instantiation")"
+            candidate_assembly_relative="$(jq -er \
+              .candidate_manifest_assembly_receipt_relative_path \
+              "$control_instantiation")"
+            test "$candidate_manifest_relative" = \
+              'candidate-manifest-package/candidate-study-manifest.json'
+            test "$candidate_assembly_relative" = \
+              'candidate-manifest-package/candidate-manifest-assembly-receipt.json'
+            candidate_manifest="production-control-instantiation/${candidate_manifest_relative}"
+            candidate_assembly="production-control-instantiation/${candidate_assembly_relative}"
+            test -f "$candidate_manifest"
+            test -f "$candidate_assembly"
+            test "$(sha256sum "$candidate_manifest" | cut -d ' ' -f 1)" = \
+              "$(jq -r .candidate_manifest_file_sha256 "$control_instantiation")"
+            test "$(sha256sum "$candidate_assembly" | cut -d ' ' -f 1)" = \
+              "$(jq -r .candidate_manifest_assembly_receipt_file_sha256 \
+                "$control_instantiation")"
+            test "$(jq -r .candidate_image_source_commit "$control_instantiation")" = \
+              "$(jq -r .github_sha "$candidate")"
+            test "$(jq -r .build_context_tree_sha256 "$control_instantiation")" = \
+              "$(jq -r .build_context_tree_sha256 "$candidate")"
+            test "$(jq -r .candidate_image_closure_file_sha256 "$control_instantiation")" = \
+              "$(sha256sum "$candidate" | cut -d ' ' -f 1)"
+            test "$(jq -r .candidate_bootstrap_closure_sha256 "$control_instantiation")" = \
+              "$(jq -r .candidate_bootstrap_closure_sha256 "$rehearsal")"
+            test "$(jq -r .candidate_manifest_sha256 "$control_instantiation")" = \
+              "$(jq -r .manifest_sha256 "$rehearsal")"
+          )
+
+      - name: Create the deterministic evidence archive
+        id: archive
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+        run: |
+          set -euo pipefail
+          release_root="${RUNNER_TEMP}/c0-release-assets"
+          install -d -m 0700 "$release_root"
+          asset_name="fractal-ann-diagnostics-c0-evidence-${C0_SHA}.tar.gz"
+          asset="$release_root/$asset_name"
+          source_epoch="$(git show -s --format=%ct "$C0_SHA")"
+          tar \
+            --sort=name \
+            --format=pax \
+            --pax-option=delete=atime,delete=ctime \
+            --mtime="@${source_epoch}" \
+            --owner=0 --group=0 --numeric-owner \
+            --mode='u=rwX,go=rX' \
+            -C "$RUNNER_TEMP" -cf - c0-evidence \
+            | gzip -n -9 > "$asset"
+          test -s "$asset"
+          asset_sha256="$(sha256sum "$asset" | cut -d ' ' -f 1)"
+          asset_size="$(stat -c %s "$asset")"
+          checksum="$asset.sha256"
+          printf '%s  %s\n' "$asset_sha256" "$asset_name" > "$checksum"
+          checksum_sha256="$(sha256sum "$checksum" | cut -d ' ' -f 1)"
+          checksum_size="$(stat -c %s "$checksum")"
+          {
+            printf 'asset=%s\n' "$asset"
+            printf 'asset_name=%s\n' "$asset_name"
+            printf 'asset_sha256=%s\n' "$asset_sha256"
+            printf 'asset_size=%s\n' "$asset_size"
+            printf 'checksum=%s\n' "$checksum"
+            printf 'checksum_sha256=%s\n' "$checksum_sha256"
+            printf 'checksum_size=%s\n' "$checksum_size"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Admit an absent release or recover the exact immutable release
+        id: release_state
+        shell: bash
+        env:
+          ASSET: ${{ steps.archive.outputs.asset }}
+          ASSET_SHA256: ${{ steps.archive.outputs.asset_sha256 }}
+          ASSET_SIZE: ${{ steps.archive.outputs.asset_size }}
+          CHECKSUM: ${{ steps.archive.outputs.checksum }}
+          CHECKSUM_SHA256: ${{ steps.archive.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ steps.archive.outputs.checksum_size }}
+          C0_SHA: ${{ inputs.c0_sha }}
+        run: |
+          set -euo pipefail
+          existing="${RUNNER_TEMP}/existing-release-api.json"
+          api_url="https://api.github.com/repos/${REPOSITORY}/releases/tags/${C0_TAG}"
+          set +e
+          http_status="$(
+            printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN" \
+              | curl --config - --silent --show-error \
+                  --proto '=https' --tlsv1.2 --max-redirs 0 \
+                  --connect-timeout 10 --max-time 30 \
+                  --header 'Accept: application/vnd.github+json' \
+                  --header 'Accept-Encoding: identity' \
+                  --header 'X-GitHub-Api-Version: 2026-03-10' \
+                  --output "$existing" --write-out '%{http_code}' "$api_url"
+          )"
+          curl_status="$?"
+          set -e
+          test "$curl_status" -eq 0
+          [[ "$http_status" =~ ^[0-9]{3}$ ]]
+          test "$(stat -c %s "$existing")" -le 4194304
+          if [[ "$http_status" == 200 ]]; then
+            jq -S -c . "$existing" > "${existing}.canonical"
+            mv -- "${existing}.canonical" "$existing"
+            if jq -e \
+              --arg tag "$C0_TAG" \
+              --arg target "$C0_SHA" \
+              --arg title 'Confirmatory apparatus C0 evidence' \
+              --arg url "https://github.com/${REPOSITORY}/releases/tag/${C0_TAG}" \
+              --arg asset "$(basename "$ASSET")" \
+              --arg checksum "$(basename "$CHECKSUM")" \
+              --arg asset_sha "sha256:${ASSET_SHA256}" \
+              --arg checksum_sha "sha256:${CHECKSUM_SHA256}" \
+              --argjson asset_size "$ASSET_SIZE" \
+              --argjson checksum_size "$CHECKSUM_SIZE" '
+                .draft == false
+                and .immutable == true
+                and .tag_name == $tag
+                and .target_commitish == $target
+                and .name == $title
+                and .html_url == $url
+                and .prerelease == false
+                and .author.login == "mhdk1602"
+                and (.published_at | type == "string" and length > 0)
+                and ([.assets[].name] | sort) == ([$asset, $checksum] | sort)
+                and ([.assets[] | select(.name == $asset and .size == $asset_size
+                  and .digest == $asset_sha)] | length) == 1
+                and ([.assets[] | select(.name == $checksum and .size == $checksum_size
+                  and .digest == $checksum_sha)] | length) == 1
+              ' "$existing" >/dev/null; then
+              mode=recover
+            elif jq -e \
+                --arg tag "$C0_TAG" \
+                --arg target "$C0_SHA" \
+                --arg title 'Confirmatory apparatus C0 evidence' \
+                --arg url "https://github.com/${REPOSITORY}/releases/tag/${C0_TAG}" \
+                --arg asset "$(basename "$ASSET")" \
+                --arg checksum "$(basename "$CHECKSUM")" \
+                --arg asset_sha "sha256:${ASSET_SHA256}" \
+                --arg checksum_sha "sha256:${CHECKSUM_SHA256}" \
+                --argjson asset_size "$ASSET_SIZE" \
+                --argjson checksum_size "$CHECKSUM_SIZE" '
+                  .draft == true
+                  and .immutable == false
+                  and .tag_name == $tag
+                  and .target_commitish == $target
+                  and .name == $title
+                  and .html_url == $url
+                  and .prerelease == false
+                  and .author.login == "mhdk1602"
+                  and .published_at == null
+                  and (.body | type == "string" and test(
+                    "<!-- fractal-c0-release-owner:[1-9][0-9]*:1:" + $target + " -->"
+                  ))
+                  and (.assets | type == "array" and length <= 2)
+                  and ([.assets[].name] | length) == ([.assets[].name] | unique | length)
+                  and all(.assets[];
+                    (.name == $asset and .size == $asset_size and .digest == $asset_sha)
+                    or (.name == $checksum and .size == $checksum_size
+                      and .digest == $checksum_sha)
+                  )
+                ' "$existing" >/dev/null; then
+              mode=resume
+            else
+              echo 'existing C0 release is neither exact immutable evidence nor a resumable draft' >&2
+              exit 65
+            fi
+            release_id="$(jq -r .id "$existing")"
+            [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+            printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+            printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+          elif [[ "$http_status" == 404 ]]; then
+            jq -e '.message == "Not Found" and (.status == null or .status == "404")' \
+              "$existing" >/dev/null
+            printf 'mode=create\n' >> "$GITHUB_OUTPUT"
+            printf 'release_id=\n' >> "$GITHUB_OUTPUT"
+          else
+            echo "GitHub release lookup returned HTTP ${http_status}" >&2
+            exit 69
+          fi
+
+      - name: Create the run-owned draft through one typed API response
+        id: draft
+        if: steps.release_state.outputs.mode == 'create'
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+        run: |
+          set -euo pipefail
+          notes="${RUNNER_TEMP}/c0-release-notes.md"
+          cat > "$notes" <<EOF
+          C0 evidence for confirmatory apparatus commit \`${C0_SHA}\`.
+
+          This release contains the retained scientific-image and timelock-release-image evidence.
+          It reports no confirmatory result. The archive is separate from the exact 27-file C1
+          Zenodo registration package; C1 embeds its immutable binding and a fresh public readback.
+
+          <!-- fractal-c0-release-owner:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${C0_SHA} -->
+          EOF
+          request="${RUNNER_TEMP}/create-c0-release-request.json"
+          response="${RUNNER_TEMP}/create-c0-release-response.json"
+          jq -S -c -n \
+            --arg body "$(cat "$notes")" \
+            --arg name 'Confirmatory apparatus C0 evidence' \
+            --arg tag "$C0_TAG" \
+            --arg target "$C0_SHA" '
+              {body: $body,
+               draft: true,
+               make_latest: "false",
+               name: $name,
+               prerelease: false,
+               tag_name: $tag,
+               target_commitish: $target}
+            ' > "$request"
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases" --input "$request" \
+            | jq -S -c . > "$response"
+          jq -e \
+            --arg body "$(cat "$notes")" \
+            --arg name 'Confirmatory apparatus C0 evidence' \
+            --arg tag "$C0_TAG" \
+            --arg target "$C0_SHA" '
+              (.id | type == "number" and . > 0)
+              and .draft == true
+              and .immutable == false
+              and .tag_name == $tag
+              and .target_commitish == $target
+              and .name == $name
+              and .body == $body
+              and .prerelease == false
+              and .author.login == "mhdk1602"
+              and .published_at == null
+              and (.assets | type == "array" and length == 0)
+            ' "$response" >/dev/null
+          release_id="$(jq -r .id "$response")"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the one release identity
+        id: release
+        shell: bash
+        env:
+          CREATED_RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          EXISTING_RELEASE_ID: ${{ steps.release_state.outputs.release_id }}
+          MODE: ${{ steps.release_state.outputs.mode }}
+        run: |
+          set -euo pipefail
+          case "$MODE" in
+            create) release_id="$CREATED_RELEASE_ID" ;;
+            recover|resume) release_id="$EXISTING_RELEASE_ID" ;;
+            *) echo 'release state is not create, recover, or resume' >&2; exit 65 ;;
+          esac
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          printf 'release_id=%s\n' "$release_id" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the exact missing assets to the mutable draft
+        if: steps.release_state.outputs.mode != 'recover'
+        shell: bash
+        env:
+          ASSET: ${{ steps.archive.outputs.asset }}
+          ASSET_SHA256: ${{ steps.archive.outputs.asset_sha256 }}
+          ASSET_SIZE: ${{ steps.archive.outputs.asset_size }}
+          CHECKSUM: ${{ steps.archive.outputs.checksum }}
+          CHECKSUM_SHA256: ${{ steps.archive.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ steps.archive.outputs.checksum_size }}
+          C0_SHA: ${{ inputs.c0_sha }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          draft="${RUNNER_TEMP}/mutable-draft-release-api.json"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases/${RELEASE_ID}" \
+            | jq -S -c . > "$draft"
+          jq -e \
+            --argjson release_id "$RELEASE_ID" \
+            --arg tag "$C0_TAG" \
+            --arg target "$C0_SHA" \
+            --arg title 'Confirmatory apparatus C0 evidence' \
+            --arg asset "$(basename "$ASSET")" \
+            --arg checksum "$(basename "$CHECKSUM")" \
+            --arg asset_sha "sha256:${ASSET_SHA256}" \
+            --arg checksum_sha "sha256:${CHECKSUM_SHA256}" \
+            --argjson asset_size "$ASSET_SIZE" \
+            --argjson checksum_size "$CHECKSUM_SIZE" '
+              .id == $release_id
+              and .draft == true
+              and .immutable == false
+              and .tag_name == $tag
+              and .target_commitish == $target
+              and .name == $title
+              and .prerelease == false
+              and .author.login == "mhdk1602"
+              and .published_at == null
+              and (.body | type == "string" and test(
+                "<!-- fractal-c0-release-owner:[1-9][0-9]*:1:" + $target + " -->"
+              ))
+              and (.assets | type == "array" and length <= 2)
+              and ([.assets[].name] | length) == ([.assets[].name] | unique | length)
+              and all(.assets[];
+                (.name == $asset and .size == $asset_size and .digest == $asset_sha)
+                or (.name == $checksum and .size == $checksum_size
+                  and .digest == $checksum_sha)
+              )
+            ' "$draft" >/dev/null
+          if ! jq -e --arg name "$(basename "$ASSET")" \
+              '[.assets[] | select(.name == $name)] | length == 1' "$draft" >/dev/null; then
+            gh release upload "$C0_TAG" "$ASSET" --repo "$REPOSITORY"
+          fi
+          if ! jq -e --arg name "$(basename "$CHECKSUM")" \
+              '[.assets[] | select(.name == $name)] | length == 1' "$draft" >/dev/null; then
+            gh release upload "$C0_TAG" "$CHECKSUM" --repo "$REPOSITORY"
+          fi
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases/${RELEASE_ID}" \
+            | jq -S -c . > "${RUNNER_TEMP}/draft-release-api.json"
+          jq -e \
+            --argjson release_id "$RELEASE_ID" \
+            --arg tag "$C0_TAG" \
+            --arg target "$C0_SHA" \
+            --arg asset "$(basename "$ASSET")" \
+            --arg checksum "$(basename "$CHECKSUM")" \
+            --arg asset_sha "sha256:${ASSET_SHA256}" \
+            --arg checksum_sha "sha256:${CHECKSUM_SHA256}" \
+            --argjson asset_size "$ASSET_SIZE" \
+            --argjson checksum_size "$CHECKSUM_SIZE" '
+              .id == $release_id
+              and .draft == true
+              and .immutable == false
+              and .tag_name == $tag
+              and .target_commitish == $target
+              and ([.assets[].name] | sort) == ([$asset, $checksum] | sort)
+              and ([.assets[] | select(.name == $asset and .size == $asset_size
+                and .digest == $asset_sha)] | length) == 1
+              and ([.assets[] | select(.name == $checksum and .size == $checksum_size
+                and .digest == $checksum_sha)] | length) == 1
+            ' "${RUNNER_TEMP}/draft-release-api.json" >/dev/null
+
+      - name: Publish the newly completed immutable release
+        if: steps.release_state.outputs.mode != 'recover'
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release edit "$C0_TAG" --repo "$REPOSITORY" --draft=false --latest=false
+
+      - name: Read and verify the exact immutable release
+        shell: bash
+        env:
+          ASSET: ${{ steps.archive.outputs.asset }}
+          ASSET_SHA256: ${{ steps.archive.outputs.asset_sha256 }}
+          ASSET_SIZE: ${{ steps.archive.outputs.asset_size }}
+          CHECKSUM: ${{ steps.archive.outputs.checksum }}
+          CHECKSUM_SHA256: ${{ steps.archive.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ steps.archive.outputs.checksum_size }}
+          C0_SHA: ${{ inputs.c0_sha }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases/${RELEASE_ID}" \
+            | jq -S -c . > "${RUNNER_TEMP}/published-release-api.json"
+          jq -e \
+            --arg tag "$C0_TAG" \
+            --arg target "$C0_SHA" \
+            --arg title 'Confirmatory apparatus C0 evidence' \
+            --arg url "https://github.com/${REPOSITORY}/releases/tag/${C0_TAG}" \
+            --arg asset "$(basename "$ASSET")" \
+            --arg checksum "$(basename "$CHECKSUM")" \
+            --arg asset_sha "sha256:${ASSET_SHA256}" \
+            --arg checksum_sha "sha256:${CHECKSUM_SHA256}" \
+            --argjson asset_size "$ASSET_SIZE" \
+            --argjson checksum_size "$CHECKSUM_SIZE" '
+              .draft == false
+              and .immutable == true
+              and .tag_name == $tag
+              and .target_commitish == $target
+              and .name == $title
+              and .html_url == $url
+              and .prerelease == false
+              and .author.login == "mhdk1602"
+              and (.published_at | type == "string" and length > 0)
+              and ([.assets[].name] | sort) == ([$asset, $checksum] | sort)
+              and ([.assets[] | select(.name == $asset and .size == $asset_size
+                and .digest == $asset_sha)] | length) == 1
+              and ([.assets[] | select(.name == $checksum and .size == $checksum_size
+                and .digest == $checksum_sha)] | length) == 1
+            ' "${RUNNER_TEMP}/published-release-api.json" >/dev/null
+
+      - name: Re-read the now-immutable release tag target
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+        run: |
+          set -euo pipefail
+          record="${RUNNER_TEMP}/published-tag-ls-remote.txt"
+          base_ref="refs/tags/${C0_TAG}"
+          peeled_ref="${base_ref}^{}"
+          git ls-remote --exit-code --tags \
+            "https://github.com/${REPOSITORY}.git" \
+            "$base_ref" "$peeled_ref" | LC_ALL=C sort > "$record"
+          awk -v base="$base_ref" -v peeled="$peeled_ref" '
+            NF != 2 { exit 1 }
+            $1 !~ /^[0-9a-f]{40}$/ { exit 1 }
+            $2 != base && $2 != peeled { exit 1 }
+            { count[$2] += 1 }
+            END {
+              if (count[base] != 1 || count[peeled] > 1 || NR > 2) exit 1
+            }
+          ' "$record"
+          target="$(awk -v peeled="$peeled_ref" '$2 == peeled { print $1 }' "$record")"
+          if [[ -z "$target" ]]; then
+            target="$(awk -v base="$base_ref" '$2 == base { print $1 }' "$record")"
+          fi
+          test "$target" = "$C0_SHA"
+          printf '%s\n' "$target" > "${RUNNER_TEMP}/published-tag-target.txt"
+
+      - name: Verify the release attestation and exact asset attestation
+        shell: bash
+        env:
+          ASSET: ${{ steps.archive.outputs.asset }}
+        run: |
+          set -euo pipefail
+          release_verification="${RUNNER_TEMP}/release-verification.json"
+          asset_verification="${RUNNER_TEMP}/asset-verification.json"
+          verified=false
+          for attempt in $(seq 1 30); do
+            if gh release verify "$C0_TAG" --repo "$REPOSITORY" --format json \
+                > "$release_verification" \
+              && gh release verify-asset "$C0_TAG" "$ASSET" \
+                --repo "$REPOSITORY" --format json > "$asset_verification"; then
+              verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 30 ]]; then sleep 10; fi
+          done
+          test "$verified" = true
+          jq -e 'type == "object" or type == "array"' "$release_verification" >/dev/null
+          jq -e 'type == "object" or type == "array"' "$asset_verification" >/dev/null
+
+      - name: Require anonymous byte-for-byte readback
+        shell: bash
+        env:
+          ASSET_NAME: ${{ steps.archive.outputs.asset_name }}
+          ASSET_SHA256: ${{ steps.archive.outputs.asset_sha256 }}
+          ASSET_SIZE: ${{ steps.archive.outputs.asset_size }}
+          CHECKSUM_SHA256: ${{ steps.archive.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ steps.archive.outputs.checksum_size }}
+        run: |
+          set -euo pipefail
+          readback="${RUNNER_TEMP}/anonymous-readback"
+          install -d -m 0700 "$readback"
+          base="https://github.com/${REPOSITORY}/releases/download/${C0_TAG}"
+          env -i HOME="$readback" PATH='/usr/bin:/bin' \
+            curl --fail --silent --show-error --location \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              "$base/$ASSET_NAME" -o "$readback/$ASSET_NAME"
+          env -i HOME="$readback" PATH='/usr/bin:/bin' \
+            curl --fail --silent --show-error --location \
+              --proto '=https' --proto-redir '=https' --tlsv1.2 \
+              "$base/$ASSET_NAME.sha256" -o "$readback/$ASSET_NAME.sha256"
+          test "$(sha256sum "$readback/$ASSET_NAME" | cut -d ' ' -f 1)" = "$ASSET_SHA256"
+          test "$(stat -c %s "$readback/$ASSET_NAME")" = "$ASSET_SIZE"
+          test "$(sha256sum "$readback/$ASSET_NAME.sha256" | cut -d ' ' -f 1)" = \
+            "$CHECKSUM_SHA256"
+          test "$(stat -c %s "$readback/$ASSET_NAME.sha256")" = "$CHECKSUM_SIZE"
+          (
+            cd "$readback"
+            sha256sum -c "$ASSET_NAME.sha256"
+          )
+
+      - name: Materialize the C1-ready immutable-release binding
+        id: binding
+        shell: bash
+        env:
+          ASSET_NAME: ${{ steps.archive.outputs.asset_name }}
+          ASSET_SHA256: ${{ steps.archive.outputs.asset_sha256 }}
+          ASSET_SIZE: ${{ steps.archive.outputs.asset_size }}
+          CHECKSUM_SHA256: ${{ steps.archive.outputs.checksum_sha256 }}
+          CHECKSUM_SIZE: ${{ steps.archive.outputs.checksum_size }}
+          C0_SHA: ${{ inputs.c0_sha }}
+          IMAGE_RUN_ID: ${{ inputs.image_run_id }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/c0-evidence-release-binding"
+          install -d -m 0700 "$output"
+          evidence="${RUNNER_TEMP}/c0-evidence"
+          promotion="$evidence/oci-promotion-receipt.json"
+          candidate="$evidence/candidate-rehearsal-readback/candidate-closure.json"
+          gate="$evidence/provider-rehearsal-readback/provider-rehearsal-production-gate.json"
+          rehearsal="$evidence/provider-rehearsal-readback/provider-rehearsal-receipt.json"
+          rehearsal_verification="$evidence/provider-rehearsal-readback/rehearsal-attestation-verification.json"
+          control_instantiation="$evidence/production-control-instantiation/c0-control-instantiation-receipt.json"
+          environment_control="$evidence/github-environment-control-receipt.json"
+          for required in "$promotion" "$candidate" "$gate" "$rehearsal" \
+              "$rehearsal_verification" "$control_instantiation" \
+              "$environment_control"; do
+            test -f "$required"
+          done
+          candidate_sha256="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
+          promotion_sha256="$(sha256sum "$promotion" | cut -d ' ' -f 1)"
+          gate_sha256="$(sha256sum "$gate" | cut -d ' ' -f 1)"
+          rehearsal_sha256="$(sha256sum "$rehearsal" | cut -d ' ' -f 1)"
+          rehearsal_verification_sha256="$(sha256sum "$rehearsal_verification" \
+            | cut -d ' ' -f 1)"
+          control_instantiation_sha256="$(sha256sum "$control_instantiation" \
+            | cut -d ' ' -f 1)"
+          environment_control_sha256="$(sha256sum "$environment_control" \
+            | cut -d ' ' -f 1)"
+          test "$(jq -r .current_c0_commit "$promotion")" = "$C0_SHA"
+          test "$(jq -r .bootstrap_candidate_source_commit "$promotion")" = \
+            "$(jq -r .github_sha "$candidate")"
+          test "$(jq -r .bootstrap_candidate_run_id "$promotion")" = \
+            "$(jq -r .github_run_id "$candidate")"
+          test "$(jq -r .build_context_tree_sha256 "$promotion")" = \
+            "$(jq -r .build_context_tree_sha256 "$candidate")"
+          test "$(jq -r .scientific_index_digest "$promotion")" = \
+            "$(jq -r .scientific_image_index_digest "$candidate")"
+          test "$(jq -r .release_index_digest "$promotion")" = \
+            "$(jq -r .release_image_index_digest "$candidate")"
+          test "$(jq -r .c0_commit "$rehearsal")" = "$C0_SHA"
+          test "$(jq -r .candidate_image_source_commit "$rehearsal")" = \
+            "$(jq -r .github_sha "$candidate")"
+          test "$(jq -r .candidate_image_closure_file_sha256 "$rehearsal")" = \
+            "$candidate_sha256"
+          test "$(jq -r .build_context_tree_sha256 "$rehearsal")" = \
+            "$(jq -r .build_context_tree_sha256 "$candidate")"
+          test "$(jq -r .run_id "$rehearsal")" = "$(jq -r .rehearsal_run_id "$gate")"
+          test "$(jq -r .provider_rehearsal_receipt_sha256 "$gate")" = \
+            "$rehearsal_sha256"
+          test "$(jq -r .rehearsal_attestation_verification_sha256 "$gate")" = \
+            "$rehearsal_verification_sha256"
+          test "$(jq -r .apparatus_commit "$control_instantiation")" = "$C0_SHA"
+          test "$(jq -r .candidate_image_source_commit "$control_instantiation")" = \
+            "$(jq -r .github_sha "$candidate")"
+          test "$(jq -r .candidate_manifest_sha256 "$control_instantiation")" = \
+            "$(jq -r .manifest_sha256 "$rehearsal")"
+          jq -e '
+            (.candidate_manifest_file_sha256 | test("^[0-9a-f]{64}$"))
+            and (.candidate_manifest_assembly_receipt_file_sha256
+              | test("^[0-9a-f]{64}$"))
+          ' "$control_instantiation" >/dev/null
+          candidate_manifest_archive_member_path="production-control-instantiation/$(jq -er \
+            .candidate_manifest_relative_path "$control_instantiation")"
+          candidate_assembly_relative="$(jq -er \
+            .candidate_manifest_assembly_receipt_relative_path \
+            "$control_instantiation")"
+          candidate_manifest_assembly_receipt_archive_member_path="production-control-instantiation/${candidate_assembly_relative}"
+          test "$candidate_manifest_archive_member_path" = \
+            'production-control-instantiation/candidate-manifest-package/candidate-study-manifest.json'
+          test "$candidate_manifest_assembly_receipt_archive_member_path" = \
+            'production-control-instantiation/candidate-manifest-package/candidate-manifest-assembly-receipt.json'
+          test -f "$evidence/$candidate_manifest_archive_member_path"
+          test -f "$evidence/$candidate_manifest_assembly_receipt_archive_member_path"
+          test "$(sha256sum "$evidence/$candidate_manifest_archive_member_path" \
+            | cut -d ' ' -f 1)" = \
+            "$(jq -r .candidate_manifest_file_sha256 "$control_instantiation")"
+          test "$(sha256sum \
+            "$evidence/$candidate_manifest_assembly_receipt_archive_member_path" \
+            | cut -d ' ' -f 1)" = \
+            "$(jq -r .candidate_manifest_assembly_receipt_file_sha256 \
+              "$control_instantiation")"
+          test "$(jq -r .schema_version "$environment_control")" = \
+            'fractal-github-environment-control-v1'
+          jq -S -c -n \
+            --arg build_context_tree_sha256 "$(jq -r .build_context_tree_sha256 \
+              "$candidate")" \
+            --arg c0_commit "$C0_SHA" \
+            --arg candidate_bootstrap_closure_sha256 \
+              "$(jq -r .candidate_bootstrap_closure_sha256 "$rehearsal")" \
+            --arg candidate_image_closure_sha256 "$candidate_sha256" \
+            --argjson candidate_image_run_id "$(jq -r .github_run_id "$candidate")" \
+            --arg candidate_image_source_commit "$(jq -r .github_sha "$candidate")" \
+            --arg candidate_manifest_archive_member_path \
+              "$candidate_manifest_archive_member_path" \
+            --arg candidate_manifest_assembly_receipt_archive_member_path \
+              "$candidate_manifest_assembly_receipt_archive_member_path" \
+            --arg candidate_manifest_assembly_receipt_file_sha256 \
+              "$(jq -r .candidate_manifest_assembly_receipt_file_sha256 \
+                "$control_instantiation")" \
+            --arg candidate_manifest_file_sha256 \
+              "$(jq -r .candidate_manifest_file_sha256 "$control_instantiation")" \
+            --arg github_environment_control_receipt_file_sha256 \
+              "$environment_control_sha256" \
+            --arg oci_promotion_receipt_sha256 "$promotion_sha256" \
+            --argjson production_image_run_id "$IMAGE_RUN_ID" \
+            --arg production_control_instantiation_receipt_file_sha256 \
+              "$control_instantiation_sha256" \
+            --arg provider_phase_plan_closure_sha256 \
+              "$(jq -r .plan_closure_sha256 "$rehearsal")" \
+            --arg provider_rehearsal_gate_sha256 "$gate_sha256" \
+            --arg provider_rehearsal_receipt_sha256 "$rehearsal_sha256" \
+            --argjson provider_rehearsal_run_id "$(jq -r .run_id "$rehearsal")" \
+            --arg rehearsal_attestation_verification_sha256 \
+              "$rehearsal_verification_sha256" \
+            --arg rehearsal_manifest_sha256 "$(jq -r .manifest_sha256 "$rehearsal")" \
+            --arg release_image_index_digest "$(jq -r .release_image_index_digest \
+              "$candidate")" \
+            --arg scientific_image_index_digest "$(jq -r .scientific_image_index_digest \
+              "$candidate")" '
+              {build_context_tree_sha256: $build_context_tree_sha256,
+               c0_commit: $c0_commit,
+               candidate_bootstrap_closure_sha256:
+                 $candidate_bootstrap_closure_sha256,
+               candidate_image_closure_sha256: $candidate_image_closure_sha256,
+               candidate_image_run_id: $candidate_image_run_id,
+               candidate_image_source_commit: $candidate_image_source_commit,
+               candidate_manifest_archive_member_path:
+                 $candidate_manifest_archive_member_path,
+               candidate_manifest_assembly_receipt_archive_member_path:
+                 $candidate_manifest_assembly_receipt_archive_member_path,
+               candidate_manifest_assembly_receipt_file_sha256:
+                 $candidate_manifest_assembly_receipt_file_sha256,
+               candidate_manifest_file_sha256: $candidate_manifest_file_sha256,
+               github_environment_control_receipt_file_sha256:
+                 $github_environment_control_receipt_file_sha256,
+               oci_promotion_receipt_sha256: $oci_promotion_receipt_sha256,
+               production_image_run_id: $production_image_run_id,
+               production_control_instantiation_receipt_file_sha256:
+                 $production_control_instantiation_receipt_file_sha256,
+               provider_phase_plan_closure_sha256:
+                 $provider_phase_plan_closure_sha256,
+               provider_rehearsal_gate_sha256: $provider_rehearsal_gate_sha256,
+               provider_rehearsal_receipt_sha256:
+                 $provider_rehearsal_receipt_sha256,
+               provider_rehearsal_run_id: $provider_rehearsal_run_id,
+               rehearsal_attestation_verification_sha256:
+                 $rehearsal_attestation_verification_sha256,
+               rehearsal_manifest_sha256: $rehearsal_manifest_sha256,
+               release_image_index_digest: $release_image_index_digest,
+               schema_version: "fractal-c0-apparatus-evidence-closure-v5",
+               scientific_image_index_digest: $scientific_image_index_digest}' \
+            > "$output/apparatus-evidence.json"
+          apparatus_evidence_sha256="$(sha256sum "$output/apparatus-evidence.json" \
+            | cut -d ' ' -f 1)"
+          tag_readback="${RUNNER_TEMP}/published-tag-ls-remote.txt"
+          tag_target="${RUNNER_TEMP}/published-tag-target.txt"
+          test -f "$tag_readback"
+          test "$(cat "$tag_target")" = "$C0_SHA"
+          tag_readback_sha256="$(sha256sum "$tag_readback" | cut -d ' ' -f 1)"
+          release_api_sha256="$(sha256sum "${RUNNER_TEMP}/published-release-api.json" \
+            | cut -d ' ' -f 1)"
+          release_verification_sha256="$(sha256sum "${RUNNER_TEMP}/release-verification.json" \
+            | cut -d ' ' -f 1)"
+          asset_verification_sha256="$(sha256sum "${RUNNER_TEMP}/asset-verification.json" \
+            | cut -d ' ' -f 1)"
+          # shellcheck disable=SC2094
+          jq -S -c -n \
+            --arg apparatus_evidence_sha256 "$apparatus_evidence_sha256" \
+            --arg anonymous_asset_sha256 "$ASSET_SHA256" \
+            --argjson anonymous_asset_size "$ASSET_SIZE" \
+            --arg anonymous_checksum_sha256 "$CHECKSUM_SHA256" \
+            --argjson anonymous_checksum_size "$CHECKSUM_SIZE" \
+            --arg asset_attestation_output_sha256 "$asset_verification_sha256" \
+            --arg release_api_output_sha256 "$release_api_sha256" \
+            --arg release_tag_readback_sha256 "$tag_readback_sha256" \
+            --arg release_tag_target_commit "$C0_SHA" \
+            --arg release_attestation_output_sha256 "$release_verification_sha256" '
+              {anonymous_asset_sha256: $anonymous_asset_sha256,
+               anonymous_asset_size: $anonymous_asset_size,
+               anonymous_checksum_sha256: $anonymous_checksum_sha256,
+               anonymous_checksum_size: $anonymous_checksum_size,
+               asset_attestation_output_sha256: $asset_attestation_output_sha256,
+               asset_attestation_verified: true,
+               release_api_output_sha256: $release_api_output_sha256,
+               release_tag_readback_sha256: $release_tag_readback_sha256,
+               release_tag_target_commit: $release_tag_target_commit,
+               release_tag_target_verified: true,
+               release_attestation_output_sha256: $release_attestation_output_sha256,
+               release_attestation_verified: true,
+               schema_version: "fractal-c0-evidence-release-verification-v2"}' \
+            > "$output/verification-receipt.json"
+          verification_sha256="$(sha256sum "$output/verification-receipt.json" \
+            | cut -d ' ' -f 1)"
+          asset_url="https://github.com/${REPOSITORY}/releases/download/${C0_TAG}/${ASSET_NAME}"
+          # shellcheck disable=SC2094
+          jq -S -c -n \
+            --arg asset_name "$ASSET_NAME" \
+            --arg asset_sha256 "$ASSET_SHA256" \
+            --argjson asset_size "$ASSET_SIZE" \
+            --arg asset_url "$asset_url" \
+            --arg checksum_asset_sha256 "$CHECKSUM_SHA256" \
+            --argjson checksum_asset_size "$CHECKSUM_SIZE" \
+            --arg repository "$REPOSITORY" \
+            --arg target_commit "$C0_SHA" \
+            --arg verification_receipt_sha256 "$verification_sha256" \
+            --slurpfile apparatus "$output/apparatus-evidence.json" \
+            --slurpfile verification "$output/verification-receipt.json" '
+              {apparatus_evidence: $apparatus[0],
+               apparatus_evidence_sha256: $apparatus_evidence_sha256,
+               asset_name: $asset_name,
+               asset_sha256: $asset_sha256,
+               asset_size: $asset_size,
+               asset_url: $asset_url,
+               checksum_asset_name: ($asset_name + ".sha256"),
+               checksum_asset_sha256: $checksum_asset_sha256,
+               checksum_asset_size: $checksum_asset_size,
+               checksum_asset_url: ($asset_url + ".sha256"),
+               immutable_release: true,
+               release_tag: "confirmatory-apparatus-c0",
+               release_url:
+                 "https://github.com/mhdk1602/fractal-ann-diagnostics/releases/tag/confirmatory-apparatus-c0",
+               repository: $repository,
+               schema_version: "fractal-c0-evidence-release-binding-v2",
+               target_commit: $target_commit,
+               verification_receipt: $verification[0],
+               verification_receipt_sha256: $verification_receipt_sha256}' \
+            > "$output/c0-evidence-release-binding.json"
+          PYTHONPATH=src /usr/bin/python3 - \
+            "$output/c0-evidence-release-binding.json" "$C0_SHA" <<'PY'
+          import json
+          import pathlib
+          import sys
+          from fractal_ann_diagnostics.c0_evidence_release import (
+              validate_c0_evidence_release_binding,
+          )
+
+          encoded = pathlib.Path(sys.argv[1]).read_bytes()
+          binding = json.loads(encoded)
+          validate_c0_evidence_release_binding(binding, frozen=True, code_commit=sys.argv[2])
+          canonical = (
+              json.dumps(binding, sort_keys=True, separators=(",", ":"), allow_nan=False)
+              + "\n"
+          ).encode("ascii")
+          if encoded != canonical:
+              raise SystemExit("C0 evidence release binding is not canonical JSON plus LF")
+          PY
+          cp -- "${RUNNER_TEMP}/published-release-api.json" "$output/published-release-api.json"
+          cp -- "$tag_readback" "$output/published-tag-ls-remote.txt"
+          cp -- "$tag_target" "$output/published-tag-target.txt"
+          cp -- "${RUNNER_TEMP}/release-verification.json" "$output/release-verification.json"
+          cp -- "${RUNNER_TEMP}/asset-verification.json" "$output/asset-verification.json"
+          checksum_tmp="${RUNNER_TEMP}/c0-evidence-binding.SHA256SUMS.tmp"
+          test ! -e "$checksum_tmp"
+          (
+            cd "$output"
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | LC_ALL=C sort -z | xargs -0 sha256sum
+          ) > "$checksum_tmp"
+          install -m 0444 -- "$checksum_tmp" "$output/SHA256SUMS"
+          (
+            cd "$output"
+            sha256sum -c SHA256SUMS
+            chmod 0444 ./*
+          )
+          printf 'binding=%s\n' "$output/c0-evidence-release-binding.json" >> "$GITHUB_OUTPUT"
+
+      - name: Retain the C1-ready release binding
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-c0-evidence-release-binding-${{ inputs.c0_sha }}
+          path: ${{ runner.temp }}/c0-evidence-release-binding
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  cleanup-draft:
+    environment: confirmatory
+    name: Delete an unpublished draft after failure
+    needs: publish
+    if: >-
+      ${{ always() && needs.publish.result == 'failure'
+          && needs.publish.outputs.release_id != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Remove only a still-mutable draft
+        shell: bash
+        env:
+          C0_SHA: ${{ inputs.c0_sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.publish.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          [[ "$C0_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
+          release="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/mhdk1602/fractal-ann-diagnostics/releases/${RELEASE_ID}" \
+            2>/dev/null || true)"
+          if [[ -z "$release" ]]; then exit 0; fi
+          owner_marker="fractal-c0-release-owner:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${C0_SHA}"
+          if jq -e \
+              --argjson release_id "$RELEASE_ID" \
+              --arg c0 "$C0_SHA" \
+              --arg marker "$owner_marker" '
+                .id == $release_id
+                and .draft == true
+                and .immutable == false
+                and .tag_name == "confirmatory-apparatus-c0"
+                and .target_commitish == $c0
+                and (.body | type == "string" and contains($marker))
+              ' <<<"$release" >/dev/null; then
+            gh api --method DELETE \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/mhdk1602/fractal-ann-diagnostics/releases/${RELEASE_ID}"
+          fi

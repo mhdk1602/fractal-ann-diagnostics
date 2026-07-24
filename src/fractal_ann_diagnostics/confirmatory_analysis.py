@@ -4,6 +4,7 @@ The runner owns validation of the complete analysis matrix.  No outcome row is
 silently discarded: every registered trial must have exactly one row for every
 registered action, and a non-completed action must carry an explicit state.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -58,18 +59,19 @@ from .study import (
     SealedRunReceipt,
     StudyManifestError,
     manifest_sha256,
+    revision_sha256,
     sealed_receipt_uri,
     validate_study_manifest,
 )
 
-ACTION_PANEL_ROW_SCHEMA = "fractal-prelabel-action-row-v2"
-ACTION_PANEL_ARTIFACT_SCHEMA = "fractal-prelabel-action-panel-v2"
-ACTION_PANEL_ADMISSION_RECORD_SCHEMA = "fractal-action-panel-admission-record-v1"
-ACTION_PANEL_ADMISSION_RECEIPT_SCHEMA = "fractal-action-panel-admission-receipt-v1"
+ACTION_PANEL_ROW_SCHEMA = "fractal-prelabel-action-row-v3"
+ACTION_PANEL_ARTIFACT_SCHEMA = "fractal-prelabel-action-panel-v3"
+ACTION_PANEL_ADMISSION_RECORD_SCHEMA = "fractal-action-panel-admission-record-v2"
+ACTION_PANEL_ADMISSION_RECEIPT_SCHEMA = "fractal-action-panel-admission-receipt-v2"
 ACTION_PANEL_FACTORY_VERSION = "fractal-action-panel-factory-v1"
-CONFIRMATORY_INPUT_SCHEMA = "fractal-confirmatory-input-v5"
-CONFIRMATORY_ROW_SCHEMA = "fractal-confirmatory-row-v1"
-CONFIRMATORY_RESULT_SCHEMA = "fractal-confirmatory-result-v4"
+CONFIRMATORY_INPUT_SCHEMA = "fractal-confirmatory-input-v6"
+CONFIRMATORY_ROW_SCHEMA = "fractal-confirmatory-row-v2"
+CONFIRMATORY_RESULT_SCHEMA = "fractal-confirmatory-result-v5"
 ExecutionState = Literal["completed", "failed", "abstained"]
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -80,6 +82,7 @@ _PRELABEL_ACTION_ROW_FIELDS = {
     "audit_record_sha256",
     "controller_selected",
     "entitlement_violations",
+    "execution_position",
     "execution_state",
     "failure_state",
     "family_key",
@@ -118,6 +121,7 @@ _ACTION_PANEL_ADMISSION_RECORD_FIELDS = {
     "controller_selected",
     "document_universe_sha256",
     "environment_sha256",
+    "execution_position",
     "execution_state",
     "failure_code",
     "failure_finished_monotonic_ns",
@@ -150,6 +154,7 @@ _ROW_FIELDS = {
     "controller_selected",
     "corpus_id",
     "entitlement_violations",
+    "execution_position",
     "evidence_sufficient",
     "execution_state",
     "failure_state",
@@ -226,24 +231,18 @@ def _decode_canonical_json_object(
         except UnicodeEncodeError as exc:
             raise ConfirmatoryAnalysisError(f"{label} must be valid UTF-8") from exc
     if len(supplied_bytes) > _MAX_ACTION_PANEL_BYTES:
-        raise ConfirmatoryAnalysisError(
-            f"{label} exceeds the {_MAX_ACTION_PANEL_BYTES}-byte limit"
-        )
+        raise ConfirmatoryAnalysisError(f"{label} exceeds the {_MAX_ACTION_PANEL_BYTES}-byte limit")
 
     def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
             if key in result:
-                raise ConfirmatoryAnalysisError(
-                    f"{label} contains duplicate key {key!r}"
-                )
+                raise ConfirmatoryAnalysisError(f"{label} contains duplicate key {key!r}")
             result[key] = value
         return result
 
     def reject_nonfinite(value: str) -> None:
-        raise ConfirmatoryAnalysisError(
-            f"{label} contains non-finite number {value!r}"
-        )
+        raise ConfirmatoryAnalysisError(f"{label} contains non-finite number {value!r}")
 
     try:
         decoded = json.loads(
@@ -252,9 +251,7 @@ def _decode_canonical_json_object(
             parse_constant=reject_nonfinite,
         )
     except json.JSONDecodeError as exc:
-        raise ConfirmatoryAnalysisError(
-            f"{label} must be valid JSON: {exc.msg}"
-        ) from exc
+        raise ConfirmatoryAnalysisError(f"{label} must be valid JSON: {exc.msg}") from exc
     except RecursionError as exc:
         raise ConfirmatoryAnalysisError(f"{label} exceeds the JSON nesting limit") from exc
     if not isinstance(decoded, Mapping):
@@ -287,9 +284,7 @@ def _write_action_panel_file(
 
 def _require_sha256(name: str, value: str) -> str:
     if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
-        raise ConfirmatoryAnalysisError(
-            f"{name} must be a lowercase SHA-256 hex digest"
-        )
+        raise ConfirmatoryAnalysisError(f"{name} must be a lowercase SHA-256 hex digest")
     return value
 
 
@@ -334,6 +329,52 @@ def _json_feature(value: object) -> object:
     )
 
 
+def _assert_balanced_execution_positions(
+    rows: Sequence[object],
+    *,
+    action_set: Sequence[str],
+    trial_attribute: str,
+    family_attribute: str,
+    corpus_attribute: str | None = None,
+) -> None:
+    """Validate complete Latin rows and floor/ceiling position balance."""
+
+    actions = tuple(action_set)
+    if len(actions) != 4 or len(set(actions)) != 4:
+        raise ConfirmatoryAnalysisError("position balance requires the registered four actions")
+    by_trial: dict[tuple[str, str], list[object]] = {}
+    balance_groups: dict[tuple[str, ...], list[object]] = {}
+    for row in rows:
+        trial = getattr(row, trial_attribute)
+        family = getattr(row, family_attribute)
+        corpus = "single-corpus" if corpus_attribute is None else getattr(row, corpus_attribute)
+        by_trial.setdefault((corpus, trial), []).append(row)
+        balance_groups.setdefault(("corpus", corpus), []).append(row)
+        balance_groups.setdefault(("query-family", corpus, family), []).append(row)
+    expected_positions = set(range(len(actions)))
+    for key, trial_rows in by_trial.items():
+        positions = [getattr(row, "execution_position") for row in trial_rows]
+        if len(positions) != len(actions) or set(positions) != expected_positions:
+            raise ConfirmatoryAnalysisError(
+                f"trial {key!r} has missing, duplicate, or impossible execution positions"
+            )
+    for key, group_rows in balance_groups.items():
+        trials = {getattr(row, trial_attribute) for row in group_rows}
+        for action in actions:
+            counts = [
+                sum(
+                    getattr(row, "action") == action
+                    and getattr(row, "execution_position") == position
+                    for row in group_rows
+                )
+                for position in range(len(actions))
+            ]
+            if sum(counts) != len(trials) or max(counts) - min(counts) > 1:
+                raise ConfirmatoryAnalysisError(
+                    f"action execution positions are not floor/ceiling balanced in {key!r}"
+                )
+
+
 @dataclass(frozen=True)
 class PreLabelActionRow:
     """One label-free online action outcome anchored before label release."""
@@ -342,6 +383,7 @@ class PreLabelActionRow:
     family_key: str
     action: str
     action_order: int
+    execution_position: int
     audit_record_sha256: str | None
     execution_state: ExecutionState
     failure_state: str | None
@@ -367,6 +409,15 @@ class PreLabelActionRow:
         ):
             raise ConfirmatoryAnalysisError("action_order must be a non-negative integer")
         object.__setattr__(self, "action_order", int(self.action_order))
+        if (
+            isinstance(self.execution_position, bool)
+            or not isinstance(self.execution_position, (int, np.integer))
+            or not 0 <= int(self.execution_position) < 4
+        ):
+            raise ConfirmatoryAnalysisError(
+                "execution_position must be an integer from zero through three"
+            )
+        object.__setattr__(self, "execution_position", int(self.execution_position))
         if self.audit_record_sha256 is not None:
             _require_sha256("audit_record_sha256", self.audit_record_sha256)
         if not isinstance(self.execution_state, str) or self.execution_state not in {
@@ -386,9 +437,7 @@ class PreLabelActionRow:
             or not isinstance(self.entitlement_violations, (int, np.integer))
             or int(self.entitlement_violations) < 0
         ):
-            raise ConfirmatoryAnalysisError(
-                "entitlement_violations must be a non-negative integer"
-            )
+            raise ConfirmatoryAnalysisError("entitlement_violations must be a non-negative integer")
         object.__setattr__(self, "entitlement_violations", int(self.entitlement_violations))
         returned = tuple(self.returned_document_ids)
         if any(type(value) is not int or value < 0 for value in returned):
@@ -401,13 +450,9 @@ class PreLabelActionRow:
 
         if self.execution_state == "completed":
             if self.failure_state is not None:
-                raise ConfirmatoryAnalysisError(
-                    "completed rows cannot carry a failure_state"
-                )
+                raise ConfirmatoryAnalysisError("completed rows cannot carry a failure_state")
             if self.audit_record_sha256 is None:
-                raise ConfirmatoryAnalysisError(
-                    "completed rows require an audit_record_sha256"
-                )
+                raise ConfirmatoryAnalysisError("completed rows require an audit_record_sha256")
         else:
             if self.failure_state is None:
                 raise ConfirmatoryAnalysisError(
@@ -419,17 +464,11 @@ class PreLabelActionRow:
                     "failed and abstained rows cannot emit document IDs"
                 )
             if self.execution_state == "abstained" and self.audit_record_sha256 is None:
-                raise ConfirmatoryAnalysisError(
-                    "abstained rows require an audit_record_sha256"
-                )
+                raise ConfirmatoryAnalysisError("abstained rows require an audit_record_sha256")
             if self.execution_state == "failed" and self.audit_record_sha256 is not None:
-                raise ConfirmatoryAnalysisError(
-                    "failed rows cannot claim a governed audit record"
-                )
+                raise ConfirmatoryAnalysisError("failed rows cannot claim a governed audit record")
         if self.feature_values is not None:
-            values = tuple(
-                np.nan if value is None else value for value in self.feature_values
-            )
+            values = tuple(np.nan if value is None else value for value in self.feature_values)
             for value in values:
                 _json_feature(value)
             object.__setattr__(self, "feature_values", values)
@@ -470,6 +509,7 @@ class PreLabelActionRow:
             family_key=row["family_key"],
             action=row["action"],
             action_order=row["action_order"],
+            execution_position=row["execution_position"],
             audit_record_sha256=row["audit_record_sha256"],
             execution_state=row["execution_state"],
             failure_state=row["failure_state"],
@@ -488,6 +528,7 @@ class PreLabelActionRow:
             "audit_record_sha256": self.audit_record_sha256,
             "controller_selected": self.controller_selected,
             "entitlement_violations": self.entitlement_violations,
+            "execution_position": self.execution_position,
             "execution_state": self.execution_state,
             "failure_state": self.failure_state,
             "family_key": self.family_key,
@@ -593,9 +634,7 @@ class ActionPanelArtifact:
                     f"trial {trial_key!r} does not contain the complete action set"
                 )
             if len({row.family_key for row in trial_rows}) != 1:
-                raise ConfirmatoryAnalysisError(
-                    "one trial cannot be rebound across query families"
-                )
+                raise ConfirmatoryAnalysisError("one trial cannot be rebound across query families")
             if sum(row.controller_selected for row in trial_rows) != 1:
                 raise ConfirmatoryAnalysisError(
                     "each trial needs exactly one controller-selected action"
@@ -605,6 +644,12 @@ class ActionPanelArtifact:
                 raise ConfirmatoryAnalysisError(
                     "each trial needs one completed exact-authorized oracle action"
                 )
+        _assert_balanced_execution_positions(
+            rows,
+            action_set=actions,
+            trial_attribute="trial_key",
+            family_attribute="family_key",
+        )
         ordered = tuple(
             sorted(
                 rows,
@@ -624,13 +669,9 @@ class ActionPanelArtifact:
         )
         action_set = artifact["action_set"]
         if not isinstance(action_set, list):
-            raise ConfirmatoryAnalysisError(
-                "action panel artifact action_set must be an array"
-            )
+            raise ConfirmatoryAnalysisError("action panel artifact action_set must be an array")
         if not all(isinstance(action, str) for action in action_set):
-            raise ConfirmatoryAnalysisError(
-                "action panel artifact action_set must contain strings"
-            )
+            raise ConfirmatoryAnalysisError("action panel artifact action_set must contain strings")
         rows = artifact["rows"]
         if not isinstance(rows, list):
             raise ConfirmatoryAnalysisError("action panel artifact rows must be an array")
@@ -687,6 +728,7 @@ class ActionPanelAdmissionRecord:
     family_key: str
     action: str
     action_order: int
+    execution_position: int
     controller_selected: bool
     execution_state: ExecutionState
     controller_risk_score: float
@@ -725,6 +767,14 @@ class ActionPanelAdmissionRecord:
             or self.action_order < 0
         ):
             raise ConfirmatoryAnalysisError("action_order must be a non-negative integer")
+        if (
+            isinstance(self.execution_position, bool)
+            or not isinstance(self.execution_position, int)
+            or not 0 <= self.execution_position < 4
+        ):
+            raise ConfirmatoryAnalysisError(
+                "execution_position must be an integer from zero through three"
+            )
         if type(self.controller_selected) is not bool:
             raise ConfirmatoryAnalysisError("controller_selected must be boolean")
         if self.execution_state not in {"completed", "failed", "abstained"}:
@@ -767,9 +817,7 @@ class ActionPanelAdmissionRecord:
             or not isinstance(self.authorization_mask_size, int)
             or self.authorization_mask_size <= 0
         ):
-            raise ConfirmatoryAnalysisError(
-                "authorization_mask_size must be a positive integer"
-            )
+            raise ConfirmatoryAnalysisError("authorization_mask_size must be a positive integer")
         if type(self.policy_available) is not bool:
             raise ConfirmatoryAnalysisError("policy_available must be boolean")
         expected_authorization_digest = _sha256(
@@ -811,9 +859,7 @@ class ActionPanelAdmissionRecord:
                 ("failure_finished_monotonic_ns", self.failure_finished_monotonic_ns),
             ):
                 if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-                    raise ConfirmatoryAnalysisError(
-                        f"{name} must be a non-negative integer"
-                    )
+                    raise ConfirmatoryAnalysisError(f"{name} must be a non-negative integer")
             if self.failure_finished_monotonic_ns <= self.failure_started_monotonic_ns:
                 raise ConfirmatoryAnalysisError(
                     "failure timing must have positive monotonic duration"
@@ -856,9 +902,7 @@ class ActionPanelAdmissionRecord:
 
     def computed_failure_timing_sha256(self) -> str:
         if self.execution_state != "failed":
-            raise ConfirmatoryAnalysisError(
-                "only failed admissions have a failure timing digest"
-            )
+            raise ConfirmatoryAnalysisError("only failed admissions have a failure timing digest")
         return _sha256(
             {
                 "action": self.action,
@@ -890,9 +934,7 @@ class ActionPanelAdmissionRecord:
             label="action panel admission record",
         )
         reasons = row["controller_reasons"]
-        if not isinstance(reasons, list) or not all(
-            isinstance(reason, str) for reason in reasons
-        ):
+        if not isinstance(reasons, list) or not all(isinstance(reason, str) for reason in reasons):
             raise ConfirmatoryAnalysisError(
                 "action panel admission controller_reasons must be a string array"
             )
@@ -901,6 +943,7 @@ class ActionPanelAdmissionRecord:
             family_key=row["family_key"],
             action=row["action"],
             action_order=row["action_order"],
+            execution_position=row["execution_position"],
             controller_selected=row["controller_selected"],
             execution_state=row["execution_state"],
             controller_risk_score=row["controller_risk_score"],
@@ -945,6 +988,7 @@ class ActionPanelAdmissionRecord:
             "controller_selected": self.controller_selected,
             "document_universe_sha256": self.document_universe_sha256,
             "environment_sha256": self.environment_sha256,
+            "execution_position": self.execution_position,
             "execution_state": self.execution_state,
             "failure_code": self.failure_code,
             "failure_finished_monotonic_ns": self.failure_finished_monotonic_ns,
@@ -988,9 +1032,7 @@ class ActionPanelAdmissionReceipt:
             _require_sha256(name, getattr(self, name))
         _require_identifier("corpus", self.corpus)
         if self.partition_label not in {"primary", "reserve"}:
-            raise ConfirmatoryAnalysisError(
-                "partition_label must be 'primary' or 'reserve'"
-            )
+            raise ConfirmatoryAnalysisError("partition_label must be 'primary' or 'reserve'")
         if self.factory_version != ACTION_PANEL_FACTORY_VERSION:
             raise ConfirmatoryAnalysisError(
                 f"factory_version must equal {ACTION_PANEL_FACTORY_VERSION!r}"
@@ -1007,9 +1049,7 @@ class ActionPanelAdmissionReceipt:
             raise ConfirmatoryAnalysisError("audit_chain_length must be positive")
         audit_hashes = tuple(self.audit_record_sha256s)
         if len(audit_hashes) != self.audit_chain_length:
-            raise ConfirmatoryAnalysisError(
-                "audit_record_sha256s must match audit_chain_length"
-            )
+            raise ConfirmatoryAnalysisError("audit_record_sha256s must match audit_chain_length")
         if len(audit_hashes) != len(set(audit_hashes)):
             raise ConfirmatoryAnalysisError("audit record digests must be unique")
         for digest in audit_hashes:
@@ -1022,9 +1062,7 @@ class ActionPanelAdmissionReceipt:
         if not records or not all(
             isinstance(record, ActionPanelAdmissionRecord) for record in records
         ):
-            raise ConfirmatoryAnalysisError(
-                "admission receipt records must contain typed records"
-            )
+            raise ConfirmatoryAnalysisError("admission receipt records must contain typed records")
         keys = [(record.trial_key, record.action) for record in records]
         if len(keys) != len(set(keys)):
             raise ConfirmatoryAnalysisError(
@@ -1058,9 +1096,7 @@ class ActionPanelAdmissionReceipt:
                     "admission receipt audit sequences are not contiguous"
                 )
             if record.audit_previous_record_sha256 != previous:
-                raise ConfirmatoryAnalysisError(
-                    "admission receipt audit predecessor mismatch"
-                )
+                raise ConfirmatoryAnalysisError("admission receipt audit predecessor mismatch")
             observed_hashes.append(record.audit_record_sha256)
             previous = record.audit_record_sha256
         if tuple(observed_hashes) != audit_hashes or previous != self.audit_head_sha256:
@@ -1091,6 +1127,15 @@ class ActionPanelAdmissionReceipt:
                 raise ConfirmatoryAnalysisError(
                     "paired admissions do not share one trusted policy universe"
                 )
+        action_sets = {frozenset(record.action for record in rows) for rows in by_trial.values()}
+        if len(action_sets) != 1:
+            raise ConfirmatoryAnalysisError("admission trials do not share one action set")
+        _assert_balanced_execution_positions(
+            records,
+            action_set=tuple(sorted(next(iter(action_sets)))),
+            trial_attribute="trial_key",
+            family_attribute="family_key",
+        )
 
     def validate_panel(self, panel: ActionPanelArtifact) -> None:
         """Require the receipt to bind every byte and every action row in ``panel``."""
@@ -1111,9 +1156,7 @@ class ActionPanelAdmissionReceipt:
             raise ConfirmatoryAnalysisError(
                 "action-panel admission receipt does not bind the panel digest"
             )
-        admitted_by_key = {
-            (record.trial_key, record.action): record for record in self.records
-        }
+        admitted_by_key = {(record.trial_key, record.action): record for record in self.records}
         panel_by_key = {(row.trial_key, row.action): row for row in panel.rows}
         if set(admitted_by_key) != set(panel_by_key):
             raise ConfirmatoryAnalysisError(
@@ -1124,6 +1167,7 @@ class ActionPanelAdmissionReceipt:
             for name in (
                 "family_key",
                 "action_order",
+                "execution_position",
                 "controller_selected",
                 "execution_state",
                 "audit_record_sha256",
@@ -1134,9 +1178,7 @@ class ActionPanelAdmissionReceipt:
                     )
             if row.execution_state == "failed":
                 if admitted.failure_code != row.failure_state:
-                    raise ConfirmatoryAnalysisError(
-                        "action-panel failure code is not admitted"
-                    )
+                    raise ConfirmatoryAnalysisError("action-panel failure code is not admitted")
                 if not math.isclose(
                     row.request_latency_ms,
                     admitted.failure_latency_ms,
@@ -1217,8 +1259,7 @@ def loads_action_panel_admission_receipt(
     receipt = ActionPanelAdmissionReceipt.from_dict(decoded)
     if supplied_bytes != receipt.canonical_bytes() + b"\n":
         raise ConfirmatoryAnalysisError(
-            "action panel admission receipt bytes are not canonical "
-            "newline-terminated JSON"
+            "action panel admission receipt bytes are not canonical newline-terminated JSON"
         )
     return receipt
 
@@ -1240,9 +1281,7 @@ def write_action_panel_admission_receipt(
     """Create one canonical detached admission receipt without replacement."""
 
     if not isinstance(receipt, ActionPanelAdmissionReceipt):
-        raise ConfirmatoryAnalysisError(
-            "receipt must be an ActionPanelAdmissionReceipt"
-        )
+        raise ConfirmatoryAnalysisError("receipt must be an ActionPanelAdmissionReceipt")
     _write_action_panel_file(
         receipt.canonical_bytes() + b"\n",
         target,
@@ -1268,9 +1307,7 @@ def loads_prelabel_action_row(payload: str | bytes) -> PreLabelActionRow:
 def load_prelabel_action_row(path: str | Path) -> PreLabelActionRow:
     """Load one bounded action row without following links or hard links."""
 
-    return loads_prelabel_action_row(
-        _read_action_panel_file(path, label="pre-label action row")
-    )
+    return loads_prelabel_action_row(_read_action_panel_file(path, label="pre-label action row"))
 
 
 def write_prelabel_action_row(
@@ -1306,9 +1343,7 @@ def loads_action_panel_artifact(payload: str | bytes) -> ActionPanelArtifact:
 def load_action_panel_artifact(path: str | Path) -> ActionPanelArtifact:
     """Load one bounded action panel without following links or hard links."""
 
-    return loads_action_panel_artifact(
-        _read_action_panel_file(path, label="action panel artifact")
-    )
+    return loads_action_panel_artifact(_read_action_panel_file(path, label="action panel artifact"))
 
 
 def write_action_panel_artifact(
@@ -1318,9 +1353,7 @@ def write_action_panel_artifact(
     """Create one canonical action-panel file without replacing any path."""
 
     if not isinstance(artifact, ActionPanelArtifact):
-        raise ConfirmatoryAnalysisError(
-            "artifact must be an ActionPanelArtifact"
-        )
+        raise ConfirmatoryAnalysisError("artifact must be an ActionPanelArtifact")
     _write_action_panel_file(
         artifact.canonical_bytes() + b"\n",
         target,
@@ -1337,6 +1370,7 @@ class ConfirmatoryTrialRow:
     trial_id: str
     action: str
     action_order: int
+    execution_position: int
     execution_state: ExecutionState
     failure_state: str | None
     controller_selected: bool
@@ -1367,6 +1401,15 @@ class ConfirmatoryTrialRow:
         ):
             raise ConfirmatoryAnalysisError("action_order must be a non-negative integer")
         object.__setattr__(self, "action_order", int(self.action_order))
+        if (
+            isinstance(self.execution_position, bool)
+            or not isinstance(self.execution_position, (int, np.integer))
+            or not 0 <= int(self.execution_position) < 4
+        ):
+            raise ConfirmatoryAnalysisError(
+                "execution_position must be an integer from zero through three"
+            )
+        object.__setattr__(self, "execution_position", int(self.execution_position))
         if type(self.controller_selected) is not bool:
             raise ConfirmatoryAnalysisError("controller_selected must be boolean")
         latency = _finite_number("request_latency_ms", self.request_latency_ms, minimum=0.0)
@@ -1378,16 +1421,12 @@ class ConfirmatoryTrialRow:
             or not isinstance(self.entitlement_violations, (int, np.integer))
             or int(self.entitlement_violations) < 0
         ):
-            raise ConfirmatoryAnalysisError(
-                "entitlement_violations must be a non-negative integer"
-            )
+            raise ConfirmatoryAnalysisError("entitlement_violations must be a non-negative integer")
         object.__setattr__(self, "entitlement_violations", int(self.entitlement_violations))
 
         if self.execution_state == "completed":
             if self.failure_state is not None:
-                raise ConfirmatoryAnalysisError(
-                    "completed rows cannot carry a failure_state"
-                )
+                raise ConfirmatoryAnalysisError("completed rows cannot carry a failure_state")
             recall = _finite_number("recall_at_k", self.recall_at_k)
             if not 0.0 <= recall <= 1.0:
                 raise ConfirmatoryAnalysisError("recall_at_k must be between zero and one")
@@ -1406,9 +1445,7 @@ class ConfirmatoryTrialRow:
         if self.evidence_sufficient is not None and type(self.evidence_sufficient) is not bool:
             raise ConfirmatoryAnalysisError("evidence_sufficient must be boolean or null")
         if self.feature_values is not None:
-            values = tuple(
-                np.nan if value is None else value for value in self.feature_values
-            )
+            values = tuple(np.nan if value is None else value for value in self.feature_values)
             for value in values:
                 _json_feature(value)
             object.__setattr__(self, "feature_values", values)
@@ -1436,6 +1473,7 @@ class ConfirmatoryTrialRow:
             trial_id=payload["trial_id"],
             action=payload["action"],
             action_order=payload["action_order"],
+            execution_position=payload["execution_position"],
             execution_state=payload["execution_state"],
             failure_state=payload["failure_state"],
             controller_selected=payload["controller_selected"],
@@ -1454,6 +1492,7 @@ class ConfirmatoryTrialRow:
             "controller_selected": self.controller_selected,
             "corpus_id": self.corpus_id,
             "entitlement_violations": self.entitlement_violations,
+            "execution_position": self.execution_position,
             "evidence_sufficient": self.evidence_sufficient,
             "execution_state": self.execution_state,
             "failure_state": self.failure_state,
@@ -1512,9 +1551,7 @@ class ConfirmatoryAnalysisConfig:
             raise ConfirmatoryAnalysisError("static comparator is outside the action set")
         if self.static_comparator_action == "abstain":
             raise ConfirmatoryAnalysisError("static comparator cannot be abstain")
-        if not {"hnsw-low", "exact-authorized", "abstain"}.issubset(
-            self.action_set
-        ):
+        if not {"hnsw-low", "exact-authorized", "abstain"}.issubset(self.action_set):
             raise ConfirmatoryAnalysisError(
                 "action_set must contain hnsw-low, exact-authorized, and abstain"
             )
@@ -1535,9 +1572,7 @@ class ConfirmatoryAnalysisConfig:
         if (
             isinstance(self.minimum_corpora_with_geometry_gain, bool)
             or not isinstance(self.minimum_corpora_with_geometry_gain, int)
-            or not 1
-            <= self.minimum_corpora_with_geometry_gain
-            <= len(self.fixed_corpora)
+            or not 1 <= self.minimum_corpora_with_geometry_gain <= len(self.fixed_corpora)
         ):
             raise ConfirmatoryAnalysisError(
                 "minimum_corpora_with_geometry_gain is outside the fixed suite"
@@ -1545,9 +1580,7 @@ class ConfirmatoryAnalysisConfig:
         for name in ("selected_families_per_corpus", "nested_rows_per_family"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ConfirmatoryAnalysisError(
-                    f"{name} must be a positive integer"
-                )
+                raise ConfirmatoryAnalysisError(f"{name} must be a positive integer")
         if self.selected_families_per_corpus < 2:
             raise ConfirmatoryAnalysisError(
                 "selected_families_per_corpus must be at least two for family bootstrap"
@@ -1568,9 +1601,7 @@ class ConfirmatoryAnalysisConfig:
             raise ConfirmatoryAnalysisError("alpha must equal the registered 0.05")
         bounded = {
             "failure_recall_threshold": self.failure_recall_threshold,
-            "retrieval_target_noninferiority_margin": (
-                self.retrieval_target_noninferiority_margin
-            ),
+            "retrieval_target_noninferiority_margin": (self.retrieval_target_noninferiority_margin),
             "evidence_sufficiency_noninferiority_margin": (
                 self.evidence_sufficiency_noninferiority_margin
             ),
@@ -1597,9 +1628,7 @@ class ConfirmatoryAnalysisConfig:
         if self.maximum_entitlement_violations != 0 or isinstance(
             self.maximum_entitlement_violations, bool
         ):
-            raise ConfirmatoryAnalysisError(
-                "maximum_entitlement_violations must equal zero"
-            )
+            raise ConfirmatoryAnalysisError("maximum_entitlement_violations must equal zero")
         low = self._validated_geometry(self.low_geometry, name="low_geometry")
         high = self._validated_geometry(self.high_geometry, name="high_geometry")
         if tuple(name for name, _ in low) != tuple(name for name, _ in high):
@@ -1629,9 +1658,7 @@ class ConfirmatoryAnalysisConfig:
         power = analysis["power"]
         low = analysis["low_geometry"]
         high = analysis["high_geometry"]
-        if not all(
-            isinstance(value, Mapping) for value in (gain, low, high, power)
-        ):
+        if not all(isinstance(value, Mapping) for value in (gain, low, high, power)):
             raise ConfirmatoryAnalysisError(
                 "frozen geometry thresholds and profiles must be objects"
             )
@@ -1650,9 +1677,7 @@ class ConfirmatoryAnalysisConfig:
             selected_families_per_corpus=power["selected_families_per_corpus"],
             nested_rows_per_family=analysis["nested_rows_per_family"],
             k=analysis["k"],
-            minimum_corpora_with_geometry_gain=(
-                analysis["minimum_corpora_with_geometry_gain"]
-            ),
+            minimum_corpora_with_geometry_gain=(analysis["minimum_corpora_with_geometry_gain"]),
             failure_recall_threshold=analysis["failure_recall_threshold"],
             alpha=analysis["alpha"],
             bootstrap_replicates=analysis["bootstrap_replicates"],
@@ -1666,9 +1691,7 @@ class ConfirmatoryAnalysisConfig:
             ),
             minimum_cost_reduction=analysis["minimum_cost_reduction"],
             maximum_p95_latency_ratio=analysis["maximum_p95_latency_ratio"],
-            maximum_entitlement_violations=(
-                analysis["maximum_entitlement_violations"]
-            ),
+            maximum_entitlement_violations=(analysis["maximum_entitlement_violations"]),
         )
 
     @staticmethod
@@ -1712,12 +1735,8 @@ class ConfirmatoryAnalysisConfig:
             "fixed_corpora": list(self.fixed_corpora),
             "geometry_gain_thresholds": {
                 "auprc_gain": self.geometry_gain_thresholds.auprc_gain,
-                "brier_score_reduction": (
-                    self.geometry_gain_thresholds.brier_score_reduction
-                ),
-                "log_loss_reduction": (
-                    self.geometry_gain_thresholds.log_loss_reduction
-                ),
+                "brier_score_reduction": (self.geometry_gain_thresholds.brier_score_reduction),
+                "log_loss_reduction": (self.geometry_gain_thresholds.log_loss_reduction),
             },
             "h1_minimum_risk_increase": self.h1_minimum_risk_increase,
             "high_geometry": dict(self.high_geometry),
@@ -1725,14 +1744,10 @@ class ConfirmatoryAnalysisConfig:
             "low_geometry": dict(self.low_geometry),
             "maximum_entitlement_violations": self.maximum_entitlement_violations,
             "maximum_p95_latency_ratio": self.maximum_p95_latency_ratio,
-            "minimum_corpora_with_geometry_gain": (
-                self.minimum_corpora_with_geometry_gain
-            ),
+            "minimum_corpora_with_geometry_gain": (self.minimum_corpora_with_geometry_gain),
             "minimum_cost_reduction": self.minimum_cost_reduction,
             "nested_rows_per_family": self.nested_rows_per_family,
-            "retrieval_target_noninferiority_margin": (
-                self.retrieval_target_noninferiority_margin
-            ),
+            "retrieval_target_noninferiority_margin": (self.retrieval_target_noninferiority_margin),
             "selected_families_per_corpus": self.selected_families_per_corpus,
             "static_comparator_action": self.static_comparator_action,
         }
@@ -1746,6 +1761,8 @@ class ConfirmatoryAnalysisConfig:
 class CorpusInputDigests:
     corpus_id: str
     prediction_completion_receipt_sha256: str
+    online_execution_result_receipt_sha256: str
+    timelock_decryption_receipt_sha256: str
     offline_evaluation_artifact_sha256: str
     action_panel_artifact_sha256: str
     action_panel_admission_receipt_sha256: str
@@ -1766,6 +1783,8 @@ class CorpusInputDigests:
             _require_identifier(name, getattr(self, name))
         for name in (
             "prediction_completion_receipt_sha256",
+            "online_execution_result_receipt_sha256",
+            "timelock_decryption_receipt_sha256",
             "offline_evaluation_artifact_sha256",
             "action_panel_artifact_sha256",
             "action_panel_admission_receipt_sha256",
@@ -1777,25 +1796,19 @@ class CorpusInputDigests:
 
     def to_dict(self) -> dict[str, str]:
         return {
-            "action_panel_admission_receipt_sha256": (
-                self.action_panel_admission_receipt_sha256
-            ),
+            "action_panel_admission_receipt_sha256": (self.action_panel_admission_receipt_sha256),
             "action_panel_artifact_sha256": self.action_panel_artifact_sha256,
             "corpus_id": self.corpus_id,
-            "offline_evaluation_artifact_sha256": (
-                self.offline_evaluation_artifact_sha256
-            ),
+            "offline_evaluation_artifact_sha256": (self.offline_evaluation_artifact_sha256),
             "online_execution_artifact_id": self.online_execution_artifact_id,
-            "online_execution_artifact_sha256": (
-                self.online_execution_artifact_sha256
-            ),
-            "prediction_completion_receipt_sha256": (
-                self.prediction_completion_receipt_sha256
-            ),
+            "online_execution_artifact_sha256": (self.online_execution_artifact_sha256),
+            "online_execution_result_receipt_sha256": (self.online_execution_result_receipt_sha256),
+            "prediction_completion_receipt_sha256": (self.prediction_completion_receipt_sha256),
             "sealed_input_artifact_id": self.sealed_input_artifact_id,
             "sealed_input_artifact_sha256": self.sealed_input_artifact_sha256,
             "sealed_label_artifact_id": self.sealed_label_artifact_id,
             "sealed_label_artifact_sha256": self.sealed_label_artifact_sha256,
+            "timelock_decryption_receipt_sha256": (self.timelock_decryption_receipt_sha256),
         }
 
 
@@ -1832,9 +1845,7 @@ class ConfirmatoryInputArtifact:
         if not isinstance(self.run_receipt, SealedRunReceipt):
             raise ConfirmatoryAnalysisError("run_receipt must be a SealedRunReceipt")
         if not isinstance(self.frozen_manifest, Mapping):
-            raise ConfirmatoryAnalysisError(
-                "frozen_manifest must be the frozen manifest object"
-            )
+            raise ConfirmatoryAnalysisError("frozen_manifest must be the frozen manifest object")
         try:
             canonical_manifest = _canonical_bytes(self.frozen_manifest)
             manifest_payload = json.loads(canonical_manifest)
@@ -1844,14 +1855,10 @@ class ConfirmatoryInputArtifact:
             ) from exc
         if not isinstance(manifest_payload, Mapping):
             raise ConfirmatoryAnalysisError("frozen_manifest must contain one object")
-        frozen_config = ConfirmatoryAnalysisConfig.from_frozen_manifest(
-            manifest_payload
-        )
+        frozen_config = ConfirmatoryAnalysisConfig.from_frozen_manifest(manifest_payload)
         manifest_digest = manifest_sha256(manifest_payload)
         if manifest_digest != self.run_receipt.manifest_sha256:
-            raise ConfirmatoryAnalysisError(
-                "frozen manifest does not match the sealed run receipt"
-            )
+            raise ConfirmatoryAnalysisError("frozen manifest does not match the sealed run receipt")
         self._validate_run_receipt(manifest_payload)
         if not isinstance(
             self.artifact_verification_receipt,
@@ -1917,7 +1924,13 @@ class ConfirmatoryInputArtifact:
                 (
                     corpus,
                     str(execution_bindings[corpus]["id"]),
-                    str(execution_bindings[corpus]["sha256"]),
+                    revision_sha256(
+                        execution_bindings[corpus]["revision"],
+                        field=(
+                            "online-execution logical revision for "
+                            f"{execution_bindings[corpus]['id']!r}"
+                        ),
+                    ),
                 )
                 for corpus in frozen_config.fixed_corpora
             ),
@@ -2037,8 +2050,7 @@ class ConfirmatoryInputArtifact:
             admission.validate_panel(panel)
             if any(
                 record.execution_state == "failed"
-                and record.failure_runner_identity
-                != self.run_receipt.runner_identity
+                and record.failure_runner_identity != self.run_receipt.runner_identity
                 for record in admission.records
             ):
                 raise ConfirmatoryAnalysisError(
@@ -2048,9 +2060,7 @@ class ConfirmatoryInputArtifact:
                 raise ConfirmatoryAnalysisError(
                     f"action panel for {corpus_id!r} is not bound to the primary partition"
                 )
-            if admission.query_partition_audit_sha256 != str(
-                query_partition_audit["sha256"]
-            ):
+            if admission.query_partition_audit_sha256 != str(query_partition_audit["sha256"]):
                 raise ConfirmatoryAnalysisError(
                     "action-panel admission receipt does not bind the frozen "
                     f"query-partition audit for {corpus_id!r}"
@@ -2064,52 +2074,52 @@ class ConfirmatoryInputArtifact:
                 raise ConfirmatoryAnalysisError(
                     f"execution artifact binding mismatch for {corpus_id!r}"
                 )
-            execution_artifact_id, execution_artifact_sha256 = (
-                execution_binding_lookup[corpus_id]
-            )
+            execution_artifact_id, execution_artifact_sha256 = execution_binding_lookup[corpus_id]
             if panel.execution_artifact_sha256 != execution_artifact_sha256:
                 raise ConfirmatoryAnalysisError(
-                    "online execution digest does not match manifest "
-                    f"artifact {execution_artifact_id!r} for {corpus_id!r}"
+                    "online execution logical digest does not match manifest "
+                    f"revision for artifact {execution_artifact_id!r} and corpus {corpus_id!r}"
                 )
             if completion.action_panel_binding != panel.completion_binding():
                 raise ConfirmatoryAnalysisError(
                     f"completion receipt does not bind the action panel for {corpus_id!r}"
                 )
-            if (
-                evaluation.prediction_completion_receipt_sha256
-                != completion.receipt_sha256
-            ):
+            if evaluation.prediction_completion_receipt_sha256 != completion.receipt_sha256:
                 raise ConfirmatoryAnalysisError(
                     f"offline evaluation does not bind the completion receipt for {corpus_id!r}"
                 )
-            if (
-                evaluation.prediction_artifact_sha256
-                != completion.prediction_artifact_sha256
-            ):
+            if evaluation.prediction_artifact_sha256 != completion.prediction_artifact_sha256:
                 raise ConfirmatoryAnalysisError(
                     f"prediction artifact binding mismatch for {corpus_id!r}"
                 )
-            label_artifact_id, label_artifact_sha256 = label_binding_lookup[corpus_id]
-            observed_label_sha256 = label_artifact.artifact_sha256
-            if observed_label_sha256 != label_artifact_sha256:
+            if (
+                evaluation.online_execution_result_receipt_sha256
+                != completion.online_execution_result_receipt_sha256
+            ):
                 raise ConfirmatoryAnalysisError(
-                    "sealed label artifact canonical digest does not match manifest "
+                    f"sealed online result receipt binding mismatch for {corpus_id!r}"
+                )
+            label_artifact_id, label_artifact_sha256 = label_binding_lookup[corpus_id]
+            observed_label_file_sha256 = hashlib.sha256(
+                label_artifact.canonical_bytes() + b"\n"
+            ).hexdigest()
+            if observed_label_file_sha256 != label_artifact_sha256:
+                raise ConfirmatoryAnalysisError(
+                    "sealed label artifact file digest does not match manifest "
                     f"artifact {label_artifact_id!r} for {corpus_id!r}"
                 )
-            if evaluation.sealed_label_artifact_sha256 != observed_label_sha256:
+            if evaluation.sealed_label_artifact_sha256 != label_artifact.artifact_sha256:
                 raise ConfirmatoryAnalysisError(
                     "offline evaluation sealed-label digest does not match admitted "
-                    f"artifact {label_artifact_id!r} for {corpus_id!r}"
+                    f"artifact {label_artifact_id!r} for {corpus_id!r}; "
+                    "the offline field carries the semantic identity"
                 )
             if label_artifact.document_count != panel.document_count:
                 raise ConfirmatoryAnalysisError(
                     f"sealed label artifact document count differs for {corpus_id!r}"
                 )
             if completion.prediction_count != len(evaluation.trials):
-                raise ConfirmatoryAnalysisError(
-                    f"prediction count mismatch for {corpus_id!r}"
-                )
+                raise ConfirmatoryAnalysisError(f"prediction count mismatch for {corpus_id!r}")
             self._validate_trial_join(panel, evaluation, label_artifact)
             for trial in evaluation.trials:
                 trial_key = trial.prediction.trial_key
@@ -2175,12 +2185,8 @@ class ConfirmatoryInputArtifact:
                 "artifact verification receipt does not match the sealed run receipt"
             )
         manifest_artifacts = tuple(manifest_payload["artifacts"])
-        pinned_by_id = {
-            str(artifact["id"]): artifact for artifact in manifest_artifacts
-        }
-        verified_by_id = {
-            artifact.artifact_id: artifact for artifact in receipt.artifacts
-        }
+        pinned_by_id = {str(artifact["id"]): artifact for artifact in manifest_artifacts}
+        verified_by_id = {artifact.artifact_id: artifact for artifact in receipt.artifacts}
         if set(pinned_by_id) != set(verified_by_id):
             missing = sorted(set(pinned_by_id) - set(verified_by_id))
             unexpected = sorted(set(verified_by_id) - set(pinned_by_id))
@@ -2226,9 +2232,7 @@ class ConfirmatoryInputArtifact:
     ) -> Mapping[str, Any]:
         matches = tuple(artifact for artifact in artifacts if artifact["role"] == role)
         if len(matches) != 1:  # defensive after frozen-manifest validation
-            raise ConfirmatoryAnalysisError(
-                f"frozen manifest must contain one {role!r} artifact"
-            )
+            raise ConfirmatoryAnalysisError(f"frozen manifest must contain one {role!r} artifact")
         return matches[0]
 
     @staticmethod
@@ -2257,9 +2261,7 @@ class ConfirmatoryInputArtifact:
         panel_by_trial: dict[str, list[PreLabelActionRow]] = {}
         for row in panel.rows:
             panel_by_trial.setdefault(row.trial_key, []).append(row)
-        evaluation_by_trial = {
-            trial.prediction.trial_key: trial for trial in evaluation.trials
-        }
+        evaluation_by_trial = {trial.prediction.trial_key: trial for trial in evaluation.trials}
         labels_by_trial = {row.trial_key: row for row in sealed_labels.labels}
         if set(panel_by_trial) != set(evaluation_by_trial):
             raise ConfirmatoryAnalysisError(
@@ -2279,13 +2281,10 @@ class ConfirmatoryInputArtifact:
             if families != {joined.prediction.family_key} or (
                 joined.labels.family_key != joined.prediction.family_key
             ):
-                raise ConfirmatoryAnalysisError(
-                    f"family binding mismatch for trial {trial_key!r}"
-                )
+                raise ConfirmatoryAnalysisError(f"family binding mismatch for trial {trial_key!r}")
             selected = [row for row in action_rows if row.controller_selected]
             if len(selected) != 1 or (
-                selected[0].returned_document_ids
-                != joined.prediction.returned_document_ids
+                selected[0].returned_document_ids != joined.prediction.returned_document_ids
             ):
                 raise ConfirmatoryAnalysisError(
                     f"selected prediction mismatch for trial {trial_key!r}"
@@ -2343,6 +2342,10 @@ class ConfirmatoryInputArtifact:
             CorpusInputDigests(
                 corpus_id=corpus_id,
                 prediction_completion_receipt_sha256=completion.receipt_sha256,
+                online_execution_result_receipt_sha256=(
+                    completion.online_execution_result_receipt_sha256
+                ),
+                timelock_decryption_receipt_sha256=(evaluation.timelock_decryption_receipt_sha256),
                 offline_evaluation_artifact_sha256=evaluation.artifact_sha256,
                 action_panel_artifact_sha256=panel.artifact_sha256,
                 action_panel_admission_receipt_sha256=admission.receipt_sha256,
@@ -2410,6 +2413,7 @@ class ConfirmatoryInputArtifact:
                         trial_id=action_row.trial_key,
                         action=action_row.action,
                         action_order=action_row.action_order,
+                        execution_position=action_row.execution_position,
                         execution_state=action_row.execution_state,
                         failure_state=action_row.failure_state,
                         controller_selected=action_row.controller_selected,
@@ -2446,16 +2450,13 @@ class ConfirmatoryInputArtifact:
 
         if not isinstance(suite, FrozenModelSuite):
             raise ConfirmatoryAnalysisError("suite must be a FrozenModelSuite")
-        h1_artifact_sha256 = hashlib.sha256(
-            canonical_h1_model_artifact_bytes(suite)
-        ).hexdigest()
+        h1_artifact_sha256 = hashlib.sha256(canonical_h1_model_artifact_bytes(suite)).hexdigest()
         h2_artifact_sha256 = hashlib.sha256(
             canonical_h2_model_suite_artifact_bytes(suite)
         ).hexdigest()
         if h1_artifact_sha256 != self._h1_model_artifact_sha256:
             raise ConfirmatoryAnalysisError(
-                "full predictive model bytes do not match the verified "
-                "h1-predictive-model artifact"
+                "full predictive model bytes do not match the verified h1-predictive-model artifact"
             )
         if h2_artifact_sha256 != self._h2_model_suite_artifact_sha256:
             raise ConfirmatoryAnalysisError(
@@ -2570,9 +2571,40 @@ class EntitlementResult:
 
 
 @dataclass(frozen=True)
+class PositionAdjustedSensitivityResult:
+    """Non-gating carryover check based on the observed execution positions."""
+
+    gate: DirectionalGate
+    position_trend_log_ratio_per_position: float
+    method: str = "paired-log-ratio-corpus-linear-position-adjustment-v1"
+    affects_primary_claim: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.gate, DirectionalGate):
+            raise ConfirmatoryAnalysisError("position sensitivity gate must be typed")
+        if not math.isfinite(self.position_trend_log_ratio_per_position):
+            raise ConfirmatoryAnalysisError("position sensitivity trend must be finite")
+        if self.method != "paired-log-ratio-corpus-linear-position-adjustment-v1":
+            raise ConfirmatoryAnalysisError("unsupported position sensitivity method")
+        if self.affects_primary_claim:
+            raise ConfirmatoryAnalysisError(
+                "position-adjusted sensitivity cannot alter the registered primary claim"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "affects_primary_claim": self.affects_primary_claim,
+            "gate": self.gate.to_dict(),
+            "method": self.method,
+            "position_trend_log_ratio_per_position": (self.position_trend_log_ratio_per_position),
+        }
+
+
+@dataclass(frozen=True)
 class H3Result:
     gates: tuple[DirectionalGate, ...]
     entitlement: EntitlementResult
+    position_adjusted_sensitivity: PositionAdjustedSensitivityResult
     execution_state_counts: tuple[tuple[str, int], ...]
     passed: bool
 
@@ -2582,6 +2614,7 @@ class H3Result:
             "execution_state_counts": dict(self.execution_state_counts),
             "gates": [gate.to_dict() for gate in self.gates],
             "passed": self.passed,
+            "position_adjusted_sensitivity": self.position_adjusted_sensitivity.to_dict(),
         }
 
 
@@ -2632,9 +2665,7 @@ class ConfirmatoryResultArtifact:
             "h1": self.h1.to_dict(),
             "h2": self.h2.to_dict(),
             "h3": self.h3.to_dict(),
-            "confirmatory_input_artifact_sha256": (
-                self.confirmatory_input_artifact_sha256
-            ),
+            "confirmatory_input_artifact_sha256": (self.confirmatory_input_artifact_sha256),
             "corpus_inputs": [row.to_dict() for row in self.corpus_input_digests],
             "input_rows_sha256": self.input_rows_sha256,
             "input_row_count": self.input_row_count,
@@ -2718,9 +2749,7 @@ def _validate_panel(
                 "evidence_sufficient must be boolean exactly on evidence corpora"
             )
         if row.execution_state != "completed" and row.evidence_sufficient is True:
-            raise ConfirmatoryAnalysisError(
-                "a non-completed action cannot be evidence sufficient"
-            )
+            raise ConfirmatoryAnalysisError("a non-completed action cannot be evidence sufficient")
         if row.action == "abstain":
             if row.execution_state != "abstained":
                 raise ConfirmatoryAnalysisError(
@@ -2752,6 +2781,14 @@ def _validate_panel(
             raise ConfirmatoryAnalysisError(
                 "each trial needs exactly one controller-selected action"
             )
+
+    _assert_balanced_execution_positions(
+        ordered,
+        action_set=config.action_set,
+        trial_attribute="trial_id",
+        family_attribute="family_id",
+        corpus_attribute="corpus_id",
+    )
 
     for corpus_id in config.fixed_corpora:
         corpus_rows = tuple(row for row in ordered if row.corpus_id == corpus_id)
@@ -2816,10 +2853,7 @@ def _feature_batch(
     }
     if not include_action_failure_labels:
         return FeatureBatch(**common)
-    labels = tuple(
-        int(_low_effort_action_failed(row, failure_recall_threshold))
-        for row in rows
-    )
+    labels = tuple(int(_low_effort_action_failed(row, failure_recall_threshold)) for row in rows)
     return LabeledFeatureBatch(**common, labels=labels)
 
 
@@ -2836,9 +2870,7 @@ def _low_effort_action_failed(
     """
 
     if row.action != "hnsw-low":
-        raise ConfirmatoryAnalysisError(
-            "action-failure labels are defined only for hnsw-low rows"
-        )
+        raise ConfirmatoryAnalysisError("action-failure labels are defined only for hnsw-low rows")
     return (
         row.execution_state != "completed"
         or row.recall_at_k is None
@@ -2897,14 +2929,13 @@ def _weighted_average_precision(
     weighted_positive = sorted_weights * sorted_labels
     cumulative_positive = np.cumsum(weighted_positive)
     cumulative_weight = np.cumsum(sorted_weights)
-    group_ends = np.flatnonzero(
-        np.r_[sorted_scores[1:] != sorted_scores[:-1], True]
-    )
+    group_ends = np.flatnonzero(np.r_[sorted_scores[1:] != sorted_scores[:-1], True])
     group_starts = np.r_[0, group_ends[:-1] + 1]
     group_positive = np.asarray(
-        [weighted_positive[start : end + 1].sum() for start, end in zip(
-            group_starts, group_ends, strict=True
-        )]
+        [
+            weighted_positive[start : end + 1].sum()
+            for start, end in zip(group_starts, group_ends, strict=True)
+        ]
     )
     precision_at_threshold = cumulative_positive[group_ends] / cumulative_weight[group_ends]
     return float(np.sum(group_positive * precision_at_threshold) / positive_weight)
@@ -2954,10 +2985,7 @@ def _auprc_bootstrap(
         family_groups = tuple(groups[corpus_id].values())
         indices = np.concatenate(family_groups)
         weights = np.concatenate(
-            [
-                np.full(len(group), 1.0 / len(group), dtype=np.float64)
-                for group in family_groups
-            ]
+            [np.full(len(group), 1.0 / len(group), dtype=np.float64) for group in family_groups]
         )
         point_gains.append(
             _weighted_average_precision(labels[indices], full[indices], weights)
@@ -2979,9 +3007,7 @@ def _auprc_bootstrap(
             weights = np.concatenate(
                 [np.full(len(group), 1.0 / len(group), dtype=np.float64) for group in sampled]
             )
-            reference_ap = _weighted_average_precision(
-                labels[indices], reference[indices], weights
-            )
+            reference_ap = _weighted_average_precision(labels[indices], reference[indices], weights)
             full_ap = _weighted_average_precision(labels[indices], full[indices], weights)
             replicates[replicate] += (full_ap - reference_ap) / len(fixed_corpora)
     lower, upper = np.quantile(replicates, (1.0 - config.confidence, config.confidence))
@@ -3211,6 +3237,104 @@ def _exact_entitlement_result(
     )
 
 
+def _position_adjusted_log_ratio_fit(
+    proposed_latency: np.ndarray,
+    comparator_latency: np.ndarray,
+    proposed_position: np.ndarray,
+    comparator_position: np.ndarray,
+) -> tuple[float, float]:
+    """Fit the preregistered linear position trend and its zero-delta contrast."""
+
+    y = np.log(proposed_latency / comparator_latency)
+    x = proposed_position.astype(np.float64) - comparator_position.astype(np.float64)
+    x_mean = float(np.mean(x))
+    y_mean = float(np.mean(y))
+    centered = x - x_mean
+    denominator = float(centered @ centered)
+    slope = 0.0 if denominator == 0.0 else float(centered @ (y - y_mean) / denominator)
+    return y_mean - slope * x_mean, slope
+
+
+def _position_adjusted_sensitivity(
+    adaptive: Sequence[ConfirmatoryTrialRow],
+    comparator: Sequence[ConfirmatoryTrialRow],
+    config: ConfirmatoryAnalysisConfig,
+) -> PositionAdjustedSensitivityResult:
+    grouped: dict[str, dict[str, list[int]]] = {}
+    for index, row in enumerate(adaptive):
+        grouped.setdefault(row.corpus_id, {}).setdefault(row.family_id, []).append(index)
+    if set(grouped) != set(config.fixed_corpora):
+        raise ConfirmatoryAnalysisError("position sensitivity lacks the fixed corpus suite")
+
+    proposed_latency = np.asarray([row.request_latency_ms for row in adaptive], dtype=np.float64)
+    comparator_latency = np.asarray(
+        [row.request_latency_ms for row in comparator], dtype=np.float64
+    )
+    proposed_position = np.asarray([row.execution_position for row in adaptive], dtype=np.int8)
+    comparator_position = np.asarray([row.execution_position for row in comparator], dtype=np.int8)
+    estimate = 0.0
+    slope = 0.0
+    for corpus in config.fixed_corpora:
+        indices = np.asarray(
+            [index for values in grouped[corpus].values() for index in values],
+            dtype=np.int64,
+        )
+        corpus_estimate, corpus_slope = _position_adjusted_log_ratio_fit(
+            proposed_latency[indices],
+            comparator_latency[indices],
+            proposed_position[indices],
+            comparator_position[indices],
+        )
+        estimate += corpus_estimate / len(config.fixed_corpora)
+        slope += corpus_slope / len(config.fixed_corpora)
+
+    bootstrap = _bootstrap_config(config, seed_offset=35)
+    rng = np.random.default_rng(bootstrap.seed)
+    replicates = np.zeros(bootstrap.n_resamples, dtype=np.float64)
+    for corpus in config.fixed_corpora:
+        families = tuple(sorted(grouped[corpus]))
+        for replicate in range(bootstrap.n_resamples):
+            draws = rng.integers(0, len(families), size=len(families))
+            indices = np.asarray(
+                [index for draw in draws for index in grouped[corpus][families[int(draw)]]],
+                dtype=np.int64,
+            )
+            corpus_estimate, _ = _position_adjusted_log_ratio_fit(
+                proposed_latency[indices],
+                comparator_latency[indices],
+                proposed_position[indices],
+                comparator_position[indices],
+            )
+            replicates[replicate] += corpus_estimate / len(config.fixed_corpora)
+    alpha = 1.0 - bootstrap.confidence
+    lower, upper = np.quantile(replicates, (alpha, 1.0 - alpha))
+    result = ClusterBootstrapResult(
+        interval=ConfidenceInterval(
+            estimate=estimate,
+            lower=float(lower),
+            upper=float(upper),
+            confidence=bootstrap.confidence,
+            construction="directional-one-sided",
+        ),
+        replicates=replicates,
+        n_corpora=len(config.fixed_corpora),
+        n_families=sum(len(families) for families in grouped.values()),
+        seed=bootstrap.seed,
+    )
+    threshold = math.log(1.0 - config.minimum_cost_reduction)
+    gate = _gate(
+        "h3_position_adjusted_log_latency_ratio_sensitivity",
+        result,
+        threshold=threshold,
+        rule="sensitivity-directional-upper-less-than-log-one-minus-minimum-reduction",
+        passed=result.interval.upper < threshold,
+    )
+    return PositionAdjustedSensitivityResult(
+        gate=gate,
+        position_trend_log_ratio_per_position=slope,
+    )
+
+
 def _h3(panel: _ValidatedPanel, config: ConfirmatoryAnalysisConfig) -> H3Result:
     adaptive = panel.adaptive_rows
     comparator = panel.comparator_rows
@@ -3260,9 +3384,7 @@ def _h3(panel: _ValidatedPanel, config: ConfirmatoryAnalysisConfig) -> H3Result:
         **common,
     )
     evidence_indices = tuple(
-        index
-        for index, row in enumerate(adaptive)
-        if row.corpus_id in config.evidence_corpora
+        index for index, row in enumerate(adaptive) if row.corpus_id in config.evidence_corpora
     )
     evidence_pair_ids = tuple(pair_ids[index] for index in evidence_indices)
     evidence = paired_stratified_family_bootstrap(
@@ -3333,9 +3455,11 @@ def _h3(panel: _ValidatedPanel, config: ConfirmatoryAnalysisConfig) -> H3Result:
         (state, sum(row.execution_state == state for row in panel.rows))
         for state in ("completed", "failed", "abstained")
     )
+    position_sensitivity = _position_adjusted_sensitivity(adaptive, comparator, config)
     return H3Result(
         gates=gates,
         entitlement=entitlement,
+        position_adjusted_sensitivity=position_sensitivity,
         execution_state_counts=execution_state_counts,
         passed=all(gate.passed for gate in gates) and entitlement.passed,
     )

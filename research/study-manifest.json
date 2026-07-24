@@ -7,13 +7,18 @@
   "freeze_blockers": [
     "sealed input, online execution, and label revisions, hashes, and custodial locations remain tbd",
     "normalizer revisions and hashes remain tbd",
-    "the five corpus-specific authorization workloads remain unpinned",
-    "development-fit, calibration, and connected query-partition audit artifacts remain tbd",
-    "the primary embedding, exact oracle, strict HNSW backend, and OPA bundle remain unpinned",
+    "the complete staged-data tree and label-free online projection remain unpinned",
+    "the five corpus-specific policy-intervention, paired-embedding, authorized-index, and trial-runtime package trees remain unpinned",
+    "development-fit, calibration, complete development-freeze, and connected query-partition audit artifacts remain tbd",
+    "the current and stale embedding model trees, exact oracle, strict HNSW backend, and OPA bundle remain unpinned",
     "the frozen controller and static comparator artifacts remain tbd",
     "the H1 diagnostic model, H2 model suite, and one-sided analysis runner remain unpinned",
     "geometry gain thresholds, low/high geometry profiles, nested trial rows per family, joint-gate dependence source and effect scenarios, selected maximum family count, joint-power lower bound, and design report remain tbd",
-    "runner identity, source commit, runner image, hardware, stores, and receipt URI remain tbd",
+    "the five complete production WorkloadSpec objects and their canonical file hashes remain unresolved before C1",
+    "the production-control materialization-config file hash and blueprint receipt semantic and file hashes remain unresolved before C1",
+    "runner identity, source commit, runner image, hardware, stores, five corpus-specific runtime-attestation templates, suite-attestation descriptor, and receipt URI remain tbd",
+    "the five sealed-label ciphertexts and their immutable storage locations remain tbd",
+    "the verified tlock release provenance exists, but its future drand release round, frozen executable pin, custody builder, and custody-seal receipt remain unset",
     "the frozen manifest has not been deposited in an independent protocol registry"
   ],
   "analysis": {
@@ -85,7 +90,8 @@
       ],
       "dependence_source": "tbd",
       "effect_scenarios": [
-        "tbd"
+        "conservative-registered-attenuation",
+        "expected-development-effect"
       ],
       "candidate_families_per_corpus": [
         25,
@@ -96,6 +102,12 @@
         200
       ],
       "selected_families_per_corpus": "tbd",
+      "selection_cell_alpha": 0.004166666666666667,
+      "selection_exact_blocking_failures": 445,
+      "selection_exact_qualifying_passes": 4556,
+      "selection_family_size": 12,
+      "selection_familywise_confidence": 0.95,
+      "selection_multiplicity_method": "bonferroni-fixed-required-scenario-candidate-grid-v1",
       "simulation_seed": "tbd",
       "simulation_count": 5000,
       "selected_joint_power_lower_bound": "tbd"
@@ -203,9 +215,109 @@
       "corpus_id": "miracl-transfer"
     },
     {
+      "kind": "encrypted-dataset",
+      "id": "scifact-sealed-label-ciphertext",
+      "uri": "artifacts/custody/scifact-sealed-labels.tlock",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0 annotations",
+      "role": "sealed-label-ciphertext",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "encrypted-dataset",
+      "id": "hotpotqa-fullwiki-sealed-label-ciphertext",
+      "uri": "artifacts/custody/hotpotqa-fullwiki-sealed-labels.tlock",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-SA-4.0 dataset",
+      "role": "sealed-label-ciphertext",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "encrypted-dataset",
+      "id": "t2-ragbench-sealed-label-ciphertext",
+      "uri": "artifacts/custody/t2-ragbench-sealed-labels.tlock",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-label-ciphertext",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "encrypted-dataset",
+      "id": "bright-sealed-label-ciphertext",
+      "uri": "artifacts/custody/bright-sealed-labels.tlock",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "CC-BY-4.0",
+      "role": "sealed-label-ciphertext",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "encrypted-dataset",
+      "id": "miracl-transfer-sealed-label-ciphertext",
+      "uri": "artifacts/custody/miracl-transfer-sealed-labels.tlock",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "sealed-label-ciphertext",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "custody",
+      "id": "scifact-timelock-encryption-receipt",
+      "uri": "artifacts/custody/receipts/scifact-timelock-encryption.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "timelock-encryption-receipt",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "custody",
+      "id": "hotpotqa-fullwiki-timelock-encryption-receipt",
+      "uri": "artifacts/custody/receipts/hotpotqa-fullwiki-timelock-encryption.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "timelock-encryption-receipt",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "custody",
+      "id": "t2-ragbench-timelock-encryption-receipt",
+      "uri": "artifacts/custody/receipts/t2-ragbench-timelock-encryption.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "timelock-encryption-receipt",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "custody",
+      "id": "bright-timelock-encryption-receipt",
+      "uri": "artifacts/custody/receipts/bright-timelock-encryption.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "timelock-encryption-receipt",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "custody",
+      "id": "miracl-transfer-timelock-encryption-receipt",
+      "uri": "artifacts/custody/receipts/miracl-transfer-timelock-encryption.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "timelock-encryption-receipt",
+      "corpus_id": "miracl-transfer"
+    },
+    {
       "kind": "execution",
       "id": "scifact-online-execution",
-      "uri": "artifacts/custody/scifact-online-execution.json",
+      "uri": "artifacts/custody/online/scifact",
       "revision": "tbd",
       "sha256": "tbd",
       "license": "MIT",
@@ -215,7 +327,7 @@
     {
       "kind": "execution",
       "id": "hotpotqa-fullwiki-online-execution",
-      "uri": "artifacts/custody/hotpotqa-fullwiki-online-execution.json",
+      "uri": "artifacts/custody/online/hotpotqa-fullwiki",
       "revision": "tbd",
       "sha256": "tbd",
       "license": "MIT",
@@ -225,7 +337,7 @@
     {
       "kind": "execution",
       "id": "t2-ragbench-online-execution",
-      "uri": "artifacts/custody/t2-ragbench-online-execution.json",
+      "uri": "artifacts/custody/online/t2-ragbench",
       "revision": "tbd",
       "sha256": "tbd",
       "license": "MIT",
@@ -235,7 +347,7 @@
     {
       "kind": "execution",
       "id": "bright-online-execution",
-      "uri": "artifacts/custody/bright-online-execution.json",
+      "uri": "artifacts/custody/online/bright",
       "revision": "tbd",
       "sha256": "tbd",
       "license": "MIT",
@@ -245,7 +357,7 @@
     {
       "kind": "execution",
       "id": "miracl-transfer-online-execution",
-      "uri": "artifacts/custody/miracl-transfer-online-execution.json",
+      "uri": "artifacts/custody/online/miracl-transfer",
       "revision": "tbd",
       "sha256": "tbd",
       "license": "MIT",
@@ -353,6 +465,183 @@
       "corpus_id": "miracl-transfer"
     },
     {
+      "kind": "embedding-store",
+      "id": "scifact-paired-embedding-store",
+      "uri": "artifacts/embedding-stores/scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0 model; MIT metadata",
+      "role": "embedding-store",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "embedding-store",
+      "id": "hotpotqa-fullwiki-paired-embedding-store",
+      "uri": "artifacts/embedding-stores/hotpotqa-fullwiki",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0 model; MIT metadata",
+      "role": "embedding-store",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "embedding-store",
+      "id": "t2-ragbench-paired-embedding-store",
+      "uri": "artifacts/embedding-stores/t2-ragbench",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0 model; MIT metadata",
+      "role": "embedding-store",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "embedding-store",
+      "id": "bright-paired-embedding-store",
+      "uri": "artifacts/embedding-stores/bright",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0 model; MIT metadata",
+      "role": "embedding-store",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "embedding-store",
+      "id": "miracl-transfer-paired-embedding-store",
+      "uri": "artifacts/embedding-stores/miracl-transfer",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0 model; MIT metadata",
+      "role": "embedding-store",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "index-store",
+      "id": "scifact-authorized-index-store",
+      "uri": "artifacts/authorized-index-stores/scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "authorized-index-store",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "index-store",
+      "id": "hotpotqa-fullwiki-authorized-index-store",
+      "uri": "artifacts/authorized-index-stores/hotpotqa-fullwiki",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "authorized-index-store",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "index-store",
+      "id": "t2-ragbench-authorized-index-store",
+      "uri": "artifacts/authorized-index-stores/t2-ragbench",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "authorized-index-store",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "index-store",
+      "id": "bright-authorized-index-store",
+      "uri": "artifacts/authorized-index-stores/bright",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "authorized-index-store",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "index-store",
+      "id": "miracl-transfer-authorized-index-store",
+      "uri": "artifacts/authorized-index-stores/miracl-transfer",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "authorized-index-store",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "runtime-input",
+      "id": "scifact-trial-runtime-package",
+      "uri": "artifacts/trial-runtime/scifact",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT metadata; cryptographic key not applicable",
+      "role": "trial-runtime-package",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "runtime-input",
+      "id": "hotpotqa-fullwiki-trial-runtime-package",
+      "uri": "artifacts/trial-runtime/hotpotqa-fullwiki",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT metadata; cryptographic key not applicable",
+      "role": "trial-runtime-package",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "runtime-input",
+      "id": "t2-ragbench-trial-runtime-package",
+      "uri": "artifacts/trial-runtime/t2-ragbench",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT metadata; cryptographic key not applicable",
+      "role": "trial-runtime-package",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "runtime-input",
+      "id": "bright-trial-runtime-package",
+      "uri": "artifacts/trial-runtime/bright",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT metadata; cryptographic key not applicable",
+      "role": "trial-runtime-package",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "runtime-input",
+      "id": "miracl-transfer-trial-runtime-package",
+      "uri": "artifacts/trial-runtime/miracl-transfer",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT metadata; cryptographic key not applicable",
+      "role": "trial-runtime-package",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "dataset-package",
+      "id": "complete-staged-study-data",
+      "uri": "artifacts/study-data/custody-complete",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "mixed upstream benchmark licenses",
+      "role": "study-data-package"
+    },
+    {
+      "kind": "dataset-package",
+      "id": "label-free-online-staging-projection",
+      "uri": "artifacts/study-data/online-projection",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "mixed upstream benchmark licenses",
+      "role": "online-staging-package"
+    },
+    {
+      "kind": "development-package",
+      "id": "development-freeze-package",
+      "uri": "artifacts/development/freeze-package",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT; mixed upstream benchmark licenses",
+      "role": "development-freeze-package"
+    },
+    {
       "kind": "dataset",
       "id": "development-fit-data",
       "uri": "tbd",
@@ -389,6 +678,15 @@
       "role": "primary-embedding"
     },
     {
+      "kind": "embedding",
+      "id": "qwen3-embedding-0.6b-stale-revision",
+      "uri": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "stale-embedding"
+    },
+    {
       "kind": "backend",
       "id": "exact-authorized-numpy",
       "uri": "src/fractal_ann_diagnostics/retrieval.py#AuthorizedExactIndex",
@@ -414,6 +712,15 @@
       "sha256": "tbd",
       "license": "MIT",
       "role": "opa-pdp"
+    },
+    {
+      "kind": "tool",
+      "id": "open-policy-agent-runtime-binary",
+      "uri": "artifacts/runtime/opa",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "opa-runtime-binary"
     },
     {
       "kind": "controller",
@@ -470,6 +777,101 @@
       "role": "analysis-runner"
     },
     {
+      "kind": "execution",
+      "id": "scifact-runtime-attestation-plan-template",
+      "uri": "artifacts/runtime/scifact/runtime-attestation-plan.template.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "runtime-attestation-plan-template",
+      "corpus_id": "scifact"
+    },
+    {
+      "kind": "execution",
+      "id": "hotpotqa-fullwiki-runtime-attestation-plan-template",
+      "uri": "artifacts/runtime/hotpotqa-fullwiki/runtime-attestation-plan.template.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "runtime-attestation-plan-template",
+      "corpus_id": "hotpotqa-fullwiki"
+    },
+    {
+      "kind": "execution",
+      "id": "t2-ragbench-runtime-attestation-plan-template",
+      "uri": "artifacts/runtime/t2-ragbench/runtime-attestation-plan.template.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "runtime-attestation-plan-template",
+      "corpus_id": "t2-ragbench"
+    },
+    {
+      "kind": "execution",
+      "id": "bright-runtime-attestation-plan-template",
+      "uri": "artifacts/runtime/bright/runtime-attestation-plan.template.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "runtime-attestation-plan-template",
+      "corpus_id": "bright"
+    },
+    {
+      "kind": "execution",
+      "id": "miracl-transfer-runtime-attestation-plan-template",
+      "uri": "artifacts/runtime/miracl-transfer/runtime-attestation-plan.template.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "runtime-attestation-plan-template",
+      "corpus_id": "miracl-transfer"
+    },
+    {
+      "kind": "attestation",
+      "id": "suite-attestation-descriptor",
+      "uri": "artifacts/suite/suite-attestation-descriptor.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "suite-attestation-descriptor"
+    },
+    {
+      "kind": "custody",
+      "id": "custody-seal-receipt",
+      "uri": "artifacts/custody/custody-seal-receipt.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "custody-seal-receipt"
+    },
+    {
+      "kind": "custody",
+      "id": "tlock-release-provenance",
+      "uri": "artifacts/custody/tlock-release-provenance.json",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "tlock-release-provenance"
+    },
+    {
+      "kind": "tool",
+      "id": "drand-timelock-tool",
+      "uri": "artifacts/custody/bin/tle",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "Apache-2.0",
+      "role": "timelock-tool"
+    },
+    {
+      "kind": "execution",
+      "id": "custody-seal-builder",
+      "uri": "src/fractal_ann_diagnostics/custody.py",
+      "revision": "tbd",
+      "sha256": "tbd",
+      "license": "MIT",
+      "role": "custody-builder"
+    },
+    {
       "kind": "source",
       "id": "fractal-ann-diagnostics-source",
       "uri": "https://github.com/mhdk1602/fractal-ann-diagnostics",
@@ -479,6 +881,7 @@
       "role": "source-code"
     }
   ],
+  "production_workloads": "unresolved-before-c1",
   "sealed_execution": {
     "reserve_fraction": 0.0,
     "custodian": "unassigned",
@@ -486,7 +889,14 @@
     "results_store": "tbd",
     "runner_identity": "tbd",
     "code_commit": "tbd",
+    "c0_evidence_release": "tbd",
     "runner_image": "tbd",
+    "provider_phase_plans": "tbd",
+    "production_controls": {
+      "materialization_config_file_sha256": "tbd",
+      "blueprint_receipt_sha256": "tbd",
+      "blueprint_receipt_file_sha256": "tbd"
+    },
     "hardware": {
       "provider": "tbd",
       "instance_type": "tbd",

@@ -30,9 +30,7 @@ def test_controller_exercises_low_high_exact_and_abstain_paths() -> None:
         )
     )
     low = controller.decide(_features(), n_authorized=100, policy_version="v1")
-    high = controller.decide(
-        _features(drift=1.0), n_authorized=100, policy_version="v1"
-    )
+    high = controller.decide(_features(drift=1.0), n_authorized=100, policy_version="v1")
     exact = controller.decide(
         _features(drift=1.0, churn=0.1),
         n_authorized=100,

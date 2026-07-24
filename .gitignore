@@ -35,6 +35,8 @@ htmlcov/
 .env
 .env.local
 *.secret
+.zenodo-token
+zenodo-token*
 data/ann_cache/
 data/**/*.hdf5
 

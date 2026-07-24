@@ -5,6 +5,7 @@ connected when their identifiers, declared families, judged documents, or
 normalized texts show that they may represent the same statistical unit.  A
 connected component may belong to exactly one study stage.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -77,8 +78,7 @@ class QueryPartitionAuditConfig:
         if (
             self.minimum_length_ratio_numerator <= 0
             or self.minimum_length_ratio_denominator <= 0
-            or self.minimum_length_ratio_numerator
-            > self.minimum_length_ratio_denominator
+            or self.minimum_length_ratio_numerator > self.minimum_length_ratio_denominator
         ):
             raise ValueError("minimum token-length ratio must be in (0, 1]")
 
@@ -298,9 +298,7 @@ class _QueryNode:
             "normalized_text_sha256": _sha256(self.normalized_text),
             "query_family": self.query_family,
             "query_id": self.query_id,
-            "relevant_documents": [
-                list(document) for document in self.relevant_documents
-            ],
+            "relevant_documents": [list(document) for document in self.relevant_documents],
             "stage": self.stage,
             "text_sha256": self.text_sha256,
         }
@@ -330,9 +328,7 @@ class _DisjointSet:
 
 
 def _node_id(corpus: str, stage: str, query_id: str) -> str:
-    return "query://" + "/".join(
-        quote(value, safe="") for value in (corpus, stage, query_id)
-    )
+    return "query://" + "/".join(quote(value, safe="") for value in (corpus, stage, query_id))
 
 
 def _normalize_query_text(text: str) -> tuple[str, tuple[str, ...]]:
@@ -370,9 +366,7 @@ def _nodes(corpora: Iterable[NormalizedCorpus]) -> tuple[_QueryNode, ...]:
             gold_document_ids: set[int] = set()
             if query.gold_evidence is not None:
                 for bundle in query.gold_evidence.alternatives:
-                    gold_document_ids.update(
-                        location.document_id for location in bundle.locations
-                    )
+                    gold_document_ids.update(location.document_id for location in bundle.locations)
             normalized_text, tokens = _normalize_query_text(query.text)
             node = _QueryNode(
                 node_id=_node_id(query.corpus, query.stage, query.query_id),
@@ -383,9 +377,7 @@ def _nodes(corpora: Iterable[NormalizedCorpus]) -> tuple[_QueryNode, ...]:
                 text_sha256=_sha256(query.text),
                 normalized_text=normalized_text,
                 tokens=tokens,
-                relevant_documents=_documents_for_query(
-                    corpus, query.relevant_document_ids
-                ),
+                relevant_documents=_documents_for_query(corpus, query.relevant_document_ids),
                 gold_documents=_documents_for_query(corpus, gold_document_ids),
             )
             prior = observed.setdefault(node.node_id, node)
@@ -444,9 +436,7 @@ def _connect_groups(
             )
 
 
-def _append_group(
-    groups: dict[Hashable, list[str]], key: Hashable, node_id: str
-) -> None:
+def _append_group(groups: dict[Hashable, list[str]], key: Hashable, node_id: str) -> None:
     groups.setdefault(key, []).append(node_id)
 
 
@@ -457,20 +447,14 @@ def _connect_near_duplicates(
     disjoint_set: _DisjointSet,
     edges: set[QueryPartitionEdge],
 ) -> None:
-    eligible = [
-        node for node in nodes if len(node.tokens) >= config.minimum_near_duplicate_tokens
-    ]
+    eligible = [node for node in nodes if len(node.tokens) >= config.minimum_near_duplicate_tokens]
     exact_tokens: dict[tuple[str, ...], list[str]] = {}
-    substitutions: dict[
-        tuple[int, int, tuple[str, ...]], dict[str, list[str]]
-    ] = {}
+    substitutions: dict[tuple[int, int, tuple[str, ...]], dict[str, list[str]]] = {}
     for node in eligible:
         _append_group(exact_tokens, node.tokens, node.node_id)
         for position, token in enumerate(node.tokens):
             deleted = node.tokens[:position] + node.tokens[position + 1 :]
-            variants = substitutions.setdefault(
-                (len(node.tokens), position, deleted), {}
-            )
+            variants = substitutions.setdefault((len(node.tokens), position, deleted), {})
             variants.setdefault(token, []).append(node.node_id)
 
     for signature, variants in sorted(substitutions.items(), key=lambda item: repr(item[0])):
@@ -533,9 +517,7 @@ def _build_query_partition_audit(
         _append_group(identifiers, (node.corpus, node.query_id), node.node_id)
         _append_group(families, (node.corpus, node.query_family), node.node_id)
         for external_id, _, _ in node.relevant_documents:
-            _append_group(
-                relevant_documents, (node.corpus, external_id), node.node_id
-            )
+            _append_group(relevant_documents, (node.corpus, external_id), node.node_id)
         for external_id, _, _ in node.gold_documents:
             _append_group(gold_documents, (node.corpus, external_id), node.node_id)
         if node.normalized_text:

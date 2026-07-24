@@ -120,9 +120,7 @@ def _registry() -> VerifiedProvenanceRegistry:
     return VerifiedProvenanceRegistry(
         corpus=_corpus(),
         verification_receipt=receipt,
-        component_artifact_ids={
-            component: f"{component}-artifact" for component in _COMPONENTS
-        },
+        component_artifact_ids={component: f"{component}-artifact" for component in _COMPONENTS},
     )
 
 
@@ -136,9 +134,7 @@ def _policy_decision(
         subject="analyst",
         action="retrieve",
         policy_version="policy-1",
-        authorized_mask=(
-            np.array([True, False, True]) if mask is None else np.asarray(mask)
-        ),
+        authorized_mask=(np.array([True, False, True]) if mask is None else np.asarray(mask)),
         decision_id=f"decision-{suffix}",
         document_universe_sha256=registry.document_universe_sha256,
         request_nonce=f"nonce-{suffix}",
@@ -311,6 +307,7 @@ def _factory_anchors(
 ) -> dict[str, object]:
     head = max(admitted, key=lambda item: item.audit_record.sequence).audit_record
     return {
+        "execution_orders": {_TRIAL_KEY: _ACTIONS},
         "expected_audit_head_sha256": head.record_sha256,
         "query_partition_audit_sha256": _digest("partition-audit"),
         "partition_label": "primary",
@@ -337,9 +334,7 @@ def test_panel_factory_derives_governed_outputs_and_binds_each_audit_record() ->
     panel = admitted_panel.panel
 
     assert panel.execution_artifact_sha256 == _execution().artifact_sha256
-    assert admitted_panel.admission_receipt.action_panel_artifact_sha256 == (
-        panel.artifact_sha256
-    )
+    assert admitted_panel.admission_receipt.action_panel_artifact_sha256 == (panel.artifact_sha256)
     assert admitted_panel.admission_receipt.partition_label == "primary"
     assert [row.action for row in panel.rows] == list(_ACTIONS)
     for row, source in zip(panel.rows, admitted, strict=True):
@@ -453,9 +448,7 @@ def test_failed_action_rejects_unregistered_code_and_duplicate_outcome() -> None
             execution=_execution(),
             run_receipt=_run_receipt(),
             governed_executions=admitted,
-            failed_executions=(
-                _failed_action("hnsw-high", registry, latency_ms=2.0),
-            ),
+            failed_executions=(_failed_action("hnsw-high", registry, latency_ms=2.0),),
             selected_decisions={_TRIAL_KEY: admitted[0].result.decision},
             action_set=_ACTIONS,
             **_factory_anchors(admitted),
@@ -465,7 +458,7 @@ def test_failed_action_rejects_unregistered_code_and_duplicate_outcome() -> None
 def test_rows_cannot_omit_or_falsely_claim_governed_audit_provenance() -> None:
     registry = _registry()
     admitted = _admitted_actions(registry)[0]
-    row = admitted.to_prelabel_row(action_order=0, controller_selected=True)
+    row = admitted.to_prelabel_row(action_order=0, execution_position=2, controller_selected=True)
 
     with pytest.raises(ConfirmatoryAnalysisError, match="require an audit_record"):
         replace(row, audit_record_sha256=None)
@@ -525,10 +518,14 @@ def test_entitlement_count_is_derived_from_final_policy_mask() -> None:
     )
 
     assert admitted.entitlement_violations == 1
-    assert admitted.to_prelabel_row(
-        action_order=0,
-        controller_selected=True,
-    ).entitlement_violations == 1
+    assert (
+        admitted.to_prelabel_row(
+            action_order=0,
+            execution_position=0,
+            controller_selected=True,
+        ).entitlement_violations
+        == 1
+    )
 
 
 def test_panel_rejects_selection_and_counterfactual_policy_drift() -> None:
@@ -588,6 +585,7 @@ def test_optional_anchor_verifies_the_full_governed_audit_chain() -> None:
         governed_executions=reversed(admitted),
         selected_decisions={_TRIAL_KEY: selection},
         action_set=_ACTIONS,
+        execution_orders={_TRIAL_KEY: _ACTIONS},
         expected_audit_head_sha256=previous.record_sha256,
         query_partition_audit_sha256=_digest("partition-audit"),
         partition_label="primary",
@@ -611,6 +609,7 @@ def test_optional_anchor_verifies_the_full_governed_audit_chain() -> None:
             governed_executions=broken,
             selected_decisions={_TRIAL_KEY: selection},
             action_set=_ACTIONS,
+            execution_orders={_TRIAL_KEY: _ACTIONS},
             expected_audit_head_sha256=previous.record_sha256,
             query_partition_audit_sha256=_digest("partition-audit"),
             partition_label="primary",
@@ -705,9 +704,7 @@ def test_admission_receipt_rejects_timing_and_panel_digest_tampering() -> None:
     with pytest.raises(ConfirmatoryAnalysisError, match="timing window"):
         replace(
             failure_record,
-            failure_finished_monotonic_ns=(
-                failure_record.failure_finished_monotonic_ns + 1
-            ),
+            failure_finished_monotonic_ns=(failure_record.failure_finished_monotonic_ns + 1),
         )
 
     mismatched = replace(
@@ -736,9 +733,7 @@ def test_admission_receipt_round_trips_as_exclusive_canonical_evidence(
         **_factory_anchors(admitted),
     )
     receipt = bundle.admission_receipt
-    assert loads_action_panel_admission_receipt(
-        receipt.canonical_bytes() + b"\n"
-    ) == receipt
+    assert loads_action_panel_admission_receipt(receipt.canonical_bytes() + b"\n") == receipt
 
     target = (tmp_path / "panel-admission.json").resolve()
     write_action_panel_admission_receipt(receipt, target)

@@ -4,6 +4,31 @@ All material changes to this research codebase are recorded here.
 
 ## 0.3.0 — 2026-07-13
 
+### Prospective freeze closure — 2026-07-14
+
+- Added deterministic fit, calibration, and sealed-family selection for all five corpora, followed
+  by a label-blind development runner that closes 4,125 paired trials and 16,500 action rows.
+- Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
+  authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
+- Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific
+  runtime plans, empty-output single-process admission, and replay-consuming markers.
+- Added a two-asset immutable GitHub release for the retained C0 image evidence, with GitHub
+  release and asset verification, anonymous byte readback, and a closed C1 manifest binding that
+  does not add either C0 release asset to the exact 27-file Zenodo package. The package retains both
+  the C1 manifest-transition receipt that proves the registered assembler produced the frozen
+  manifest and a fresh public C0 verification receipt signed by the C1 predicate.
+- Added a four-transition suite ledger: `OPENED`, `ONLINE_COMPLETE`, `LABELS_RELEASED`, and
+  `ANALYSIS_COMPLETE`, with externally verified GitHub/Sigstore evidence at every transition.
+- Added a typed Git Database publisher with a fixed no-bypass ruleset, create-or-fast-forward CAS,
+  exact remote readback, canonical publication receipts, and commits authored only as `mhdk1602`.
+- Added pinned tlock provenance, five timelock ciphertext contracts, drand release checks, and a
+  file-backed release gate that cannot open labels before the complete online suite is anchored.
+- Added the fixed C1 registration workflow and a guarded Zenodo publisher for the reserved DOI. The
+  publisher validates the exact registration package before upload and rechecks public bytes after
+  publication.
+- No external registration, sealed corpus attempt, label release, or confirmatory analysis is
+  claimed by this source commit. Those events occur only after C0 publication and C1 freeze.
+
 ### Confirmatory study apparatus
 
 - Added a closed study-manifest contract with freeze blockers, artifact pins,

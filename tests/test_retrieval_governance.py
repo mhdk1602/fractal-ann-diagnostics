@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, RLock, get_ident
@@ -19,14 +20,19 @@ from fractal_ann_diagnostics.policy import (
     InMemoryPolicyDecisionPoint,
     PolicyDecision,
     policy_document_universe_sha256,
+    policy_environment_sha256,
 )
 from fractal_ann_diagnostics.retrieval import (
     AuthorizedExactIndex,
     AuthorizedHNSWIndex,
     HNSWSearchIndex,
+    PolicyTransitionEvidence,
     authorized_exact_search,
     authorized_hnsw_probe,
     authorized_hnsw_search,
+    dual_epoch_query_drift,
+    packed_policy_mask_sha256,
+    policy_mask_churn,
     snapshot_query,
     unsafe_unfiltered_search,
 )
@@ -68,10 +74,7 @@ class _SequencedDecisionPoint:
 
     @property
     def document_universe_sha256(self) -> str:
-        return (
-            self._document_universe_sha256
-            or self.decisions[0].document_universe_sha256
-        )
+        return self._document_universe_sha256 or self.decisions[0].document_universe_sha256
 
     def decide(
         self,
@@ -84,6 +87,143 @@ class _SequencedDecisionPoint:
         decision = self.decisions[min(self.calls, len(self.decisions) - 1)]
         self.calls += 1
         return decision
+
+
+def test_query_control_features_are_derived_from_complete_per_query_sources() -> None:
+    active = np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+    current = np.asarray([0.0, 1.0, 0.0], dtype=np.float32)
+    assert dual_epoch_query_drift(active, current) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="matched rows"):
+        dual_epoch_query_drift(np.asarray(0.4), np.asarray(0.2))
+    with pytest.raises(ValueError, match="non-zero norms"):
+        dual_epoch_query_drift(np.zeros(3), current)
+
+    baseline = np.asarray([True, True, False, False])
+    changed = np.asarray([True, False, True, False])
+    assert policy_mask_churn(baseline, changed) == 0.5
+    environment = {"policy_state": "synthetic-mutation"}
+    environment_sha256 = policy_environment_sha256(environment)
+    evidence = PolicyTransitionEvidence.derive(
+        environment_sha256=environment_sha256,
+        baseline_policy_revision=f"sha256:{'1' * 64}",
+        current_policy_revision=f"sha256:{'2' * 64}",
+        baseline_mask=baseline,
+        current_mask=changed,
+        expected_baseline_mask_sha256=packed_policy_mask_sha256(baseline),
+        expected_current_mask_sha256=packed_policy_mask_sha256(changed),
+        expected_baseline_authorized_count=2,
+        expected_current_authorized_count=2,
+    )
+    assert evidence.policy_churn == 0.5
+    with pytest.raises(TypeError):
+        PolicyTransitionEvidence(  # type: ignore[call-arg]
+            environment_sha256=environment_sha256,
+            baseline_policy_revision=f"sha256:{'1' * 64}",
+            current_policy_revision=f"sha256:{'2' * 64}",
+            baseline_mask_sha256="3" * 64,
+            current_mask_sha256="4" * 64,
+            baseline_authorized_count=2,
+            current_authorized_count=2,
+            document_count=4,
+            policy_churn=0.5,
+        )
+
+    constructor = set(inspect.signature(GovernedRetriever.__init__).parameters)
+    query_parameters = set(inspect.signature(GovernedRetriever.query).parameters)
+    assert {"policy_churn", "embedding_drift"}.isdisjoint(constructor)
+    assert {"policy_churn", "embedding_drift"}.isdisjoint(query_parameters)
+
+
+def test_governed_retriever_binds_transition_to_live_mask_and_query_epochs() -> None:
+    vectors, _ = _fixture()
+    universe = policy_document_universe_sha256(
+        f"fixture-document-{index}" for index in range(len(vectors))
+    )
+    current_mask = np.r_[
+        np.ones(40, dtype=bool),
+        np.zeros(40, dtype=bool),
+    ]
+    baseline_mask = current_mask.copy()
+    baseline_mask[0] = False
+    baseline_mask[40] = True
+    current_revision = f"sha256:{'2' * 64}"
+    environment = {"policy_state": "synthetic-mutation"}
+    environment_sha256 = policy_environment_sha256(environment)
+    evidence = PolicyTransitionEvidence.derive(
+        environment_sha256=environment_sha256,
+        baseline_policy_revision=f"sha256:{'1' * 64}",
+        current_policy_revision=current_revision,
+        baseline_mask=baseline_mask,
+        current_mask=current_mask,
+        expected_baseline_mask_sha256=packed_policy_mask_sha256(baseline_mask),
+        expected_current_mask_sha256=packed_policy_mask_sha256(current_mask),
+        expected_baseline_authorized_count=40,
+        expected_current_authorized_count=40,
+    )
+    policy = AuthorizationPolicy(
+        roles=("reader",),
+        visibility=np.asarray([current_mask]),
+        version=current_revision,
+        document_universe_sha256=universe,
+    )
+    retriever = GovernedRetriever(
+        vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=universe,
+        policy_transitions={environment_sha256: evidence},
+        require_policy_transition=True,
+    )
+    active_query = vectors[1]
+    current_query = vectors[2]
+    result = retriever.query(
+        active_query,
+        current_truth_query=current_query,
+        environment=environment,
+    )
+    assert result.geometry.policy_churn == evidence.policy_churn
+    assert result.geometry.embedding_drift == pytest.approx(
+        dual_epoch_query_drift(active_query, current_query)
+    )
+
+    with pytest.raises(ValueError, match="lacks its frozen policy transition"):
+        retriever.query(
+            active_query,
+            current_truth_query=current_query,
+            environment={"policy_state": "wrong-query-environment"},
+        )
+
+    forged_current = current_mask.copy()
+    forged_current[1] = False
+    forged_current[41] = True
+    forged_baseline = forged_current.copy()
+    forged_baseline[2] = False
+    forged_baseline[42] = True
+    forged_evidence = PolicyTransitionEvidence.derive(
+        environment_sha256=environment_sha256,
+        baseline_policy_revision=f"sha256:{'1' * 64}",
+        current_policy_revision=current_revision,
+        baseline_mask=forged_baseline,
+        current_mask=forged_current,
+        expected_baseline_mask_sha256=packed_policy_mask_sha256(forged_baseline),
+        expected_current_mask_sha256=packed_policy_mask_sha256(forged_current),
+        expected_baseline_authorized_count=40,
+        expected_current_authorized_count=40,
+    )
+    forged_retriever = GovernedRetriever(
+        vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=universe,
+        policy_transitions={environment_sha256: forged_evidence},
+        require_policy_transition=True,
+    )
+    with pytest.raises(ValueError, match="transition endpoint"):
+        forged_retriever.query(
+            active_query,
+            current_truth_query=current_query,
+            environment=environment,
+        )
 
 
 def test_authorized_exact_and_hnsw_never_cross_boundary() -> None:
@@ -238,9 +378,7 @@ def test_retriever_rejects_same_sized_corpus_identity_substitution() -> None:
             vectors,
             substituted_policy,
             "reader",
-            expected_document_universe_sha256=(
-                expected_policy.document_universe_sha256
-            ),
+            expected_document_universe_sha256=(expected_policy.document_universe_sha256),
         )
 
 
@@ -297,6 +435,207 @@ def test_retriever_owns_an_immutable_vector_snapshot() -> None:
     np.testing.assert_array_equal(retriever.vectors[0], original_first)
     assert not np.shares_memory(retriever.vectors, vectors)
     assert not retriever.vectors.flags.writeable
+
+
+def test_retriever_can_bind_verified_read_only_float32_memmaps(tmp_path) -> None:
+    active_vectors, policy = _fixture()
+    current_truth = active_vectors + np.float32(0.01)
+    active_path = tmp_path / "active.npy"
+    truth_path = tmp_path / "truth.npy"
+    np.save(active_path, active_vectors)
+    np.save(truth_path, current_truth)
+    active = np.load(active_path, mmap_mode="r")
+    truth = np.load(truth_path, mmap_mode="r")
+
+    retriever = GovernedRetriever(
+        active,
+        policy,
+        "reader",
+        expected_document_universe_sha256=policy.document_universe_sha256,
+        exact_truth_vectors=truth,
+        trusted_readonly_vectors=True,
+        hnsw_seed=4,
+    )
+
+    assert np.shares_memory(retriever.vectors, active)
+    assert np.shares_memory(retriever.exact_truth_vectors, truth)
+    assert not retriever.vectors.flags.writeable
+    assert not retriever.exact_truth_vectors.flags.writeable
+
+
+@pytest.mark.parametrize(
+    "vectors",
+    [
+        np.ones((4, 3), dtype=np.float32),
+        np.ones((4, 3), dtype=np.float16),
+    ],
+)
+def test_trusted_read_only_vector_mode_rejects_unverified_array_contracts(
+    vectors: np.ndarray,
+) -> None:
+    _, policy = _fixture()
+    if vectors.dtype == np.float16:
+        vectors.setflags(write=False)
+        match = "native float32"
+    else:
+        match = "must not be writeable"
+
+    with pytest.raises(ValueError, match=match):
+        GovernedRetriever(
+            vectors,
+            policy,
+            "reader",
+            expected_document_universe_sha256=policy.document_universe_sha256,
+            trusted_readonly_vectors=True,
+        )
+
+
+def test_retriever_uses_current_revision_vectors_for_exact_truth() -> None:
+    active_vectors, policy = _fixture()
+    current_truth = active_vectors.copy()
+    active_vectors[0] = active_vectors[39]
+    current_truth[0] = np.full(active_vectors.shape[1], -100.0, dtype=np.float32)
+    query = current_truth[0].copy()
+    controller = RuleController(
+        ControllerConfig(
+            low_ef=20,
+            high_ef=40,
+            probe_k=10,
+            exact_scan_threshold=100,
+        )
+    )
+    retriever = GovernedRetriever(
+        active_vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=policy.document_universe_sha256,
+        exact_truth_vectors=current_truth,
+        controller=controller,
+        hnsw_seed=4,
+    )
+
+    result = retriever.query(query, k=5)
+
+    assert result.search is not None
+    assert result.search.strategy == "exact-authorized"
+    assert int(result.search.ids[0]) == 0
+    assert not np.shares_memory(retriever.exact_truth_vectors, current_truth)
+    assert not retriever.exact_truth_vectors.flags.writeable
+
+
+def test_dual_epoch_query_uses_current_truth_for_exact_and_active_for_hnsw() -> None:
+    vectors = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [0.0, -1.0],
+        ],
+        dtype=np.float32,
+    )
+    universe = policy_document_universe_sha256(
+        f"dual-epoch-document-{index}" for index in range(len(vectors))
+    )
+    policy = AuthorizationPolicy(
+        roles=("reader",),
+        visibility=np.ones((1, len(vectors)), dtype=bool),
+        document_universe_sha256=universe,
+    )
+    active_query = np.asarray([1.0, 0.0], dtype=np.float32)
+    current_truth_query = np.asarray([0.0, 1.0], dtype=np.float32)
+
+    exact = GovernedRetriever(
+        vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=universe,
+        exact_truth_vectors=vectors,
+        controller=RuleController(
+            ControllerConfig(
+                low_ef=4,
+                high_ef=4,
+                probe_k=4,
+                exact_scan_threshold=4,
+            )
+        ),
+    ).query(
+        active_query,
+        current_truth_query=current_truth_query,
+        k=1,
+    )
+    approximate = GovernedRetriever(
+        vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=universe,
+        exact_truth_vectors=vectors,
+        controller=RuleController(
+            ControllerConfig(
+                low_ef=4,
+                high_ef=4,
+                probe_k=4,
+                exact_scan_threshold=0,
+                high_effort_threshold=0.99,
+                exact_threshold=1.0,
+            )
+        ),
+    ).query(
+        active_query,
+        current_truth_query=current_truth_query,
+        k=1,
+    )
+
+    assert exact.search is not None
+    assert exact.search.strategy == "exact-authorized"
+    assert exact.search.ids.tolist() == [1]
+    assert approximate.search is not None
+    assert approximate.search.strategy == "hnsw-low"
+    assert approximate.search.ids.tolist() == [0]
+
+
+@pytest.mark.parametrize(
+    "current_truth_query",
+    [
+        np.ones(3, dtype=np.float32),
+        np.asarray([np.nan] * 8, dtype=np.float32),
+    ],
+)
+def test_retriever_rejects_invalid_current_truth_query(
+    current_truth_query: np.ndarray,
+) -> None:
+    vectors, policy = _fixture()
+    retriever = GovernedRetriever(
+        vectors,
+        policy,
+        "reader",
+        expected_document_universe_sha256=policy.document_universe_sha256,
+    )
+
+    with pytest.raises(ValueError, match="dimension|non-finite"):
+        retriever.query(vectors[0], current_truth_query=current_truth_query)
+
+
+@pytest.mark.parametrize(
+    ("truth", "match"),
+    [
+        (np.ones((2, 3), dtype=np.float32), "same shape"),
+        (np.asarray([[0.0] * 7 + [np.nan]] * 80, dtype=np.float32), "non-finite"),
+    ],
+)
+def test_retriever_rejects_invalid_exact_truth_vectors(
+    truth: np.ndarray,
+    match: str,
+) -> None:
+    vectors, policy = _fixture()
+
+    with pytest.raises(ValueError, match=match):
+        GovernedRetriever(
+            vectors,
+            policy,
+            "reader",
+            expected_document_universe_sha256=policy.document_universe_sha256,
+            exact_truth_vectors=truth,
+        )
 
 
 def test_query_snapshot_owns_one_immutable_request_vector() -> None:

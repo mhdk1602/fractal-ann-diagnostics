@@ -1,4 +1,5 @@
 """Compatibility tests for the retired v0.1 rule diagnostic."""
+
 from __future__ import annotations
 
 import numpy as np

@@ -1,4 +1,5 @@
 """Versioned corpus, embedding, and policy drift interventions."""
+
 from __future__ import annotations
 
 import hashlib
@@ -83,8 +84,7 @@ def diff_corpus_snapshots(
             sorted(
                 external_id
                 for external_id in shared
-                if before[external_id].chunking_revision
-                != after[external_id].chunking_revision
+                if before[external_id].chunking_revision != after[external_id].chunking_revision
             )
         ),
         previous_count=len(before),
@@ -120,16 +120,11 @@ class EmbeddingMigration:
             self.new_binding, EmbeddingRevisionBinding
         ):
             raise TypeError("old_binding and new_binding must be revision bindings")
-        if (
-            self.old_binding.document_revision
-            == self.new_binding.document_revision
-        ):
+        if self.old_binding.document_revision == self.new_binding.document_revision:
             raise ValueError("old and new document revisions must be distinct")
         if self.old_binding.query_revision == self.new_binding.query_revision:
             raise ValueError("old and new query revisions must be distinct")
-        if not np.isfinite(self.migrated_fraction) or not (
-            0.0 <= self.migrated_fraction <= 1.0
-        ):
+        if not np.isfinite(self.migrated_fraction) or not (0.0 <= self.migrated_fraction <= 1.0):
             raise ValueError("migrated_fraction must be finite and in [0, 1]")
 
         raw_mask = np.asarray(self.migrated_mask)

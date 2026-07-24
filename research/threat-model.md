@@ -13,6 +13,12 @@ not claim answer correctness, entailment, faithfulness, or resistance to prompt-
 ## Trust boundaries
 
 ```text
+corpus-specific frozen runtime plan + one-shot process receipt
+                    |
+ live namespace/environment check + source-mount closure
+                    |
+ sealed-online attempt binds plan and receipt digests
+                    |
 identity + query + finite policy environment
                     |
                     v
@@ -36,6 +42,8 @@ identity + query + finite policy environment
              emitted document IDs
                     |
  prediction + raw action panel, no labels
+                    |
+ ciphertext + custody receipt, no plaintext
                     |
  panel-admission receipt + completion anchor
                     |
@@ -68,6 +76,10 @@ documents.
 - An embedding migration mixes document and query revisions.
 - Approximate search omits a complete authorized evidence route.
 - Sealed relevance labels leak into model fitting, action choice, or online prediction.
+- A runner substitutes a different timelock ciphertext, drand round, tool binary, or custody builder
+  after freeze.
+- A nominal custodian shares ultimate administrative authority, storage credentials, or plaintext
+  access with the online runner.
 - Counterfactual action rows are altered or invented after relevance labels become visible.
 - A runner swaps a corpus, model, policy bundle, verified-artifact receipt, prediction-completion
   receipt, or result after protocol freeze.
@@ -101,8 +113,10 @@ experiment does not test those attacks.
 7. The online runner receives opaque query and family keys. Relevance, evidence bundles, source
    answers, and label-bearing metadata stay in a separately hashed custodian artifact until an
    external anchor records the exact prediction and typed pre-label action-panel binding. For each
-   corpus, the outer manifest separately pins source inputs, canonical online-execution bytes, and
-   canonical label bytes; the label artifact binds the online-execution digest.
+   corpus, the outer manifest separately pins source inputs, canonical online-execution bytes,
+   canonical label bytes, and a timelock ciphertext; the label artifact binds the online-execution
+   digest. A closed custody receipt binds those digests to one exact drand chain and round plus the
+   timelock-tool and custody-builder digests.
 8. Completed and governed-abstention panel rows are derived from a typed `GovernedResult` matched
    to a self-hashed `AuditRecord`. Returned IDs, latency, entitlement count, action, policy revision,
    authorization records, and search work cannot be replaced by caller scalar fields. Audit records
@@ -135,7 +149,12 @@ experiment does not test those attacks.
     receipt. Immediately before the run-receipt write, a bounded certificate-validated HTTPS fetch
     must return the same registry bytes without a redirect. These checks precede the
     network-disabled sealed execution boundary.
-13. The built-in sealed scorer accepts a canonical local `file:` result directory and derives one
+13. Full artifact verification is a custodian operation that reads plaintext labels. Separate online
+    custody admission verifies the full receipt and freshly hashes only its closed role whitelist.
+    Plaintext labels, sealed inputs, development data, fitted analysis models, and the
+    query-partition audit are not opened. A missing or changed ciphertext aborts admission; the
+    resulting receipt lists every freshly opened artifact.
+14. The built-in sealed scorer accepts a canonical local `file:` result directory and derives one
     attempt, detached result-receipt, and result path from the manifest digest. It creates the
     attempt receipt with `O_EXCL` before the H1 orientation diagnostic or H2–H3 confirmatory-gate
     computation. The receipt binds the manifest,
@@ -149,6 +168,11 @@ Authorization is asserted at result emission, not for an unlimited future interv
 caches IDs or content must reauthorize at its own later disclosure boundary. The reference API
 cannot prevent a downstream process from retaining a result after revocation.
 
+Drand timelock encryption creates a time embargo under its cryptographic and beacon assumptions.
+It does not create an event-conditioned release. Anyone who possesses the ciphertext can decrypt
+after the registered round becomes available. If that round arrives before a verified prediction
+completion anchor, v0.3 terminates without scoring.
+
 Likewise, the hash chain and exclusive receipts detect changes only relative to a trusted external
 anchor. They do not create write-once storage. The built-in result writer supports a local `file:`
 directory only. Its `O_EXCL`, no-follow, owner, permission, and `fsync` checks prevent replacement
@@ -157,12 +181,15 @@ hide, or rewrite files outside the package. The protocol therefore requires cont
 retention and custody separate from the online runner. `s3:` and `gs:` stores need a separately
 pinned authenticated create-if-absent adapter; the built-in scorer rejects them.
 
-Typed admission and anchoring prove internal agreement and pre-label byte identity. Ordinary Python
-objects do not attest which external process, machine, or credential produced them. The exclusive
-attempt receipt blocks a second admitted package run; it cannot stop arbitrary Python code,
-process-memory inspection, logging, or copying. Runner identity, scorer and online-runner image
-provenance, operating system, result-directory custody, audit-head custody, and the independently
-administered completion anchor remain part of the trusted computing base.
+Typed admission and anchoring prove internal agreement and pre-label byte identity. The file-backed
+runtime receipt adds a falsifiable process record: launcher identity, OCI digest, commit, operating
+system, resources, namespace, exact environment, network state, read-only input mounts, and the
+one-shot marker. `run_sealed_online_once` reobserves that process before source I/O and binds the
+receipt into its exclusive attempt. This is process evidence, not TPM, TEE, or cloud-verifier
+evidence. It cannot stop arbitrary Python code, process-memory inspection, logging, or copying by a
+more privileged administrator. Host kernel and launcher integrity, result-directory custody,
+audit-head custody, and the independently administered completion anchor remain part of the trusted
+computing base.
 
 A technical failure ends confirmatory v0.3. The receipt schema's `reserve` label may support
 engineering rehearsals, but it cannot rescue or replace the primary confirmatory attempt. Any later
@@ -175,6 +202,8 @@ attempt needs an amended protocol version, a new frozen manifest, and a new exte
 - Paired-world tests are observational checks, not formal noninterference proofs.
 - ANN recall and complete-evidence retrieval do not establish answer correctness.
 - Public-corpus ACL generators do not estimate enterprise entitlement prevalence.
+- A custody receipt does not prove deletion of other plaintext copies, correct human behavior, or
+  independence between actors controlled by one ultimate administrator.
 - OPA, TLS, the operating system, runner identity, registry and anchor administrators, and
   immutable-store administration remain in the trusted computing base.
 

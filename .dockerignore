@@ -1,0 +1,10 @@
+*
+!Dockerfile.confirmatory
+!confirmatory-source-date-epoch.txt
+!pyproject.toml
+!uv.lock
+!requirements.confirmatory-build.txt
+!examples/opa_compiled_masks.rego
+!examples/opa_compiled_masks_test.rego
+!src/
+!src/**

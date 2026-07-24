@@ -1,0 +1,833 @@
+name: Analyze the one claimed confirmatory suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite_attempt_id:
+        description: Frozen manifest-derived 64-character suite attempt identifier
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: confirmatory-analysis-${{ inputs.suite_attempt_id }}
+  cancel-in-progress: false
+
+env:
+  ACTIONS_RUNNER_ARCHIVE_BYTE_COUNT: "127138003"
+  ACTIONS_RUNNER_ARCHIVE_SHA256: e1a9bc7a3661e06fa0b129d15c2064fe65dc81a431001d8958a9db1409b73769
+  ACTIONS_RUNNER_BOOTSTRAP_FLAGS: "--ephemeral --disableupdate --unattended"
+  ACTIONS_RUNNER_VERSION: 2.335.1
+  C0_REF: refs/tags/confirmatory-apparatus-c0
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  REGISTERED_RUNTIME_IMAGE_ROLE: scientific
+  REGISTERED_RUNTIME_INDEX_ROLE: main
+  REGISTERED_RUNTIME_PLATFORM: linux/amd64
+
+jobs:
+  claim:
+    environment: confirmatory
+    name: claim-analysis
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      PYTHONPATH: src
+    outputs:
+      claim_artifact_digest: ${{ steps.upload_claim.outputs.artifact-digest }}
+      claim_artifact_id: ${{ steps.upload_claim.outputs.artifact-id }}
+      claim_package_inventory_sha256: ${{ steps.package_inventory.outputs.inventory_sha256 }}
+      claim_state_sha256: ${{ steps.claim.outputs.claim_state_sha256 }}
+      docker_client_build: ${{ steps.prerequisites.outputs.docker_client_build }}
+      docker_client_version: ${{ steps.prerequisites.outputs.docker_client_version }}
+      docker_file_sha256: ${{ steps.prerequisites.outputs.docker_file_sha256 }}
+      docker_path: ${{ steps.prerequisites.outputs.docker_path }}
+      docker_resolved_path: ${{ steps.prerequisites.outputs.docker_resolved_path }}
+      gh_file_sha256: ${{ steps.prerequisites.outputs.gh_file_sha256 }}
+      gh_path: ${{ steps.prerequisites.outputs.gh_path }}
+      gh_version: ${{ steps.prerequisites.outputs.gh_version }}
+      host_python_file_sha256: ${{ steps.prerequisites.outputs.host_python_file_sha256 }}
+      host_python_path: ${{ steps.prerequisites.outputs.host_python_path }}
+      oci_index_digest: ${{ steps.prerequisites.outputs.oci_index_digest }}
+      oci_platform_manifest_digest: ${{ steps.prerequisites.outputs.oci_platform_manifest_digest }}
+      phase_evidence_root: ${{ steps.prerequisites.outputs.phase_evidence_root }}
+      provider_plan_file_sha256: ${{ steps.prerequisites.outputs.provider_plan_file_sha256 }}
+      provider_plan_path: ${{ steps.prerequisites.outputs.provider_plan_path }}
+      runner_label: ${{ steps.claim.outputs.runner_label }}
+      runner_bootstrap_receipt_file_sha256: ${{ steps.prerequisites.outputs.runner_bootstrap_receipt_file_sha256 }}
+      runner_bootstrap_receipt_path: ${{ steps.prerequisites.outputs.runner_bootstrap_receipt_path }}
+      runner_listener_file_sha256: ${{ steps.prerequisites.outputs.runner_listener_file_sha256 }}
+      runner_listener_path: ${{ steps.prerequisites.outputs.runner_listener_path }}
+      runtime_image: ${{ steps.prerequisites.outputs.runtime_image }}
+      runtime_image_role: ${{ steps.prerequisites.outputs.runtime_image_role }}
+      runtime_index_role: ${{ steps.prerequisites.outputs.runtime_index_role }}
+      runtime_platform: ${{ steps.prerequisites.outputs.runtime_platform }}
+      suite_namespace: ${{ steps.claim.outputs.suite_namespace }}
+
+    steps:
+      - name: Admit the fixed C0 workflow and first provider attempt
+        shell: bash
+        env:
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SUITE_ATTEMPT_ID" =~ ^[0-9a-f]{64}$ ]]
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "$C0_REF"
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-analysis.yml@${C0_REF}"
+
+      - name: Check out the exact C0 workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+      - name: Install the fixed C0 verifier environment
+        run: uv sync --frozen --no-install-project
+
+      - name: Anonymously verify all 27 C1 files and both attestations
+        id: prerequisites
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.execution_claim
+          verify-prerequisites
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --output-dir "${RUNNER_TEMP}/analysis-prerequisites"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Publish ANALYSIS_CLAIMED with provider CAS
+        id: claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREREQUISITE_RECEIPT: ${{ steps.prerequisites.outputs.prerequisite_receipt_path }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.execution_claim
+          claim
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --prerequisite-receipt "$PREREQUISITE_RECEIPT"
+          --output-dir "${RUNNER_TEMP}/analysis-claim"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify the exact claimed subject and predicate bytes
+        shell: bash
+        env:
+          CLAIM_PREDICATE: ${{ steps.claim.outputs.claim_predicate_path }}
+          CLAIM_PREDICATE_SHA256: ${{ steps.claim.outputs.claim_predicate_sha256 }}
+          CLAIM_SUBJECT: ${{ steps.claim.outputs.claim_subject_path }}
+          CLAIM_SUBJECT_SHA256: ${{ steps.claim.outputs.claim_subject_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$CLAIM_PREDICATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$CLAIM_SUBJECT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$CLAIM_PREDICATE" | awk '{print $1}')" = \
+            "$CLAIM_PREDICATE_SHA256"
+          test "$(sha256sum "$CLAIM_SUBJECT" | awk '{print $1}')" = "$CLAIM_SUBJECT_SHA256"
+
+      - name: Attest the claimed state
+        id: claim_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.claim.outputs.claim_subject_path }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/provider-claim/v1
+          predicate-path: ${{ steps.claim.outputs.claim_predicate_path }}
+          create-storage-record: false
+
+      - name: Revalidate the protected ANALYSIS_CLAIMED tip for state attestation
+        id: claim_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LEDGER_COMMIT: ${{ steps.claim.outputs.claim_ledger_commit }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          validate-workflow-transition
+          --ledger-commit "$LEDGER_COMMIT"
+          --repository "$GITHUB_REPOSITORY"
+          --github-ref "$GITHUB_REF"
+          --github-sha "$GITHUB_SHA"
+          --workflow-ref "$GITHUB_WORKFLOW_REF"
+          --workflow-sha "$GITHUB_WORKFLOW_SHA"
+          --output-dir "${RUNNER_TEMP}/analysis-claim-state"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the exact ANALYSIS_CLAIMED ledger state
+        id: claim_state_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.claim_state.outputs.state_path }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/confirmatory-state/v1
+          predicate-path: ${{ steps.claim_state.outputs.predicate_path }}
+          create-storage-record: false
+
+      - name: Materialize typed ANALYSIS_CLAIMED provider evidence
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.claim_state_attestation.outputs.bundle-path }}
+          RECEIPT_PATH: ${{ steps.claim_state.outputs.receipt_path }}
+          STATE_SEQUENCE: ${{ steps.claim_state.outputs.state_sequence }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          emit-evidence
+          --bundle "$ATTESTATION_BUNDLE"
+          --receipt "$RECEIPT_PATH"
+          --output "${RUNNER_TEMP}/analysis-claim-state/${STATE_SEQUENCE}.attestation.json"
+
+      - name: Retain immutable claim evidence
+        if: always()
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.claim_attestation.outputs.bundle-path }}
+          STATE_ATTESTATION_BUNDLE: ${{ steps.claim_state_attestation.outputs.bundle-path }}
+          STATE_SEQUENCE: ${{ steps.claim_state.outputs.state_sequence }}
+          CLAIM_RECEIPT: ${{ steps.claim.outputs.claim_receipt_path }}
+          CLAIM_RECEIPT_SHA256: ${{ steps.claim.outputs.claim_receipt_sha256 }}
+          PREREQUISITE_RECEIPT: ${{ steps.prerequisites.outputs.prerequisite_receipt_path }}
+          PREREQUISITE_RECEIPT_SHA256: ${{ steps.prerequisites.outputs.prerequisite_receipt_sha256 }}
+          PROVIDER_PLAN_MATERIALIZATION: ${{ steps.prerequisites.outputs.provider_plan_materialization_path }}
+          PROVIDER_PLAN_MATERIALIZATION_SHA256: ${{ steps.prerequisites.outputs.provider_plan_file_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/analysis-claim-evidence"
+          install -d -m 0700 "$evidence"
+          if test -n "$PROVIDER_PLAN_MATERIALIZATION" \
+            && test -f "$PROVIDER_PLAN_MATERIALIZATION"; then
+            [[ "$PROVIDER_PLAN_MATERIALIZATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$PROVIDER_PLAN_MATERIALIZATION" | awk '{print $1}')" = \
+              "$PROVIDER_PLAN_MATERIALIZATION_SHA256"
+            install -m 0600 -- "$PROVIDER_PLAN_MATERIALIZATION" \
+              "$evidence/provider-plan.materialized.json"
+          else
+            printf '%s\n' 'provider plan materialization unavailable' \
+              > "$evidence/provider-plan-materialization-missing.txt"
+          fi
+          if test -n "$CLAIM_RECEIPT" && test -f "$CLAIM_RECEIPT"; then
+            [[ "$CLAIM_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$CLAIM_RECEIPT" | awk '{print $1}')" = "$CLAIM_RECEIPT_SHA256"
+            install -m 0600 -- "$CLAIM_RECEIPT" "$evidence/claim-receipt.json"
+            printf '%s  %s\n' "$CLAIM_RECEIPT_SHA256" 'claim-receipt.json' \
+              > "$evidence/claim-receipt.sha256"
+          else
+            printf '%s\n' 'claim receipt unavailable' > "$evidence/claim-receipt-missing.txt"
+          fi
+          if test -n "$PREREQUISITE_RECEIPT" && test -f "$PREREQUISITE_RECEIPT"; then
+            [[ "$PREREQUISITE_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$PREREQUISITE_RECEIPT" | awk '{print $1}')" = \
+              "$PREREQUISITE_RECEIPT_SHA256"
+            install -m 0600 -- "$PREREQUISITE_RECEIPT" \
+              "$evidence/prerequisite-receipt.json"
+            printf '%s  %s\n' "$PREREQUISITE_RECEIPT_SHA256" 'prerequisite-receipt.json' \
+              > "$evidence/prerequisite-receipt.sha256"
+          else
+            printf '%s\n' 'prerequisite receipt unavailable' \
+              > "$evidence/prerequisite-receipt-missing.txt"
+          fi
+          if test -n "$ATTESTATION_BUNDLE" && test -f "$ATTESTATION_BUNDLE"; then
+            install -m 0600 -- "$ATTESTATION_BUNDLE" "$evidence/claim.sigstore.bundle.json"
+          else
+            printf '%s\n' 'claim attestation bundle unavailable' \
+              > "$evidence/claim-attestation-missing.txt"
+          fi
+          test -f "$STATE_ATTESTATION_BUNDLE"
+          cp -- "$STATE_ATTESTATION_BUNDLE" \
+            "$evidence/${STATE_SEQUENCE}.sigstore.bundle.json"
+          cp -- "${RUNNER_TEMP}/analysis-claim-state/${STATE_SEQUENCE}.state.json" \
+            "$evidence/${STATE_SEQUENCE}.state.json"
+          cp -- "${RUNNER_TEMP}/analysis-claim-state/${STATE_SEQUENCE}.attestation.json" \
+            "$evidence/${STATE_SEQUENCE}.attestation.json"
+          cp -- "${RUNNER_TEMP}/analysis-claim-state/ledger-validation.json" \
+            "$evidence/${STATE_SEQUENCE}.ledger-validation.json"
+          if test -d "${RUNNER_TEMP}/analysis-claim"; then
+            cp -R -- "${RUNNER_TEMP}/analysis-claim/." "$evidence/"
+          fi
+
+      - name: Close the exact analysis claim package inventory
+        id: package_inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/analysis-claim-evidence"
+          inventory="$evidence/claim-package.SHA256SUMS"
+          test ! -e "$inventory"
+          (
+            cd "$evidence"
+            find . -type f ! -name claim-package.SHA256SUMS -printf '%P\0' \
+              | LC_ALL=C sort -z \
+              | xargs -0 -r sha256sum
+          ) > "$inventory"
+          test -s "$inventory"
+          (cd "$evidence" && sha256sum --check claim-package.SHA256SUMS)
+          printf 'inventory_sha256=%s\n' \
+            "$(sha256sum "$inventory" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the immutable analysis claim package
+        if: always()
+        id: upload_claim
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-analysis-claim-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-claim-evidence
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: true
+          retention-days: 90
+
+  execute:
+    environment: confirmatory
+    name: run-analysis
+    needs: claim
+    runs-on: [self-hosted, macOS, ARM64, "${{ needs.claim.outputs.runner_label }}"]
+    timeout-minutes: 720
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Re-admit the fixed provider execution identity
+        shell: bash
+        env:
+          EXPECTED_RUNNER_LABEL: ${{ needs.claim.outputs.runner_label }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+          SUITE_NAMESPACE: ${{ needs.claim.outputs.suite_namespace }}
+        run: |
+          set -euo pipefail
+          [[ "$SUITE_ATTEMPT_ID" =~ ^[0-9a-f]{64}$ ]]
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "$C0_REF"
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-analysis.yml@${C0_REF}"
+          test -n "$SUITE_NAMESPACE"
+          [[ "$EXPECTED_RUNNER_LABEL" =~ ^fractal-ann-confirmatory-[a-z0-9-]{16,96}$ ]]
+
+      - name: Download the exact ANALYSIS_CLAIMED evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.claim.outputs.claim_artifact_id }}
+          path: ${{ runner.temp }}/analysis-claim-evidence
+
+      - name: Assert the immutable ephemeral runner bootstrap before phase input
+        shell: bash
+        env:
+          DOCKER_CLIENT_BUILD: ${{ needs.claim.outputs.docker_client_build }}
+          DOCKER_CLIENT_VERSION: ${{ needs.claim.outputs.docker_client_version }}
+          DOCKER_FILE_SHA256: ${{ needs.claim.outputs.docker_file_sha256 }}
+          DOCKER_PATH: ${{ needs.claim.outputs.docker_path }}
+          DOCKER_RESOLVED_PATH: ${{ needs.claim.outputs.docker_resolved_path }}
+          GH_FILE_SHA256: ${{ needs.claim.outputs.gh_file_sha256 }}
+          GH_PATH: ${{ needs.claim.outputs.gh_path }}
+          GH_VERSION: ${{ needs.claim.outputs.gh_version }}
+          HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
+          HOST_PYTHON_SHA256: ${{ needs.claim.outputs.host_python_file_sha256 }}
+          OCI_INDEX_DIGEST: ${{ needs.claim.outputs.oci_index_digest }}
+          OCI_PLATFORM_MANIFEST_DIGEST: ${{ needs.claim.outputs.oci_platform_manifest_digest }}
+          PROVIDER_PLAN: ${{ needs.claim.outputs.provider_plan_path }}
+          PROVIDER_PLAN_SHA256: ${{ needs.claim.outputs.provider_plan_file_sha256 }}
+          RUNNER_BOOTSTRAP_RECEIPT: ${{ needs.claim.outputs.runner_bootstrap_receipt_path }}
+          RUNNER_BOOTSTRAP_RECEIPT_SHA256: ${{ needs.claim.outputs.runner_bootstrap_receipt_file_sha256 }}
+          RUNNER_LISTENER: ${{ needs.claim.outputs.runner_listener_path }}
+          RUNNER_LISTENER_SHA256: ${{ needs.claim.outputs.runner_listener_file_sha256 }}
+          RUNTIME_IMAGE: ${{ needs.claim.outputs.runtime_image }}
+          RUNTIME_IMAGE_ROLE: ${{ needs.claim.outputs.runtime_image_role }}
+          RUNTIME_INDEX_ROLE: ${{ needs.claim.outputs.runtime_index_role }}
+          RUNTIME_PLATFORM: ${{ needs.claim.outputs.runtime_platform }}
+        run: |
+          set -euo pipefail
+          [[ "$OCI_INDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$OCI_PLATFORM_MANIFEST_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$RUNTIME_IMAGE_ROLE" = "$REGISTERED_RUNTIME_IMAGE_ROLE"
+          test "$RUNTIME_INDEX_ROLE" = "$REGISTERED_RUNTIME_INDEX_ROLE"
+          test "$RUNTIME_PLATFORM" = "$REGISTERED_RUNTIME_PLATFORM"
+          test -n "$RUNTIME_IMAGE"
+          test "$(shasum -a 256 "$HOST_PYTHON" | awk '{print $1}')" = "$HOST_PYTHON_SHA256"
+          test "$(shasum -a 256 "$DOCKER_PATH" | awk '{print $1}')" = "$DOCKER_FILE_SHA256"
+          test "$(shasum -a 256 "$DOCKER_RESOLVED_PATH" | awk '{print $1}')" = \
+            "$DOCKER_FILE_SHA256"
+          test "$(shasum -a 256 "$GH_PATH" | awk '{print $1}')" = "$GH_FILE_SHA256"
+          test "$(shasum -a 256 "$RUNNER_LISTENER" | awk '{print $1}')" = "$RUNNER_LISTENER_SHA256"
+          test "$(shasum -a 256 "$RUNNER_BOOTSTRAP_RECEIPT" | awk '{print $1}')" = \
+            "$RUNNER_BOOTSTRAP_RECEIPT_SHA256"
+          test "$(shasum -a 256 "$PROVIDER_PLAN" | awk '{print $1}')" = "$PROVIDER_PLAN_SHA256"
+          test "$("$RUNNER_LISTENER" --version)" = "$ACTIONS_RUNNER_VERSION"
+          test -n "$GH_VERSION"
+          "$GH_PATH" --version > "${RUNNER_TEMP}/gh-version.txt"
+          test "$(head -n 1 "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"
+          test -s "${RUNNER_TEMP}/gh-version.txt"
+          test "$(uname -s)" = 'Darwin'
+          test "$(uname -m)" = 'arm64'
+          test "$("$DOCKER_PATH" version --format '{{.Client.Version}}')" = \
+            "$DOCKER_CLIENT_VERSION"
+          test "$("$DOCKER_PATH" version --format '{{.Client.GitCommit}}')" = \
+            "$DOCKER_CLIENT_BUILD"
+          "$DOCKER_PATH" version --format '{{json .Server}}' \
+            > "${RUNNER_TEMP}/docker-server.json"
+          test -s "${RUNNER_TEMP}/docker-server.json"
+          test "$("$DOCKER_PATH" version --format '{{.Server.Os}}/{{.Server.Arch}}')" = \
+            'linux/arm64'
+
+      - name: Bind the exact claimed analysis input closure and execute analysis once
+        id: activate
+        env:
+          CLAIM_ARTIFACT_DIGEST: ${{ needs.claim.outputs.claim_artifact_digest }}
+          CLAIM_ARTIFACT_ID: ${{ needs.claim.outputs.claim_artifact_id }}
+          CLAIM_PACKAGE_INVENTORY_SHA256: ${{ needs.claim.outputs.claim_package_inventory_sha256 }}
+          CLAIM_RECEIPT: ${{ runner.temp }}/analysis-claim-evidence/claim-receipt.json
+          GH_TOKEN: ${{ github.token }}
+          HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim
+          verify-prerequisites
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --claim-receipt "$CLAIM_RECEIPT"
+          --activate-and-execute
+          --output-dir "${RUNNER_TEMP}/analysis-activation"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Admit only the guarded all-five analysis result
+        shell: bash
+        env:
+          ANALYSIS_RESULT: ${{ steps.activate.outputs.analysis_result_path }}
+          ANALYSIS_RESULT_SHA256: ${{ steps.activate.outputs.analysis_result_sha256 }}
+          EXECUTE_JOB_ID: ${{ steps.activate.outputs.execute_job_id }}
+          FIVE_CORPORA_ANALYZED: ${{ steps.activate.outputs.five_corpora_analyzed }}
+          FIXED_CORPORA_COMPLETED: ${{ steps.activate.outputs.fixed_corpora_completed }}
+          LIVE_EXECUTE_JOB_RECEIPT: ${{ steps.activate.outputs.live_execute_job_receipt_path }}
+          LIVE_EXECUTE_JOB_RECEIPT_SHA256: ${{ steps.activate.outputs.live_execute_job_receipt_sha256 }}
+          PHASE_EXECUTION_RECEIPT: ${{ steps.activate.outputs.phase_execution_receipt_path }}
+          PHASE_EXECUTION_RECEIPT_SHA256: ${{ steps.activate.outputs.phase_execution_receipt_sha256 }}
+          RUNTIME_CLAIM_RECEIPT: ${{ steps.activate.outputs.runtime_claim_receipt_path }}
+          RUNTIME_CLAIM_RECEIPT_SHA256: ${{ steps.activate.outputs.runtime_claim_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$EXECUTE_JOB_ID" =~ ^[1-9][0-9]*$ ]]
+          test "$FIXED_CORPORA_COMPLETED" = 'true'
+          test "$FIVE_CORPORA_ANALYZED" = 'true'
+          test "$(shasum -a 256 "$ANALYSIS_RESULT" | awk '{print $1}')" = \
+            "$ANALYSIS_RESULT_SHA256"
+          test "$(shasum -a 256 "$LIVE_EXECUTE_JOB_RECEIPT" | awk '{print $1}')" = \
+            "$LIVE_EXECUTE_JOB_RECEIPT_SHA256"
+          test "$(shasum -a 256 "$PHASE_EXECUTION_RECEIPT" | awk '{print $1}')" = \
+            "$PHASE_EXECUTION_RECEIPT_SHA256"
+          test "$(shasum -a 256 "$RUNTIME_CLAIM_RECEIPT" | awk '{print $1}')" = \
+            "$RUNTIME_CLAIM_RECEIPT_SHA256"
+
+      - name: Build the exact confirmatory result subject
+        id: prepare
+        env:
+          CLAIM_RECEIPT: ${{ runner.temp }}/analysis-claim-evidence/claim-receipt.json
+          EVIDENCE_ROOT: ${{ needs.claim.outputs.phase_evidence_root }}
+          GH_TOKEN: ${{ github.token }}
+          HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim
+          complete
+          --prepare
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --claim-receipt "$CLAIM_RECEIPT"
+          --evidence-root "$EVIDENCE_ROOT"
+          --output-dir "${RUNNER_TEMP}/analysis-execution-evidence"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Retain immutable phase evidence
+        if: always()
+        shell: bash
+        env:
+          COMPLETION_PREDICATE: ${{ steps.prepare.outputs.completion_predicate_path }}
+          COMPLETION_PREDICATE_SHA256: ${{ steps.prepare.outputs.completion_predicate_sha256 }}
+          PREPARATION_RECEIPT: ${{ steps.prepare.outputs.preparation_receipt_path }}
+          PREPARATION_RECEIPT_SHA256: ${{ steps.prepare.outputs.preparation_receipt_sha256 }}
+          PREPARED_SUBJECT: ${{ steps.prepare.outputs.prepared_subject_path }}
+          PREPARED_SUBJECT_SHA256: ${{ steps.prepare.outputs.prepared_subject_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/analysis-execution-evidence"
+          install -d -m 0700 "$evidence"
+          if test -d "${RUNNER_TEMP}/analysis-activation"; then
+            cp -R -- "${RUNNER_TEMP}/analysis-activation/." "$evidence/"
+          else
+            printf '%s\n' 'phase activation evidence unavailable' \
+              > "$evidence/phase-activation-missing.txt"
+          fi
+          if test -n "$COMPLETION_PREDICATE" && test -f "$COMPLETION_PREDICATE"; then
+            [[ "$COMPLETION_PREDICATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(shasum -a 256 "$COMPLETION_PREDICATE" | awk '{print $1}')" = \
+              "$COMPLETION_PREDICATE_SHA256"
+            install -m 0600 -- "$COMPLETION_PREDICATE" \
+              "$evidence/completion-predicate.json"
+            printf '%s  %s\n' "$COMPLETION_PREDICATE_SHA256" 'completion-predicate.json' \
+              > "$evidence/completion-predicate.sha256"
+          fi
+          if test -n "$PREPARATION_RECEIPT" && test -f "$PREPARATION_RECEIPT"; then
+            [[ "$PREPARATION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(shasum -a 256 "$PREPARATION_RECEIPT" | awk '{print $1}')" = \
+              "$PREPARATION_RECEIPT_SHA256"
+            install -m 0600 -- "$PREPARATION_RECEIPT" \
+              "$evidence/completion-preparation-receipt.json"
+            printf '%s  %s\n' "$PREPARATION_RECEIPT_SHA256" \
+              'completion-preparation-receipt.json' \
+              > "$evidence/completion-preparation-receipt.sha256"
+          fi
+          if test -n "$PREPARED_SUBJECT" && test -f "$PREPARED_SUBJECT"; then
+            [[ "$PREPARED_SUBJECT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(shasum -a 256 "$PREPARED_SUBJECT" | awk '{print $1}')" = \
+              "$PREPARED_SUBJECT_SHA256"
+            install -m 0600 -- "$PREPARED_SUBJECT" "$evidence/prepared-subject.json"
+            printf '%s  %s\n' "$PREPARED_SUBJECT_SHA256" 'prepared-subject.json' \
+              > "$evidence/prepared-subject.sha256"
+          fi
+          printf '%s/%s/actions/runs/%s/attempts/%s\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" > "$evidence/workflow-run.txt"
+
+      - name: Upload analysis result and partial evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-analysis-execution-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-execution-evidence
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  complete:
+    name: complete-analysis
+    needs: [claim, execute]
+    if: needs.execute.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - name: Check out the exact C0 completion source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+      - name: Install the fixed C0 completion verifier
+        run: uv sync --frozen --no-install-project
+      - name: Download claimed state evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: confirmatory-analysis-claim-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-claim-evidence
+      - name: Download exact analysis evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: confirmatory-analysis-execution-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-execution-evidence
+
+      - name: Verify downloaded completion subject and predicate bytes
+        shell: bash
+        env:
+          EVIDENCE_ROOT: ${{ runner.temp }}/analysis-execution-evidence
+        run: |
+          set -euo pipefail
+          cd "$EVIDENCE_ROOT"
+          sha256sum -c prepared-subject.sha256
+          sha256sum -c completion-predicate.sha256
+          sha256sum -c completion-preparation-receipt.sha256
+
+      - name: Attest the exact confirmatory result
+        id: completion_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/analysis-execution-evidence/prepared-subject.json
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/confirmatory-analysis/v1
+          predicate-path: ${{ runner.temp }}/analysis-execution-evidence/completion-predicate.json
+          create-storage-record: false
+      - name: Publish ANALYSIS_COMPLETE from the attested result
+        id: publish
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.completion_attestation.outputs.bundle-path }}
+          CLAIM_RECEIPT: ${{ runner.temp }}/analysis-claim-evidence/claim-receipt.json
+          EVIDENCE_ROOT: ${{ runner.temp }}/analysis-execution-evidence
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RECEIPT: ${{ runner.temp }}/analysis-execution-evidence/completion-preparation-receipt.json
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.execution_claim
+          complete
+          --publish
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --claim-receipt "$CLAIM_RECEIPT"
+          --evidence-root "$EVIDENCE_ROOT"
+          --attestation-bundle "$ATTESTATION_BUNDLE"
+          --preparation-receipt "$PREPARATION_RECEIPT"
+          --output-dir "${RUNNER_TEMP}/analysis-completion"
+          --github-output "$GITHUB_OUTPUT"
+      - name: Retain immutable completion evidence
+        if: always()
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.completion_attestation.outputs.bundle-path }}
+          LEDGER_COMMIT: ${{ steps.publish.outputs.ledger_commit }}
+          PUBLICATION_RECEIPT: ${{ steps.publish.outputs.publication_receipt_path }}
+          PUBLICATION_RECEIPT_SHA256: ${{ steps.publish.outputs.publication_receipt_sha256 }}
+          STATE_RECORD_SHA256: ${{ steps.publish.outputs.state_record_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/analysis-completion"
+          install -d -m 0700 "$evidence"
+          if test -n "$PUBLICATION_RECEIPT" && test -f "$PUBLICATION_RECEIPT"; then
+            [[ "$LEDGER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$PUBLICATION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            [[ "$STATE_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+            test "$(sha256sum "$PUBLICATION_RECEIPT" | awk '{print $1}')" = \
+              "$PUBLICATION_RECEIPT_SHA256"
+          else
+            printf '%s\n' 'completion publication receipt unavailable' \
+              > "$evidence/completion-publication-missing.txt"
+          fi
+          if test -n "$ATTESTATION_BUNDLE" && test -f "$ATTESTATION_BUNDLE"; then
+            install -m 0600 -- "$ATTESTATION_BUNDLE" \
+              "$evidence/analysis-result.sigstore.bundle.json"
+          else
+            printf '%s\n' 'analysis-result attestation bundle unavailable' \
+              > "$evidence/completion-attestation-missing.txt"
+          fi
+      - name: Upload immutable analysis completion evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-analysis-completion-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-completion
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
+
+  fail:
+    name: fail-analysis
+    needs: [claim, execute, complete]
+    if: always() && needs.complete.result != 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    env:
+      PYTHONPATH: src
+
+    steps:
+      - name: Re-admit the fixed C0 failure identity
+        shell: bash
+        env:
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: |
+          set -euo pipefail
+          [[ "$SUITE_ATTEMPT_ID" =~ ^[0-9a-f]{64}$ ]]
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "$C0_REF"
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-analysis.yml@${C0_REF}"
+
+      - name: Check out the exact C0 failure source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14.6"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+      - name: Install the fixed C0 failure verifier
+        run: uv sync --frozen --no-install-project
+      - name: Download retained partial analysis evidence
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: confirmatory-analysis-execution-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-failure-input
+      - name: Initialize the provider recovery evidence root
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "${RUNNER_TEMP}/analysis-failure-input"
+      - name: Prepare evidence-backed FAILED
+        id: prepare_failure
+        env:
+          EVIDENCE_ROOT: ${{ runner.temp }}/analysis-failure-input
+          GH_TOKEN: ${{ github.token }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.execution_claim
+          fail
+          --prepare
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --evidence-root "$EVIDENCE_ROOT"
+          --output-dir "${RUNNER_TEMP}/analysis-failure"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Verify the exact failure subject and predicate bytes
+        if: steps.prepare_failure.outputs.no_claim_to_fail != 'true'
+        shell: bash
+        env:
+          FAILURE_PREDICATE: ${{ steps.prepare_failure.outputs.failure_predicate_path }}
+          FAILURE_PREDICATE_SHA256: ${{ steps.prepare_failure.outputs.failure_predicate_sha256 }}
+          FAILURE_SUBJECT: ${{ steps.prepare_failure.outputs.prepared_subject_path }}
+          FAILURE_SUBJECT_SHA256: ${{ steps.prepare_failure.outputs.prepared_subject_sha256 }}
+          PREPARATION_RECEIPT: ${{ steps.prepare_failure.outputs.preparation_receipt_path }}
+          PREPARATION_RECEIPT_SHA256: ${{ steps.prepare_failure.outputs.preparation_receipt_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$FAILURE_PREDICATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$FAILURE_SUBJECT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PREPARATION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(sha256sum "$FAILURE_PREDICATE" | awk '{print $1}')" = \
+            "$FAILURE_PREDICATE_SHA256"
+          test "$(sha256sum "$FAILURE_SUBJECT" | awk '{print $1}')" = \
+            "$FAILURE_SUBJECT_SHA256"
+          test "$(sha256sum "$PREPARATION_RECEIPT" | awk '{print $1}')" = \
+            "$PREPARATION_RECEIPT_SHA256"
+
+      - name: Attest the immutable failure incident
+        id: failure_attestation
+        if: steps.prepare_failure.outputs.no_claim_to_fail != 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.prepare_failure.outputs.prepared_subject_path }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/provider-failure/v1
+          predicate-path: ${{ steps.prepare_failure.outputs.failure_predicate_path }}
+          create-storage-record: false
+      - name: Publish evidence-backed FAILED
+        id: publish_failure
+        if: steps.prepare_failure.outputs.no_claim_to_fail != 'true'
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.failure_attestation.outputs.bundle-path }}
+          EVIDENCE_ROOT: ${{ runner.temp }}/analysis-failure-input
+          GH_TOKEN: ${{ github.token }}
+          PREPARATION_RECEIPT: ${{ steps.prepare_failure.outputs.preparation_receipt_path }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.execution_claim
+          fail
+          --publish
+          --phase analysis
+          --suite-attempt-id "$SUITE_ATTEMPT_ID"
+          --evidence-root "$EVIDENCE_ROOT"
+          --attestation-bundle "$ATTESTATION_BUNDLE"
+          --preparation-receipt "$PREPARATION_RECEIPT"
+          --output-dir "${RUNNER_TEMP}/analysis-failure"
+          --github-output "$GITHUB_OUTPUT"
+      - name: Retain immutable phase evidence
+        if: always()
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.failure_attestation.outputs.bundle-path }}
+          FAILURE_RECEIPT: ${{ steps.prepare_failure.outputs.preparation_receipt_path }}
+          FAILURE_PUBLICATION_RECEIPT: ${{ steps.publish_failure.outputs.publication_receipt_path }}
+          FAILURE_PUBLICATION_RECEIPT_SHA256: ${{ steps.publish_failure.outputs.publication_receipt_sha256 }}
+          FAILURE_STATE_RECORD_SHA256: ${{ steps.publish_failure.outputs.state_record_sha256 }}
+          FAILURE_LEDGER_COMMIT: ${{ steps.publish_failure.outputs.ledger_commit }}
+          NO_CLAIM_TO_FAIL: ${{ steps.prepare_failure.outputs.no_claim_to_fail }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/analysis-failure"
+          install -d -m 0700 "$evidence"
+          if test "$NO_CLAIM_TO_FAIL" = 'true'; then
+            printf '%s\n' 'no live phase claim required failure closure' \
+              > "$evidence/no-claim-to-fail.txt"
+          elif test -z "$FAILURE_RECEIPT" || test ! -f "$FAILURE_RECEIPT"; then
+            printf '%s\n' 'failure preparation receipt unavailable' \
+              > "$evidence/failure-preparation-missing.txt"
+          fi
+          if test -n "$ATTESTATION_BUNDLE" && test -f "$ATTESTATION_BUNDLE"; then
+            install -m 0600 -- "$ATTESTATION_BUNDLE" \
+              "$evidence/provider-failure.sigstore.bundle.json"
+          elif test "$NO_CLAIM_TO_FAIL" != 'true'; then
+            printf '%s\n' 'failure attestation bundle unavailable' \
+              > "$evidence/failure-attestation-missing.txt"
+          fi
+          if test "$NO_CLAIM_TO_FAIL" != 'true'; then
+            if test -n "$FAILURE_PUBLICATION_RECEIPT" \
+              && test -f "$FAILURE_PUBLICATION_RECEIPT"; then
+              [[ "$FAILURE_LEDGER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+              [[ "$FAILURE_PUBLICATION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$FAILURE_STATE_RECORD_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              test "$(sha256sum "$FAILURE_PUBLICATION_RECEIPT" | awk '{print $1}')" = \
+                "$FAILURE_PUBLICATION_RECEIPT_SHA256"
+            else
+              printf '%s\n' 'failure publication receipt unavailable' \
+                > "$evidence/failure-publication-missing.txt"
+            fi
+          fi
+      - name: Upload immutable analysis failure evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-analysis-failure-${{ inputs.suite_attempt_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/analysis-failure
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90

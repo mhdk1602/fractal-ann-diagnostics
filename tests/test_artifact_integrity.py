@@ -202,10 +202,13 @@ def test_local_artifact_map_is_closed_exact_and_manifest_derived(tmp_path: Path)
 
     map_path = tmp_path / "artifact-map.json"
     map_path.write_text(json.dumps(payload), encoding="utf-8")
-    assert load_local_artifact_map(
-        map_path,
-        expected_sha256_by_id=pins,
-    ) == specs
+    assert (
+        load_local_artifact_map(
+            map_path,
+            expected_sha256_by_id=pins,
+        )
+        == specs
+    )
 
 
 @pytest.mark.parametrize(

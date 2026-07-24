@@ -1,4 +1,5 @@
 """Gold evidence bundles and answer-level confirmatory outcomes."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

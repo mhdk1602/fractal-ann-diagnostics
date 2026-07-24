@@ -28,6 +28,7 @@ the v0.2 governance controller does not use them. Rule sources:
 Confidence is fixed at 0.5 for v0.1.0 because the rules are uncalibrated
 heuristics; v0.2.0 will deliver Bayesian posteriors over recall drop.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

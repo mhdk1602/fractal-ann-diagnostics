@@ -6,6 +6,11 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from production_workload_fixtures import (
+    registered_c0_evidence_release,
+    registered_production_workloads,
+)
+from test_study import _provider_phase_plans
 
 import fractal_ann_diagnostics.confirmatory_analysis as confirmatory_analysis
 from fractal_ann_diagnostics.artifact_integrity import (
@@ -45,6 +50,7 @@ from fractal_ann_diagnostics.label_separation import (
     SealedTrialLabels,
     sealed_run_receipt_sha256,
 )
+from fractal_ann_diagnostics.provider_contract import SOURCE_BUILT_LINUX_ARM64_TLE_SHA256
 from fractal_ann_diagnostics.study import (
     EVIDENCE_CORPORA,
     FIXED_CORPORA,
@@ -65,6 +71,7 @@ SCHEMA = FeatureSchema(
     lid_feature="lid",
     instability_feature="instability",
 )
+RUNNER_IDENTITY = "github-actions:environment:confirmatory"
 
 
 def _digest(value: str) -> str:
@@ -126,9 +133,7 @@ def _panel_admission_receipt(
             record_previous = None
             record_sha256 = None
             failure_started = 1_000_000_000 + row_index * 1_000_000_000
-            failure_finished = failure_started + int(
-                row.request_latency_ms * 1_000_000
-            )
+            failure_finished = failure_started + int(row.request_latency_ms * 1_000_000)
             failure_runner = runner_identity
             failure_timing_sha256 = _canonical_digest(
                 {
@@ -162,6 +167,7 @@ def _panel_admission_receipt(
                 family_key=row.family_key,
                 action=row.action,
                 action_order=row.action_order,
+                execution_position=row.execution_position,
                 controller_selected=row.controller_selected,
                 execution_state=row.execution_state,
                 controller_risk_score=controller_risk_score,
@@ -179,9 +185,7 @@ def _panel_admission_receipt(
                 audit_sequence=record_audit_sequence,
                 audit_previous_record_sha256=record_previous,
                 audit_record_sha256=record_sha256,
-                failure_code=(
-                    row.failure_state if row.execution_state == "failed" else None
-                ),
+                failure_code=(row.failure_state if row.execution_state == "failed" else None),
                 failure_started_monotonic_ns=failure_started,
                 failure_finished_monotonic_ns=failure_finished,
                 failure_runner_identity=failure_runner,
@@ -262,7 +266,7 @@ def config() -> ConfirmatoryAnalysisConfig:
             auprc_gain=0.001,
         ),
         selected_families_per_corpus=25,
-        nested_rows_per_family=1,
+        nested_rows_per_family=3,
         bootstrap_replicates=10_000,
         bootstrap_seed=20260713,
     )
@@ -276,13 +280,18 @@ def test_direct_config_requires_two_families_for_bootstrap(
 
 
 _NON_CORPUS_ARTIFACTS = (
+    ("study-data-package", "dataset-package"),
+    ("online-staging-package", "dataset-package"),
+    ("development-freeze-package", "development-package"),
     ("development-fit-data", "dataset"),
     ("development-calibration-data", "dataset"),
     ("query-partition-audit", "partition-audit"),
     ("primary-embedding", "embedding"),
+    ("stale-embedding", "embedding"),
     ("exact-authorized-oracle", "backend"),
     ("strict-authorized-hnsw", "backend"),
     ("opa-pdp", "policy"),
+    ("opa-runtime-binary", "tool"),
     ("frozen-controller", "controller"),
     ("static-comparator", "comparator"),
     ("h1-predictive-model", "model"),
@@ -290,6 +299,11 @@ _NON_CORPUS_ARTIFACTS = (
     ("power-analysis-report", "analysis"),
     ("analysis-runner", "analysis"),
     ("source-code", "source"),
+    ("custody-seal-receipt", "custody"),
+    ("tlock-release-provenance", "custody"),
+    ("timelock-tool", "tool"),
+    ("custody-builder", "execution"),
+    ("suite-attestation-descriptor", "attestation"),
 )
 
 
@@ -307,18 +321,22 @@ def _frozen_manifest(
         else selected_families_per_corpus
     )
     nested_rows = (
-        config.nested_rows_per_family
-        if nested_rows_per_family is None
-        else nested_rows_per_family
+        config.nested_rows_per_family if nested_rows_per_family is None else nested_rows_per_family
     )
     artifacts: list[dict[str, object]] = []
     digest_overrides = artifact_digest_overrides or {}
     for role, kind in (
         ("sealed-inputs", "dataset"),
         ("sealed-labels", "dataset"),
+        ("sealed-label-ciphertext", "encrypted-dataset"),
+        ("timelock-encryption-receipt", "custody"),
         ("online-execution", "execution"),
         ("corpus-normalizer", "normalizer"),
         ("policy-workload", "policy-data"),
+        ("embedding-store", "embedding-store"),
+        ("authorized-index-store", "index-store"),
+        ("trial-runtime-package", "runtime-input"),
+        ("runtime-attestation-plan-template", "execution"),
     ):
         for corpus_id in FIXED_CORPORA:
             artifact_id = f"{corpus_id}-{role}"
@@ -328,7 +346,11 @@ def _frozen_manifest(
                     "kind": kind,
                     "id": artifact_id,
                     "uri": f"https://example.test/{artifact_id}",
-                    "revision": "v1.0.0",
+                    "revision": (
+                        f"sha256:{_digest(f'{artifact_id}-logical-plan')}"
+                        if role == "online-execution"
+                        else "v1.0.0"
+                    ),
                     "sha256": digest,
                     "license": "MIT",
                     "role": role,
@@ -337,13 +359,11 @@ def _frozen_manifest(
             )
     for role, kind in _NON_CORPUS_ARTIFACTS:
         if role == "h1-predictive-model" and suite is not None:
-            digest = hashlib.sha256(
-                canonical_h1_model_artifact_bytes(suite)
-            ).hexdigest()
+            digest = hashlib.sha256(canonical_h1_model_artifact_bytes(suite)).hexdigest()
         elif role == "h2-model-suite" and suite is not None:
-            digest = hashlib.sha256(
-                canonical_h2_model_suite_artifact_bytes(suite)
-            ).hexdigest()
+            digest = hashlib.sha256(canonical_h2_model_suite_artifact_bytes(suite)).hexdigest()
+        elif role == "timelock-tool":
+            digest = SOURCE_BUILT_LINUX_ARM64_TLE_SHA256
         else:
             digest = _digest(role)
         artifacts.append(
@@ -351,7 +371,13 @@ def _frozen_manifest(
                 "kind": kind,
                 "id": role,
                 "uri": f"https://example.test/{role}",
-                "revision": "c" * 40 if role == "source-code" else "v1.0.0",
+                "revision": (
+                    "c" * 40
+                    if role == "source-code"
+                    else f"sha256:{digest}"
+                    if role == "opa-runtime-binary"
+                    else "v1.0.0"
+                ),
                 "sha256": digest,
                 "license": "MIT",
                 "role": role,
@@ -380,9 +406,7 @@ def _frozen_manifest(
             "minimum_cost_reduction": config.minimum_cost_reduction,
             "maximum_p95_latency_ratio": config.maximum_p95_latency_ratio,
             "maximum_entitlement_violations": config.maximum_entitlement_violations,
-            "minimum_corpora_with_geometry_gain": (
-                config.minimum_corpora_with_geometry_gain
-            ),
+            "minimum_corpora_with_geometry_gain": (config.minimum_corpora_with_geometry_gain),
             "nested_rows_per_family": nested_rows,
             "geometry_reference_model": "system-policy",
             "geometry_candidate_model": "full",
@@ -392,12 +416,8 @@ def _frozen_manifest(
                 "auprc_gain",
             ],
             "geometry_gain_thresholds": {
-                "log_loss_reduction": (
-                    config.geometry_gain_thresholds.log_loss_reduction
-                ),
-                "brier_score_reduction": (
-                    config.geometry_gain_thresholds.brier_score_reduction
-                ),
+                "log_loss_reduction": (config.geometry_gain_thresholds.log_loss_reduction),
+                "brier_score_reduction": (config.geometry_gain_thresholds.brier_score_reduction),
                 "auprc_gain": config.geometry_gain_thresholds.auprc_gain,
             },
             "low_geometry": dict(config.low_geometry),
@@ -431,8 +451,14 @@ def _frozen_manifest(
                     "registered-minimum-effects",
                     "development-observed-effects",
                 ],
-                "candidate_families_per_corpus": list(
-                    REGISTERED_POWER_FAMILY_CANDIDATES
+                "candidate_families_per_corpus": list(REGISTERED_POWER_FAMILY_CANDIDATES),
+                "selection_cell_alpha": 0.05 / 12,
+                "selection_exact_blocking_failures": 445,
+                "selection_exact_qualifying_passes": 4_556,
+                "selection_family_size": 12,
+                "selection_familywise_confidence": 0.95,
+                "selection_multiplicity_method": (
+                    "bonferroni-fixed-required-scenario-candidate-grid-v1"
                 ),
                 "selected_families_per_corpus": selected_families,
                 "simulation_seed": 71,
@@ -441,14 +467,34 @@ def _frozen_manifest(
             },
         },
         "artifacts": artifacts,
+        "production_workloads": registered_production_workloads(
+            fixed_corpora=FIXED_CORPORA,
+            runner_image=f"ghcr.io/example/runner@sha256:{'d' * 64}",
+            runner_identity=RUNNER_IDENTITY,
+            code_commit="c" * 40,
+            selected_family_count=selected_families,
+        ),
         "sealed_execution": {
             "reserve_fraction": 0.0,
             "custodian": "custodian@example.test",
             "approval_environment": "confirmatory",
             "results_store": "s3://immutable-results",
-            "runner_identity": "confirmatory-test-runner",
+            "runner_identity": RUNNER_IDENTITY,
             "code_commit": "c" * 40,
+            "c0_evidence_release": registered_c0_evidence_release(code_commit="c" * 40),
             "runner_image": f"ghcr.io/example/runner@sha256:{'d' * 64}",
+            "provider_phase_plans": _provider_phase_plans(
+                runner_image=f"ghcr.io/example/runner@sha256:{'d' * 64}",
+                timelock_sha256=next(
+                    str(row["sha256"]) for row in artifacts if row["role"] == "timelock-tool"
+                ),
+                code_commit="c" * 40,
+            ),
+            "production_controls": {
+                "materialization_config_file_sha256": "1" * 64,
+                "blueprint_receipt_sha256": "2" * 64,
+                "blueprint_receipt_file_sha256": "3" * 64,
+            },
             "hardware": {
                 "provider": "aws",
                 "instance_type": "c7i.4xlarge",
@@ -461,9 +507,7 @@ def _frozen_manifest(
             },
             "receipt_uri_template": "file:///receipts/{manifest_sha256}.json",
             "label_artifacts_withheld_until_prediction_receipt": True,
-            "public_query_reidentification_risk": (
-                "accepted-public-benchmark-limitation"
-            ),
+            "public_query_reidentification_risk": ("accepted-public-benchmark-limitation"),
             "runner_network_access": "disabled",
             "interactive_access": "disabled",
         },
@@ -505,7 +549,7 @@ def _run_receipt(
         manifest_sha256=manifest_digest,
         protocol_version="0.3.0",
         started_at_utc="2026-07-13T22:00:00+00:00",
-        runner_identity="confirmatory-test-runner",
+        runner_identity=RUNNER_IDENTITY,
         code_commit="c" * 40,
         runner_image=f"ghcr.io/example/runner@sha256:{'d' * 64}",
         protocol_registration_receipt_uri="file:///receipts/protocol.json",
@@ -522,7 +566,7 @@ def _prelabel_rows(
     *,
     entitlement_event: bool,
     families_per_corpus: int = 12,
-    nested_rows_per_family: int = 1,
+    nested_rows_per_family: int = 3,
     force_low_effort_success: bool = False,
     empty_authorized_truth: bool = False,
 ) -> tuple[PreLabelActionRow, ...]:
@@ -531,13 +575,9 @@ def _prelabel_rows(
         high_risk = family_index % 2 == 1
         family_key = _digest(f"family-{corpus_id}-{family_index}")
         for nested_index in range(nested_rows_per_family):
-            trial_key = _digest(
-                f"trial-{corpus_id}-{family_index}-{nested_index}"
-            )
+            trial_key = _digest(f"trial-{corpus_id}-{family_index}-{nested_index}")
             for action_order, action in enumerate(REGISTERED_ACTION_SET):
-                selected = action == (
-                    "exact-authorized" if high_risk else "hnsw-low"
-                )
+                selected = action == ("exact-authorized" if high_risk else "hnsw-low")
                 if action == "abstain":
                     state = "abstained"
                     failure_state = "registered-abstention"
@@ -579,12 +619,15 @@ def _prelabel_rows(
                         family_key=family_key,
                         action=action,
                         action_order=action_order,
+                        execution_position=(
+                            action_order - (family_index * nested_rows_per_family + nested_index)
+                        )
+                        % len(REGISTERED_ACTION_SET),
                         audit_record_sha256=(
                             None
                             if state == "failed"
                             else _digest(
-                                "audit-"
-                                f"{corpus_id}-{family_index}-{nested_index}-{action}"
+                                f"audit-{corpus_id}-{family_index}-{nested_index}-{action}"
                             )
                         ),
                         execution_state=state,
@@ -673,10 +716,11 @@ def _bound_input(
     registered_families_per_corpus: int | None = None,
     registered_nested_rows_per_family: int | None = None,
     observed_families_per_corpus: int = 25,
-    observed_nested_rows_per_family: int = 1,
+    observed_nested_rows_per_family: int = 3,
     label_relevant_document_ids: tuple[int, ...] = (0,),
     one_class_success_corpus: str | None = None,
     empty_authorized_truth: bool = False,
+    label_pin_uses_semantic_digest: bool = False,
 ) -> ConfirmatoryInputArtifact:
     rows_by_corpus = {
         corpus_id: _prelabel_rows(
@@ -690,7 +734,7 @@ def _bound_input(
         for corpus_id in FIXED_CORPORA
     }
     execution_sha_by_corpus = {
-        corpus_id: _digest(f"{corpus_id}-online-execution")
+        corpus_id: _digest(f"{corpus_id}-online-execution-logical-plan")
         for corpus_id in FIXED_CORPORA
     }
     labels_by_corpus = {
@@ -708,7 +752,13 @@ def _bound_input(
         selected_families_per_corpus=registered_families_per_corpus,
         nested_rows_per_family=registered_nested_rows_per_family,
         artifact_digest_overrides={
-            ("sealed-labels", corpus_id): labels_by_corpus[corpus_id].artifact_sha256
+            ("sealed-labels", corpus_id): (
+                labels_by_corpus[corpus_id].artifact_sha256
+                if label_pin_uses_semantic_digest
+                else hashlib.sha256(
+                    labels_by_corpus[corpus_id].canonical_bytes() + b"\n"
+                ).hexdigest()
+            )
             for corpus_id in FIXED_CORPORA
         },
     )
@@ -717,7 +767,7 @@ def _bound_input(
     run_digest = sealed_run_receipt_sha256(run_receipt)
     manifest_digest = manifest_sha256(manifest)
     pinned_execution_sha_by_corpus = {
-        str(artifact["corpus_id"]): str(artifact["sha256"])
+        str(artifact["corpus_id"]): str(artifact["revision"])[7:]
         for artifact in manifest["artifacts"]
         if artifact["role"] == "online-execution"
     }
@@ -733,6 +783,7 @@ def _bound_input(
     for corpus_id in FIXED_CORPORA:
         execution_digest = pinned_execution_sha_by_corpus[corpus_id]
         prediction_digest = _digest(f"prediction-{corpus_id}")
+        online_result_digest = _digest(f"online-result-{corpus_id}")
         panel = ActionPanelArtifact(
             manifest_sha256=manifest_digest,
             run_receipt_sha256=run_digest,
@@ -755,9 +806,7 @@ def _bound_input(
                 returned_document_ids=selected.returned_document_ids,
             )
             labels = next(
-                row
-                for row in labels_by_corpus[corpus_id].labels
-                if row.trial_key == trial_key
+                row for row in labels_by_corpus[corpus_id].labels if row.trial_key == trial_key
             )
             joined.append(JoinedEvaluationTrial(prediction=prediction, labels=labels))
         completion = PredictionCompletionReceipt(
@@ -765,6 +814,7 @@ def _bound_input(
             run_receipt_sha256=run_digest,
             execution_artifact_sha256=execution_digest,
             prediction_artifact_sha256=prediction_digest,
+            online_execution_result_receipt_sha256=online_result_digest,
             action_panel_binding=panel.completion_binding(),
             prediction_count=len(joined),
             corpus=corpus_id,
@@ -779,6 +829,8 @@ def _bound_input(
             execution_artifact_sha256=execution_digest,
             prediction_artifact_sha256=prediction_digest,
             prediction_completion_receipt_sha256=completion.receipt_sha256,
+            online_execution_result_receipt_sha256=online_result_digest,
+            timelock_decryption_receipt_sha256=_digest(f"timelock-decryption-{corpus_id}"),
             sealed_label_artifact_sha256=labels_by_corpus[corpus_id].artifact_sha256,
             corpus=corpus_id,
             stage="sealed",
@@ -800,12 +852,22 @@ def _bound_input(
         artifact_verification_receipt=verification_receipt,
         completion_receipts=tuple(completions),
         offline_evaluations=tuple(evaluations),
-        sealed_label_artifacts=tuple(
-            labels_by_corpus[corpus_id] for corpus_id in FIXED_CORPORA
-        ),
+        sealed_label_artifacts=tuple(labels_by_corpus[corpus_id] for corpus_id in FIXED_CORPORA),
         action_panels=tuple(panels),
         action_panel_admission_receipts=tuple(admissions),
     )
+
+
+def test_sealed_label_file_pin_cannot_be_replaced_by_semantic_digest(
+    config: ConfirmatoryAnalysisConfig,
+) -> None:
+    admitted = _bound_input(config)
+    label = admitted.sealed_label_artifacts[0]
+    file_sha256 = hashlib.sha256(label.canonical_bytes() + b"\n").hexdigest()
+    assert file_sha256 != label.artifact_sha256
+
+    with pytest.raises(ConfirmatoryAnalysisError, match="file digest does not match"):
+        _bound_input(config, label_pin_uses_semantic_digest=True)
 
 
 def test_prelabel_panel_contains_no_post_label_outcome_fields(
@@ -865,10 +927,15 @@ def test_panel_rejects_duplicate_missing_pairs_and_action_order() -> None:
     wrong_order = (replace(rows[0], action_order=1),) + rows[1:]
     with pytest.raises(ConfirmatoryAnalysisError, match="action-set order"):
         ActionPanelArtifact(rows=wrong_order, **common)
+    duplicate_position = (replace(rows[0], execution_position=rows[1].execution_position),) + rows[
+        1:
+    ]
+    with pytest.raises(ConfirmatoryAnalysisError, match="missing, duplicate, or impossible"):
+        ActionPanelArtifact(rows=duplicate_position, **common)
+    with pytest.raises(ConfirmatoryAnalysisError, match="zero through three"):
+        replace(rows[0], execution_position=4)
 
-    exact_index = next(
-        index for index, row in enumerate(rows) if row.action == "exact-authorized"
-    )
+    exact_index = next(index for index, row in enumerate(rows) if row.action == "exact-authorized")
     failed_exact = list(rows)
     failed_exact[exact_index] = replace(
         failed_exact[exact_index],
@@ -893,9 +960,7 @@ def test_typed_input_rejects_missing_corpus_and_receipt_panel_mismatch(
     with pytest.raises(ConfirmatoryAnalysisError, match="frozen corpus suite"):
         replace(
             inputs,
-            action_panel_admission_receipts=(
-                inputs.action_panel_admission_receipts[:-1]
-            ),
+            action_panel_admission_receipts=(inputs.action_panel_admission_receipts[:-1]),
         )
 
     first_completion = inputs.completion_receipts[0]
@@ -924,9 +989,7 @@ def test_typed_input_requires_primary_partition_receipt_and_run_runner(
     with pytest.raises(ConfirmatoryAnalysisError, match="primary partition"):
         replace(
             inputs,
-            action_panel_admission_receipts=(
-                replace(first_receipt, partition_label="reserve"),
-            )
+            action_panel_admission_receipts=(replace(first_receipt, partition_label="reserve"),)
             + inputs.action_panel_admission_receipts[1:],
         )
 
@@ -939,11 +1002,7 @@ def test_typed_input_requires_primary_partition_receipt_and_run_runner(
             + inputs.action_panel_admission_receipts[1:],
         )
 
-    failed = next(
-        record
-        for record in first_receipt.records
-        if record.execution_state == "failed"
-    )
+    failed = next(record for record in first_receipt.records if record.execution_state == "failed")
     other_runner = "other-runner"
     changed_timing_sha256 = _canonical_digest(
         {
@@ -965,8 +1024,7 @@ def test_typed_input_requires_primary_partition_receipt_and_run_runner(
         failure_timing_receipt_sha256=changed_timing_sha256,
     )
     changed_records = tuple(
-        changed_failed if record == failed else record
-        for record in first_receipt.records
+        changed_failed if record == failed else record for record in first_receipt.records
     )
     changed_receipt = replace(first_receipt, records=changed_records)
     with pytest.raises(ConfirmatoryAnalysisError, match="another runner"):
@@ -988,11 +1046,19 @@ def test_typed_input_derives_config_from_manifest_and_binds_receipt(
         inputs.artifact_verification_receipt.receipt_sha256
     )
     panels_by_corpus = {panel.corpus: panel for panel in inputs.action_panels}
+    execution_pins = {
+        str(artifact["corpus_id"]): artifact
+        for artifact in inputs.frozen_manifest["artifacts"]
+        if artifact["role"] == "online-execution"
+    }
     for corpus_digest in inputs.corpus_input_digests:
         assert (
             panels_by_corpus[corpus_digest.corpus_id].execution_artifact_sha256
             == corpus_digest.online_execution_artifact_sha256
         )
+        manifest_pin = execution_pins[corpus_digest.corpus_id]
+        assert corpus_digest.online_execution_artifact_sha256 == str(manifest_pin["revision"])[7:]
+        assert corpus_digest.online_execution_artifact_sha256 != manifest_pin["sha256"]
 
 
 def test_typed_input_rejects_execution_digest_not_pinned_as_online_execution(
@@ -1025,19 +1091,16 @@ def test_typed_input_rejects_execution_digest_not_pinned_as_online_execution(
 
     with pytest.raises(
         ConfirmatoryAnalysisError,
-        match="online execution digest does not match manifest artifact",
+        match="online execution logical digest does not match manifest revision",
     ):
         replace(
             inputs,
             action_panels=(changed_panel,) + inputs.action_panels[1:],
             action_panel_admission_receipts=(changed_admission,)
             + inputs.action_panel_admission_receipts[1:],
-            completion_receipts=(changed_completion,)
-            + inputs.completion_receipts[1:],
-            offline_evaluations=(changed_evaluation,)
-            + inputs.offline_evaluations[1:],
-            sealed_label_artifacts=(changed_labels,)
-            + inputs.sealed_label_artifacts[1:],
+            completion_receipts=(changed_completion,) + inputs.completion_receipts[1:],
+            offline_evaluations=(changed_evaluation,) + inputs.offline_evaluations[1:],
+            sealed_label_artifacts=(changed_labels,) + inputs.sealed_label_artifacts[1:],
         )
 
 
@@ -1052,7 +1115,7 @@ def test_typed_input_enforces_registered_family_and_nesting_counts(
 
     with pytest.raises(
         ConfirmatoryAnalysisError,
-        match="exactly 2 nested trials per family",
+        match="registered value 3",
     ):
         _bound_input(config, registered_nested_rows_per_family=2)
 
@@ -1062,16 +1125,16 @@ def test_typed_input_accepts_exact_registered_nested_design(
 ) -> None:
     inputs = _bound_input(
         config,
-        registered_nested_rows_per_family=2,
-        observed_nested_rows_per_family=2,
+        registered_nested_rows_per_family=3,
+        observed_nested_rows_per_family=3,
     )
 
-    assert inputs.frozen_config.nested_rows_per_family == 2
+    assert inputs.frozen_config.nested_rows_per_family == 3
     for panel in inputs.action_panels:
         trials_by_family: dict[str, set[str]] = {}
         for row in panel.rows:
             trials_by_family.setdefault(row.family_key, set()).add(row.trial_key)
-        assert set(map(len, trials_by_family.values())) == {2}
+        assert set(map(len, trials_by_family.values())) == {3}
 
 
 def test_typed_input_requires_completion_anchor_to_postdate_run(
@@ -1136,8 +1199,7 @@ def test_typed_input_rejects_unpinned_sealed_label_digest(
     ):
         replace(
             inputs,
-            offline_evaluations=(changed_evaluation,)
-            + inputs.offline_evaluations[1:],
+            offline_evaluations=(changed_evaluation,) + inputs.offline_evaluations[1:],
         )
 
 
@@ -1162,8 +1224,7 @@ def test_typed_input_rejects_mutated_joined_labels_with_retained_digest(
     ):
         replace(
             inputs,
-            offline_evaluations=(changed_evaluation,)
-            + inputs.offline_evaluations[1:],
+            offline_evaluations=(changed_evaluation,) + inputs.offline_evaluations[1:],
         )
 
 
@@ -1187,9 +1248,7 @@ def test_authorized_recall_is_derived_from_exact_oracle_not_relevance_labels(
     inputs = _bound_input(config, label_relevant_document_ids=(1,))
     panel = inputs.action_panels[0]
     target = next(
-        row
-        for row in panel.rows
-        if row.action == "hnsw-low" and row.returned_document_ids == (1,)
+        row for row in panel.rows if row.action == "hnsw-low" and row.returned_document_ids == (1,)
     )
     row = next(
         row
@@ -1204,9 +1263,7 @@ def test_low_effort_label_is_intent_to_treat_action_failure_composite(
     config: ConfirmatoryAnalysisConfig,
 ) -> None:
     rows = tuple(
-        row
-        for row in _bound_input(config, suite=suite).analysis_rows()
-        if row.action == "hnsw-low"
+        row for row in _bound_input(config, suite=suite).analysis_rows() if row.action == "hnsw-low"
     )
     batch = confirmatory_analysis._feature_batch(
         rows,
@@ -1259,9 +1316,7 @@ def test_empty_authorized_truth_requires_an_empty_completed_return(
     )
     analysis_rows = inputs.analysis_rows()
     empty_row = next(
-        row
-        for row in analysis_rows
-        if row.action == "hnsw-low" and row.trial_id == empty_trial
+        row for row in analysis_rows if row.action == "hnsw-low" and row.trial_id == empty_trial
     )
     extraneous_row = next(
         row
@@ -1292,13 +1347,9 @@ def test_one_class_corpus_emits_complete_conservative_h2_result(
     result = run_confirmatory_analysis(inputs, suite=suite)
 
     one_class = next(
-        corpus
-        for corpus in result.h2.corpus_results
-        if corpus.corpus_id == FIXED_CORPORA[0]
+        corpus for corpus in result.h2.corpus_results if corpus.corpus_id == FIXED_CORPORA[0]
     )
-    auprc_gate = next(
-        gate for gate in result.h2.metric_gates if gate.name == "h2_auprc_gain"
-    )
+    auprc_gate = next(gate for gate in result.h2.metric_gates if gate.name == "h2_auprc_gain")
     assert np.isfinite(one_class.log_loss_reduction)
     assert np.isfinite(one_class.brier_score_reduction)
     assert one_class.auprc_gain is None
@@ -1313,9 +1364,7 @@ def test_one_class_corpus_emits_complete_conservative_h2_result(
     assert not auprc_gate.passed
     assert not result.h2.passed
     assert not result.primary_claim_passed
-    assert json.loads(result.canonical_bytes())["h2"]["metric_gates"][2][
-        "estimate"
-    ] is None
+    assert json.loads(result.canonical_bytes())["h2"]["metric_gates"][2]["estimate"] is None
 
 
 def test_h1_orientation_does_not_gate_primary_success(
@@ -1359,6 +1408,18 @@ def test_runner_emits_receipt_derived_canonical_intersection_union_result(
     assert len(result.h2.metric_gates) == 3
     assert len(result.h2.passing_corpora) == 5
     assert len(result.h3.gates) == 4
+    sensitivity = result.h3.position_adjusted_sensitivity
+    assert sensitivity.method == "paired-log-ratio-corpus-linear-position-adjustment-v1"
+    assert not sensitivity.affects_primary_claim
+    failed_sensitivity = replace(
+        sensitivity,
+        gate=replace(sensitivity.gate, passed=False),
+    )
+    sensitivity_only_failure = replace(
+        result,
+        h3=replace(result.h3, position_adjusted_sensitivity=failed_sensitivity),
+    )
+    assert sensitivity_only_failure.primary_claim_passed
     assert dict(result.h3.execution_state_counts)["failed"] == len(FIXED_CORPORA)
     assert result.h3.entitlement.observed_events == 0
     expected_upper = 1.0 - config.alpha ** (1.0 / result.h3.entitlement.n_families)
@@ -1380,8 +1441,7 @@ def test_runner_rejects_model_suite_not_pinned_by_manifest(
     h1_model_drift = replace(
         suite,
         models=tuple(
-            changed_full_model if model.name == "full" else model
-            for model in suite.models
+            changed_full_model if model.name == "full" else model for model in suite.models
         ),
     )
 

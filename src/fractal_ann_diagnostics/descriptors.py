@@ -11,6 +11,7 @@ References
 - Belussi, A., Faloutsos, C. (1995). Estimating the selectivity of spatial
   queries using the correlation fractal dimension. VLDB.
 """
+
 from __future__ import annotations
 
 import warnings

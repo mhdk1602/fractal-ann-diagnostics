@@ -1,0 +1,554 @@
+name: Attest the prospective C1 protocol registration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  attestations: write
+  contents: read
+  id-token: write
+
+concurrency:
+  group: confirmatory-registration-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  C0_EVIDENCE_REPOSITORY: mhdk1602/fractal-ann-diagnostics
+  C0_EVIDENCE_TAG: confirmatory-apparatus-c0
+  PINNED_GH_ARCHIVE_SHA256: 83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
+  PINNED_GH_BINARY_SHA256: 56b8bbbb27b066ecb33dbef9a256dc9d1314adaeff0908a752feba6c34053b40
+  PINNED_GH_CHECKSUMS_SHA256: fc046371efa250e2875208341a786a35a01717d5eebec6903e199a9b8a3f3565
+  PINNED_GH_VERSION: "2.96.0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONPATH: src
+
+jobs:
+  attest:
+    environment: confirmatory
+    name: Validate and attest the fixed C1 transition
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Admit only the fixed C1 tag, repository, event, and actor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'mhdk1602/fractal-ann-diagnostics'
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_REF" = 'refs/tags/confirmatory-freeze-c1'
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${GITHUB_REPOSITORY}/.github/workflows/confirmatory-registration-attestation.yml@${GITHUB_REF}"
+
+      - name: Check out the exact C1 workflow source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Install the C1 verifier environment
+        run: uv sync --frozen --no-install-project
+
+      - name: Install and verify the official pinned GitHub CLI
+        id: pinned_gh
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          tool_root="${RUNNER_TEMP}/pinned-gh"
+          evidence_dir="${RUNNER_TEMP}/c0-public-verification-inputs"
+          anonymous_home="${tool_root}/anonymous-home"
+          test ! -e "$tool_root"
+          test ! -e "$evidence_dir"
+          install -d -m 0700 "$tool_root" "$evidence_dir" "$anonymous_home"
+
+          archive_name="gh_${PINNED_GH_VERSION}_linux_amd64.tar.gz"
+          checksums_name="gh_${PINNED_GH_VERSION}_checksums.txt"
+          archive="${tool_root}/${archive_name}"
+          checksums="${tool_root}/${checksums_name}"
+          release_base="https://github.com/cli/cli/releases/download/v${PINNED_GH_VERSION}"
+
+          download_public() {
+            local url="$1"
+            local output="$2"
+            local maximum="$3"
+            local budget="$4"
+            env -i HOME="$anonymous_home" PATH='/usr/bin:/bin' \
+              /usr/bin/curl \
+                --proto '=https' \
+                --proto-redir '=https' \
+                --tlsv1.2 \
+                --fail \
+                --location \
+                --retry 5 \
+                --retry-all-errors \
+                --retry-delay 2 \
+                --retry-max-time "$budget" \
+                --connect-timeout 15 \
+                --max-time "$budget" \
+                --max-filesize "$maximum" \
+                --silent \
+                --show-error \
+                --output "$output" \
+                "$url"
+          }
+
+          download_public \
+            "${release_base}/${checksums_name}" \
+            "$checksums" \
+            1048576 \
+            180
+          printf '%s  %s\n' "$PINNED_GH_CHECKSUMS_SHA256" "$checksums" \
+            | sha256sum --check -
+          test "$(grep -Fxc \
+            "${PINNED_GH_ARCHIVE_SHA256}  ${archive_name}" \
+            "$checksums")" -eq 1
+
+          download_public \
+            "${release_base}/${archive_name}" \
+            "$archive" \
+            67108864 \
+            180
+          printf '%s  %s\n' "$PINNED_GH_ARCHIVE_SHA256" "$archive" \
+            | sha256sum --check -
+
+          member="gh_${PINNED_GH_VERSION}_linux_amd64/bin/gh"
+          test "$(tar --list --gzip --file "$archive" | grep -Fxc "$member")" -eq 1
+          tar \
+            --extract \
+            --gzip \
+            --file "$archive" \
+            --directory "$tool_root" \
+            --strip-components=2 \
+            --no-same-owner \
+            --no-same-permissions \
+            "$member"
+          gh_path="${tool_root}/gh"
+          chmod 0500 "$gh_path"
+          printf '%s  %s\n' "$PINNED_GH_BINARY_SHA256" "$gh_path" \
+            | sha256sum --check -
+
+          gh_version="${evidence_dir}/gh-version.txt"
+          "$gh_path" --version > "$gh_version"
+          printf 'gh version %s (2026-07-02)\n' "$PINNED_GH_VERSION" \
+            > "${tool_root}/expected-gh-version.txt"
+          printf 'https://github.com/cli/cli/releases/tag/v%s\n' \
+            "$PINNED_GH_VERSION" >> "${tool_root}/expected-gh-version.txt"
+          cmp -- "${tool_root}/expected-gh-version.txt" "$gh_version"
+          chmod 0400 "$archive" "$checksums" "$gh_version"
+          printf '%s\n' "$tool_root" >> "$GITHUB_PATH"
+          printf 'gh_path=%s\n' "$gh_path" >> "$GITHUB_OUTPUT"
+          printf 'evidence_dir=%s\n' "$evidence_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Acquire the fresh public C0 release evidence
+        shell: bash
+        env:
+          EVIDENCE_DIR: ${{ steps.pinned_gh.outputs.evidence_dir }}
+          GH_HOST: github.com
+          GH_PATH: ${{ steps.pinned_gh.outputs.gh_path }}
+          GH_PROMPT_DISABLED: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          manifest="$GITHUB_WORKSPACE/research/study-manifest.json"
+          test -f "$manifest"
+          test "$(stat -c %a "$EVIDENCE_DIR")" = 700
+          test -x "$GH_PATH"
+          test "$("$GH_PATH" --version | head -n 1)" = \
+            "gh version ${PINNED_GH_VERSION} (2026-07-02)"
+
+          c0_commit="$(jq -er \
+            '.sealed_execution.code_commit
+              | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "$manifest")"
+          repository="$(jq -er \
+            '.sealed_execution.c0_evidence_release.repository
+              | select(type == "string")' "$manifest")"
+          release_tag="$(jq -er \
+            '.sealed_execution.c0_evidence_release.release_tag
+              | select(type == "string")' "$manifest")"
+          asset_name="$(jq -er \
+            '.sealed_execution.c0_evidence_release.asset_name
+              | select(type == "string")' "$manifest")"
+          asset_sha256="$(jq -er \
+            '.sealed_execution.c0_evidence_release.asset_sha256
+              | select(type == "string" and test("^[0-9a-f]{64}$"))' \
+            "$manifest")"
+          asset_size="$(jq -er \
+            '.sealed_execution.c0_evidence_release.asset_size
+              | select(type == "number" and . > 0 and floor == .)' \
+            "$manifest")"
+          asset_url="$(jq -er \
+            '.sealed_execution.c0_evidence_release.asset_url
+              | select(type == "string")' "$manifest")"
+          checksum_name="$(jq -er \
+            '.sealed_execution.c0_evidence_release.checksum_asset_name
+              | select(type == "string")' "$manifest")"
+          checksum_sha256="$(jq -er \
+            '.sealed_execution.c0_evidence_release.checksum_asset_sha256
+              | select(type == "string" and test("^[0-9a-f]{64}$"))' \
+            "$manifest")"
+          checksum_size="$(jq -er \
+            '.sealed_execution.c0_evidence_release.checksum_asset_size
+              | select(type == "number" and . > 0 and floor == .)' \
+            "$manifest")"
+          checksum_url="$(jq -er \
+            '.sealed_execution.c0_evidence_release.checksum_asset_url
+              | select(type == "string")' "$manifest")"
+
+          test "$repository" = "$C0_EVIDENCE_REPOSITORY"
+          test "$release_tag" = "$C0_EVIDENCE_TAG"
+          [[ "$c0_commit" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$asset_name" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "$checksum_name" =~ ^[A-Za-z0-9._-]+$ ]]
+          test "$checksum_name" = "${asset_name}.sha256"
+          release_base="https://github.com/${repository}/releases/download/${release_tag}"
+          test "$asset_url" = "${release_base}/${asset_name}"
+          test "$checksum_url" = "${release_base}/${checksum_name}"
+
+          gh_config="${EVIDENCE_DIR}/gh-config"
+          anonymous_home="${EVIDENCE_DIR}/anonymous-home"
+          install -d -m 0700 "$gh_config" "$anonymous_home"
+          export GH_CONFIG_DIR="$gh_config"
+
+          release_api="${EVIDENCE_DIR}/published-release-api.json"
+          api_verified=false
+          for attempt in 1 2 3 4; do
+            if timeout --signal=TERM --kill-after=10s 60s \
+                "$GH_PATH" api \
+                  -H 'Accept: application/vnd.github+json' \
+                  -H 'X-GitHub-Api-Version: 2026-03-10' \
+                  "/repos/${repository}/releases/tags/${release_tag}" \
+                | jq -S -c . > "$release_api"; then
+              api_verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 4 ]]; then sleep "$((attempt * 2))"; fi
+          done
+          test "$api_verified" = true
+
+          tag_readback="${EVIDENCE_DIR}/published-tag-ls-remote.txt"
+          base_ref="refs/tags/${release_tag}"
+          peeled_ref="${base_ref}^{}"
+          tag_verified=false
+          for attempt in 1 2 3 4; do
+            if env -u GH_TOKEN -u GITHUB_TOKEN \
+                GIT_CONFIG_NOSYSTEM=1 \
+                GIT_CONFIG_GLOBAL=/dev/null \
+                GIT_TERMINAL_PROMPT=0 \
+                timeout --signal=TERM --kill-after=10s 60s \
+                  git \
+                    -c credential.helper= \
+                    -c http.followRedirects=false \
+                    ls-remote --exit-code --tags \
+                    "https://github.com/${repository}.git" \
+                    "$base_ref" "$peeled_ref" \
+                | LC_ALL=C sort > "$tag_readback"; then
+              tag_verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 4 ]]; then sleep "$((attempt * 2))"; fi
+          done
+          test "$tag_verified" = true
+          test "$(awk -v base="$base_ref" '$2 == base { count += 1 } END { print count + 0 }' \
+            "$tag_readback")" -eq 1
+          test "$(awk -v peeled="$peeled_ref" \
+            '$2 == peeled { count += 1 } END { print count + 0 }' \
+            "$tag_readback")" -le 1
+
+          archive="${EVIDENCE_DIR}/${asset_name}"
+          checksum="${EVIDENCE_DIR}/${checksum_name}"
+          download_anonymous() {
+            local url="$1"
+            local output="$2"
+            local maximum="$3"
+            local budget="$4"
+            env -i HOME="$anonymous_home" PATH='/usr/bin:/bin' \
+              /usr/bin/curl \
+                --proto '=https' \
+                --proto-redir '=https' \
+                --tlsv1.2 \
+                --fail \
+                --location \
+                --retry 5 \
+                --retry-all-errors \
+                --retry-delay 2 \
+                --retry-max-time "$budget" \
+                --connect-timeout 15 \
+                --max-time "$budget" \
+                --max-filesize "$maximum" \
+                --silent \
+                --show-error \
+                --output "$output" \
+                "$url"
+          }
+          download_anonymous "$asset_url" "$archive" "$asset_size" 900
+          download_anonymous "$checksum_url" "$checksum" "$checksum_size" 180
+          test "$(stat -c %s "$archive")" = "$asset_size"
+          test "$(stat -c %s "$checksum")" = "$checksum_size"
+          test "$(sha256sum "$archive" | cut -d ' ' -f 1)" = "$asset_sha256"
+          test "$(sha256sum "$checksum" | cut -d ' ' -f 1)" = "$checksum_sha256"
+          printf '%s  %s\n' "$asset_sha256" "$asset_name" \
+            | cmp -- - "$checksum"
+
+          release_verification="${EVIDENCE_DIR}/release-verification.json"
+          asset_verification="${EVIDENCE_DIR}/asset-verification.json"
+          attestations_verified=false
+          for attempt in 1 2 3 4; do
+            if timeout --signal=TERM --kill-after=10s 60s \
+                "$GH_PATH" release verify "$release_tag" \
+                  --repo "$repository" \
+                  --format json > "$release_verification" \
+              && timeout --signal=TERM --kill-after=10s 60s \
+                "$GH_PATH" release verify-asset "$release_tag" "$archive" \
+                  --repo "$repository" \
+                  --format json > "$asset_verification"; then
+              attestations_verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 4 ]]; then sleep "$((attempt * 2))"; fi
+          done
+          test "$attestations_verified" = true
+          jq -e 'keys == ["attestation", "verificationResult"]' \
+            "$release_verification" >/dev/null
+          jq -e 'keys == ["attestation", "verificationResult"]' \
+            "$asset_verification" >/dev/null
+
+          chmod 0400 \
+            "$release_api" \
+            "$tag_readback" \
+            "$release_verification" \
+            "$asset_verification" \
+            "$archive" \
+            "$checksum"
+
+      - name: Close the retained public C0 evidence
+        shell: bash
+        env:
+          EVIDENCE_DIR: ${{ steps.pinned_gh.outputs.evidence_dir }}
+        run: |
+          set -euo pipefail
+          umask 077
+          output_dir="${RUNNER_TEMP}/c0-public-verification-output"
+          receipt="${RUNNER_TEMP}/c0-public-verification.json"
+          staged_receipt="${output_dir}/c0-public-verification.json"
+          test ! -e "$output_dir"
+          test ! -e "$receipt"
+          install -d -m 0700 "$output_dir"
+          uv run --frozen --no-sync \
+            python -m fractal_ann_diagnostics.c0_public_verification \
+              --manifest "$GITHUB_WORKSPACE/research/study-manifest.json" \
+              --gh-version "${EVIDENCE_DIR}/gh-version.txt" \
+              --release-api "${EVIDENCE_DIR}/published-release-api.json" \
+              --tag-ls-remote "${EVIDENCE_DIR}/published-tag-ls-remote.txt" \
+              --release-verification "${EVIDENCE_DIR}/release-verification.json" \
+              --asset-verification "${EVIDENCE_DIR}/asset-verification.json" \
+              --archive "${EVIDENCE_DIR}/$(jq -er \
+                .sealed_execution.c0_evidence_release.asset_name \
+                "$GITHUB_WORKSPACE/research/study-manifest.json")" \
+              --checksum "${EVIDENCE_DIR}/$(jq -er \
+                .sealed_execution.c0_evidence_release.checksum_asset_name \
+                "$GITHUB_WORKSPACE/research/study-manifest.json")" \
+              --output "$staged_receipt"
+          test "$(stat -c %a "$staged_receipt")" = 600
+          test "$(stat -c %h "$staged_receipt")" = 1
+          mv --no-clobber -- "$staged_receipt" "$receipt"
+          test ! -e "$staged_receipt"
+          test "$(stat -c %a "$receipt")" = 600
+          test "$(stat -c %h "$receipt")" = 1
+
+      - name: Admit only the witnessed freeze child of C0 at the fixed C1 tag
+        id: validate
+        env:
+          GITHUB_REF_VALUE: ${{ github.ref }}
+          GITHUB_SHA_VALUE: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          prepare-c1-registration
+          --repository "$REPOSITORY"
+          --github-ref "$GITHUB_REF_VALUE"
+          --github-sha "$GITHUB_SHA_VALUE"
+          --workflow-ref "$WORKFLOW_REF"
+          --workflow-sha "$WORKFLOW_SHA"
+          --repository-root "$GITHUB_WORKSPACE"
+          --c0-public-verification "${RUNNER_TEMP}/c0-public-verification.json"
+          --output-dir "${RUNNER_TEMP}/validated-c1-registration"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the fixed frozen manifest
+        id: manifest_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: research/study-manifest.json
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/prospective-c1-registration/v2
+          predicate-path: ${{ steps.validate.outputs.predicate_path }}
+          create-storage-record: false
+
+      - name: Derive the canonical registry record from verified Rekor time
+        id: registry
+        env:
+          MANIFEST_ATTESTATION_BUNDLE: ${{ steps.manifest_attestation.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          materialize-c1-registry-record
+          --manifest "$GITHUB_WORKSPACE/research/study-manifest.json"
+          --lock "$GITHUB_WORKSPACE/research/study-manifest.sha256"
+          --reservation "$GITHUB_WORKSPACE/research/zenodo-reservation.json"
+          --manifest-bundle "$MANIFEST_ATTESTATION_BUNDLE"
+          --manifest-predicate "${RUNNER_TEMP}/validated-c1-registration/registration-predicate.json"
+          --record-output "$GITHUB_WORKSPACE/protocol-registry-record.json"
+          --registry-predicate-output "${RUNNER_TEMP}/validated-c1-registration/registry-record-predicate.json"
+          --receipt-output "${RUNNER_TEMP}/validated-c1-registration/registry-materialization.json"
+          --verification-output "${RUNNER_TEMP}/validated-c1-registration/manifest-gh-verification.json"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Attest the canonical protocol registry record
+        id: registry_attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: protocol-registry-record.json
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/prospective-c1-registry-record/v2
+          predicate-path: ${{ steps.registry.outputs.registry_predicate_path }}
+          create-storage-record: false
+
+      - name: Verify the separate registry-record attestation
+        id: registry_verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_ATTESTATION_BUNDLE: ${{ steps.registry_attestation.outputs.bundle-path }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.github_state_attestation
+          verify-c1-registry-record
+          --record "$GITHUB_WORKSPACE/protocol-registry-record.json"
+          --predicate "${RUNNER_TEMP}/validated-c1-registration/registry-record-predicate.json"
+          --bundle "$REGISTRY_ATTESTATION_BUNDLE"
+          --receipt-output "${RUNNER_TEMP}/validated-c1-registration/registry-attestation-validation.json"
+          --verification-output "${RUNNER_TEMP}/validated-c1-registration/registry-gh-verification.json"
+          --github-output "$GITHUB_OUTPUT"
+
+      - name: Assemble the retained registration package
+        env:
+          MANIFEST_ATTESTATION_BUNDLE: ${{ steps.manifest_attestation.outputs.bundle-path }}
+          MANIFEST_ATTESTATION_ID: ${{ steps.manifest_attestation.outputs.attestation-id }}
+          MANIFEST_ATTESTATION_URL: ${{ steps.manifest_attestation.outputs.attestation-url }}
+          REGISTRY_ATTESTATION_BUNDLE: ${{ steps.registry_attestation.outputs.bundle-path }}
+          REGISTRY_ATTESTATION_ID: ${{ steps.registry_attestation.outputs.attestation-id }}
+          REGISTRY_ATTESTATION_URL: ${{ steps.registry_attestation.outputs.attestation-url }}
+          C0_COMMIT: ${{ steps.validate.outputs.c0_commit }}
+          C1_COMMIT: ${{ steps.validate.outputs.c1_commit }}
+          TAG_OBJECT_ID: ${{ steps.validate.outputs.tag_object_id }}
+          TAG_OBJECT_TYPE: ${{ steps.validate.outputs.tag_object_type }}
+        run: |
+          set -euo pipefail
+          package="${RUNNER_TEMP}/confirmatory-c1-registration"
+          install -d -m 0700 "$package"
+          test -f "$MANIFEST_ATTESTATION_BUNDLE"
+          test -f "$REGISTRY_ATTESTATION_BUNDLE"
+          test -n "$MANIFEST_ATTESTATION_ID"
+          test -n "$MANIFEST_ATTESTATION_URL"
+          test -n "$REGISTRY_ATTESTATION_ID"
+          test -n "$REGISTRY_ATTESTATION_URL"
+          cp -- research/study-manifest.json "$package/study-manifest.json"
+          cp -- research/study-manifest.sha256 "$package/study-manifest.sha256"
+          cp -- research/manifest-transition-receipt.json \
+            "$package/manifest-transition-receipt.json"
+          cp -- research/zenodo-reservation.json "$package/zenodo-reservation.json"
+          cp -- protocol-registry-record.json "$package/protocol-registry-record.json"
+          cp -- "$MANIFEST_ATTESTATION_BUNDLE" \
+            "$package/study-manifest.sigstore.bundle.json"
+          cp -- "$REGISTRY_ATTESTATION_BUNDLE" \
+            "$package/protocol-registry-record.sigstore.bundle.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registration-predicate.json" \
+            "$package/registration-predicate.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registration-validation.json" \
+            "$package/registration-validation.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registry-record-predicate.json" \
+            "$package/registry-record-predicate.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registry-materialization.json" \
+            "$package/registry-materialization.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registry-attestation-validation.json" \
+            "$package/registry-attestation-validation.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/manifest-gh-verification.json" \
+            "$package/manifest-gh-verification.json"
+          cp -- "${RUNNER_TEMP}/validated-c1-registration/registry-gh-verification.json" \
+            "$package/registry-gh-verification.json"
+          install -m 0600 -- "${RUNNER_TEMP}/c0-public-verification.json" \
+            "$package/c0-public-verification.json"
+          printf '%s\n' "$MANIFEST_ATTESTATION_ID" \
+            > "$package/manifest-github-attestation-id.txt"
+          printf '%s\n' "$MANIFEST_ATTESTATION_URL" \
+            > "$package/manifest-github-attestation-url.txt"
+          printf '%s\n' "$REGISTRY_ATTESTATION_ID" \
+            > "$package/registry-record-github-attestation-id.txt"
+          printf '%s\n' "$REGISTRY_ATTESTATION_URL" \
+            > "$package/registry-record-github-attestation-url.txt"
+          printf '%s\n' "$C0_COMMIT" > "$package/c0-commit.txt"
+          printf '%s\n' "$C1_COMMIT" > "$package/c1-commit.txt"
+          printf '%s %s\n' "$TAG_OBJECT_ID" "$TAG_OBJECT_TYPE" \
+            > "$package/c1-tag-object.txt"
+          git cat-file -p "$C1_COMMIT" > "$package/c1-commit-object.txt"
+          git cat-file -p "$TAG_OBJECT_ID" > "$package/c1-tag-object-record.txt"
+          printf '%s/%s/actions/runs/%s/attempts/%s\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            "$GITHUB_RUN_ATTEMPT" > "$package/workflow-run.txt"
+          install -m 0600 -- \
+            "${RUNNER_TEMP}/c0-public-verification-inputs/gh-version.txt" \
+            "$package/gh-version.txt"
+          checksum_tmp="${RUNNER_TEMP}/confirmatory-c1-registration.SHA256SUMS.tmp"
+          test ! -e "$checksum_tmp"
+          (
+            cd "$package"
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | LC_ALL=C sort -z \
+              | xargs -0 -r sha256sum
+          ) > "$checksum_tmp"
+          test -s "$checksum_tmp"
+          (
+            cd "$package"
+            sha256sum --check "$checksum_tmp"
+          )
+          install -m 0600 -- "$checksum_tmp" "$package/SHA256SUMS"
+
+      - name: Preflight the exact closed package before retention
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          uv run --frozen --no-sync
+          python -m fractal_ann_diagnostics.zenodo_publication
+          preflight
+          --package "${RUNNER_TEMP}/confirmatory-c1-registration"
+
+      - name: Upload the prospective registration package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: confirmatory-c1-registration-${{ steps.validate.outputs.c1_commit }}
+          path: ${{ runner.temp }}/confirmatory-c1-registration
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          include-hidden-files: false
+          retention-days: 90
