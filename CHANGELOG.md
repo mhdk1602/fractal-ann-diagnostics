@@ -7,7 +7,14 @@ All material changes to this research codebase are recorded here.
 ### Prospective freeze closure — 2026-07-14
 
 - Added deterministic fit, calibration, and sealed-family selection for all five corpora, followed
-  by a label-blind development runner that closes 4,125 paired trials and 16,500 action rows.
+  by a label-payload-excluded development runner that closes 4,125 paired trials and 16,500 action
+  rows over the frozen qrel-derived component graph.
+- Corrected the claim boundary to disclose qrel-derived component construction and stage
+  allocation, public benchmark-label availability, and common administrative control. The study
+  is prospectively frozen before sealed execution and scoring; it does not claim human blinding or
+  independent organizational custody.
+- Corrected all three production phase workflows to compare the pinned semantic GitHub CLI version
+  rather than the complete `gh --version` banner.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

@@ -3264,7 +3264,7 @@ def materialize_production_control_blueprint(
     expected_config_sha256: str,
     resume: bool = False,
 ) -> ProductionControlBlueprintReceipt:
-    """Write the outcome-blind five-corpus C1 blueprint and empty closure."""
+    """Write the label-payload-excluded five-corpus C1 blueprint and empty closure."""
 
     materialization = load_production_control_config(
         materialization_config_path,

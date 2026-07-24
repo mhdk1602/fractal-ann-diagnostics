@@ -437,7 +437,7 @@ fractal-retrieval-governance study-digest \
 
 The custodian writes that exact lowercase digest to a separately controlled lock file. Any manifest
 edit changes the canonical digest and requires a protocol amendment, new lock, and new receipt URI
-before sealed access.
+before sealed execution and outcome scoring.
 
 ## 3. Verify frozen artifacts and create the exclusive local run receipt
 

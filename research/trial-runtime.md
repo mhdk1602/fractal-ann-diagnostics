@@ -3,7 +3,10 @@
 The corpus is too large to place in an online execution object. Query data is
 small enough to admit in memory, but only after its staged source, embedding
 row, opaque identifier, policy assignment, and model epoch have been joined
-without outcome data. `trial_runtime.py` performs that join.
+without opening outcome payloads. The assignment components were constructed
+upstream partly from qrel-derived positive-document edges, so this is a direct
+process-access property rather than an outcome-independence claim.
+`trial_runtime.py` performs that join.
 
 ## Two-phase construction
 
@@ -11,11 +14,10 @@ The custodian first calls `build_query_trial_store` with the registered
 selection-seed digest, expected available-family count, selected-family count,
 and `nested_rows_per_family=3`. The builder reads the verified embedding row
 order and checks every sealed row against the staged query file and
-`assignments.jsonl`. It then applies the same outcome-blind family and
-representative ranking functions as the separated custody builder. One
-representative query per selected assignment component expands to three
-runtime rows. Those rows retain one embedding source row and one query text,
-but receive distinct nested trial keys.
+`assignments.jsonl`. It then applies the same label-payload-excluded family and
+representative ranking functions over qrel-derived components as the separated custody builder.
+One representative query per selected assignment component expands to three runtime rows. Those
+rows retain one embedding source row and one query text, but receive distinct nested trial keys.
 
 Trial and family identifiers use the label-separation v2 contract:
 length-prefixed HMAC-SHA-256 over the v2 domain, key ID, corpus, stage, and

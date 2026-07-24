@@ -118,9 +118,10 @@ hiding it:
 - pin five timelock ciphertexts, the exact drand chain and round, Linux ARM64 `tle`, separate
   release-image digest, custody builder, and custody-seal receipt; disclose common administrative
   control and public label availability;
-- publish the [label-excluded development selection receipt](research/development-cohort.md), then
-  pin its fit/calibration materialization, the connected query-partition audit, and the power
-  report;
+- publish the
+  [label-payload-excluded development selection receipt](research/development-cohort.md), which
+  ranks qrel-derived assignment components without opening qrel or evidence payloads, then pin its
+  fit/calibration materialization, the connected query-partition audit, and the power report;
 - pin the embedding, backends, OPA bundle, controller, comparator, fitted models, and analysis
   runner;
 - estimate nuisance parameters on development data, run the event-yield sensitivity grid and the
@@ -131,9 +132,11 @@ hiding it:
   fixed-order WorkloadSpec objects and their canonical newline-terminated file hashes;
 - change status to `frozen`, write the manifest digest lock, then open the sealed run once.
 
-This is the practical answer to “how do synthetic mechanism results become confirmatory?” The code
-must stop changing before the labels become visible, and the result must be allowed to fail every
-prespecified gate.
+This is the practical answer to “how do synthetic mechanism results become confirmatory?” The
+apparatus and decision rules must stop changing before sealed execution and scoring, including the
+registered join between anchored action rows and label payloads. The result must be allowed to fail
+every prespecified gate. That process order does not show that an operator was unaware of publicly
+accessible benchmark labels.
 
 ## Apparatus lifecycle
 
@@ -141,6 +144,12 @@ The freeze has two Git commits with different jobs. C0 fixes the executable appa
 artifact construction happens from that exact commit under schemas that exclude the sealed label
 artifacts from those process inputs. C1 is then a direct child of C0 whose only changed files are
 the frozen manifest, its digest lock, and the consumed candidate-to-C1 transition receipt.
+Some cohort identities are inherited from a partition graph constructed earlier from qrels.
+Component digests enter deterministic stage allocation for SciFact, MIRACL transfer, BRIGHT, and
+the HotpotQA FullWiki training split; HotpotQA development questions are fixed to sealed. A
+different positive-qrel graph can therefore change component identity, rank, and assigned stage.
+The downstream receipts exclude qrel payloads, but they do not make that upstream construction
+label-independent.
 
 ```mermaid
 flowchart LR
@@ -414,7 +423,7 @@ fractal-ann-diagnostics/
 │   ├── retrieval.py / geometry.py           # authorized search and bounded diagnostics
 │   ├── controller.py / online_runner.py     # frozen decisions and paired online actions
 │   ├── study_data.py / query_cohort.py      # five-corpus staging and family selection
-│   ├── development_execution.py             # label-excluded fit/calibration measurements
+│   ├── development_execution.py             # label-payload-excluded fit/calibration measurements
 │   ├── embedding_store.py                   # current and stale Qwen vector stores
 │   ├── compiled_policy.py                   # exact OPA mask catalogs
 │   ├── authorized_index_store.py            # policy-specific HNSW stores
@@ -459,9 +468,11 @@ The v0.1 project tried to recommend an ANN index from global descriptors. That r
 measure backend recall, mixed angular data with Euclidean geometry, and used an MFDFA statistic that
 changed under row permutation. The current compatibility function warns and returns `NaN`.
 
-v0.2 moved the experiment to query-local control inside an authorized universe. v0.3 adds the
-controls needed to test that idea without label access or protocol drift. The original negative
-result remains in Git because it explains why the research question changed.
+v0.2 moved the experiment to query-local control inside an authorized universe. v0.3 adds controls
+that exclude sealed label payloads from the pre-release processes and bind protocol decisions
+before scoring. It does not establish human label ignorance: the benchmark labels remain publicly
+accessible, and the partition components are partly qrel-derived. The original negative result
+remains in Git because it explains why the research question changed.
 
 The [evidence ledger](https://github.com/mhdk1602/fractal-ann-diagnostics/blob/master/research/literature.md)
 states what each source may support and where its

@@ -860,6 +860,11 @@ def test_self_hosted_execution_uses_only_c1_pinned_host_tools(phase: str) -> Non
         "RUNNER_BOOTSTRAP_RECEIPT_SHA256",
     ):
         assert token in execute
+    semantic_gh_version_check = (
+        'test "$(awk \'NR == 1 {print $3}\' "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"'
+    )
+    assert semantic_gh_version_check in execute
+    assert 'test "$(head -n 1 "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"' not in execute
 
 
 @pytest.mark.parametrize("phase", tuple(WORKFLOWS))

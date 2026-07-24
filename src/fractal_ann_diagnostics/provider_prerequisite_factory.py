@@ -1,4 +1,4 @@
-"""Hosted, outcome-blind prerequisite admission for provider phase claims.
+"""Hosted, label-payload-excluded prerequisite admission for provider phase claims.
 
 The hosted claim job may materialize portable evidence, but it cannot confer
 authority by serializing that evidence.  This module composes the existing C1,

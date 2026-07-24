@@ -1,11 +1,13 @@
-# Outcome-blind development paired execution
+# Label-payload-excluded development paired execution
 
 ## Purpose
 
 [`development_execution.py`](../src/fractal_ann_diagnostics/development_execution.py) is the only
-admitted bridge between the label-free development cohort and the label-authorized freeze
-compiler. It executes every registered retrieval action before development qrels or evidence are
-opened. The result is a closed paired-action panel, not a fitted model or a scientific result.
+admitted bridge between development selection and the label-authorized freeze compiler. It
+executes every registered retrieval action without opening development qrel or evidence payloads.
+The selected families still inherit qrel-derived assignment components from staging. The boundary
+is therefore a direct process-access claim, not proof of outcome-independent sampling or human
+blinding. The result is a closed paired-action panel, not a fitted model or a scientific result.
 
 The runner fixes five things before execution:
 
@@ -21,7 +23,7 @@ schema, and output membership are deterministic.
 
 ```mermaid
 flowchart LR
-    A["Outcome-blind cohort selection"] --> B["Materialized execution plans"]
+    A["Payload-excluded ranking over qrel-derived components"] --> B["Materialized execution plans"]
     C["Paired old/current embeddings"] --> D["Paired-action runner"]
     E["Compiled policy schedules"] --> D
     F["Authorized HNSW indexes"] --> D
@@ -140,9 +142,12 @@ links, special files, noncanonical JSON, changed bytes, duplicate rows, omitted 
 orders, and stale source receipts.
 
 No qrel or evidence byte appears in this package. Online materialization verification runs with
-`verify_label_payloads=False`. The handoff command builds a closed freeze-compiler config from the
-execution receipt and materialization receipt; the freeze compiler is the first component allowed
-to open development qrels and evidence.
+`verify_label_payloads=False`. The cohort materializer has already opened and filtered development
+qrel and evidence payloads to construct the closed materialization package; paired execution and
+its ordinary verification do not reopen them. The handoff command builds a closed freeze-compiler
+config from the execution and materialization receipts, and the freeze compiler later reopens the
+materialized payloads. The plans inherit qrel-derived component identities, so package-level
+payload exclusion does not make the end-to-end cohort label-independent.
 
 ## Operator commands
 
@@ -199,8 +204,10 @@ The runner should stop before publication when any of these conditions occurs:
 - a nonfinite vector, zero-norm query, or row-order mismatch;
 - an incomplete exact control or an authorization violation;
 - an unregistered action, feature, output, or filesystem entry; or
-- a label-bearing path crossing the outcome-blind boundary.
+- a label-bearing path crossing the label-payload-exclusion boundary.
 
-After a successful dry run, an independent reviewer should verify the receipt chain, reproduce the
+After a successful dry run, a second reviewer should verify the receipt chain, reproduce the
 deterministic execution orders, inspect resource telemetry, and confirm that the freeze config is
-derived by `write-freeze-config` rather than assembled by hand.
+derived by `write-freeze-config` rather than assembled by hand. A researcher who did not operate
+the apparatus can perform an independent scientific review from read-only copies. Separate
+administrative authority is required only for a claim of independent custody or host control.

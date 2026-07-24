@@ -1,4 +1,4 @@
-"""Streaming construction of pinned, label-blind embedding stores."""
+"""Streaming construction of pinned, label-payload-excluded embedding stores."""
 
 from __future__ import annotations
 

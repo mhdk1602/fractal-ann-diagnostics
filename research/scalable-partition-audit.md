@@ -2,9 +2,11 @@
 
 This audit is the last process allowed to inspect all staged relevance judgments before label
 custody closes. It proves that fit, calibration, and sealed queries occupy disjoint connected
-components under the registered partition graph. The output is a canonical, label-free receipt.
-The receipt can enter the freeze package and the online runtime without exposing query IDs,
-document IDs, relevance values, answers, or evidence.
+components under the registered partition graph. The output is a canonical,
+label-payload-excluded receipt. The receipt can enter the freeze package and the online runtime
+without exposing query IDs, document IDs, relevance values, answers, or evidence. It is not
+label-independent: its component counts, edge counts, and membership digests are derived partly
+from qrels and positive-relevance edges.
 
 The audit does not accept a caller's description of the staged cohort. It first verifies
 `inventory.json`, `inventory.sha256`, exact package membership, artifact sizes, record counts, and
@@ -96,7 +98,7 @@ The receipt records the structural exclusion artifact SHA-256, query count, comp
 per-dataset typed counts, and a digest over the exact closed rows. It does not serialize the rows
 or their identifiers.
 
-## Label-free receipt
+## Label-payload-excluded, qrel-derived receipt
 
 The canonical receipt records:
 
@@ -109,6 +111,10 @@ The canonical receipt records:
 - exact query-coverage, normalized-text, positive-document, and component-membership digests;
 - structural exclusion counts and membership digest;
 - `cross_stage_component_count: 0`.
+
+These aggregate fields and digests expose no qrel payload values, but several are functions of
+qrel-derived graph membership. They support downstream equality checks, not a claim that the
+partition was constructed without labels.
 
 The file does not contain a self-referential digest. `artifact_sha256` is SHA-256 of the complete
 canonical receipt bytes, including the terminal newline. The freeze manifest pins that value.
@@ -149,10 +155,11 @@ parses the typed canonical receipt, verifies its manifest digest, and may repeat
 only when an explicit staged root is supplied before custody closes.
 
 Runtime admission loads the typed receipt by its expected artifact and inventory digests, then
-checks only label-free bindings: assignment SHA-256, selected query counts, and online source pins.
-It must not reopen sealed qrels. The query package, execution plan, and runtime receipt carry the
-same `query_partition_audit_sha256`. Sealed execution derives the value from those admitted
-objects; it does not accept a free SHA-256 argument.
+checks only label-payload-excluded bindings: assignment SHA-256, selected query counts, and online
+source pins. It must not reopen sealed qrels. The bindings still commit to the upstream,
+qrel-derived graph. The query package, execution plan, and runtime receipt carry the same
+`query_partition_audit_sha256`. Sealed execution derives the value from those admitted objects; it
+does not accept a free SHA-256 argument.
 
 Mutation tests cover assignment omission, query-text substitution, component corruption,
 cross-stage exact and near duplicates, shared external documents, canonical-content aliases,

@@ -3,9 +3,11 @@
 ## What this closes
 
 [`development_freeze.py`](../src/fractal_ann_diagnostics/development_freeze.py) turns admitted
-development evidence into the files that must become immutable before any sealed label is opened.
-It does not read sealed data, register a protocol, or start the confirmatory run. Its sole job is to
-make the remaining development judgments explicit and byte-addressable.
+development evidence into the files that must become immutable before sealed execution, scoring,
+and the label-to-action-panel join. Staging and the partition audit have already opened qrels to
+construct the component graph. The compiler does not read sealed-stage payloads, register a
+protocol, or start the confirmatory run. Its sole job is to make the remaining development
+judgments explicit and byte-addressable.
 
 The compiler produces:
 
@@ -43,10 +45,11 @@ representatives. Policy schedules and paired actions therefore cannot substitute
 outcome-chosen query set.
 
 The paired-action and policy-schedule pins should come from the
-[outcome-blind development execution](development-execution.md). Its `write-freeze-config` command
-reverifies the materialization, policy, embedding, authorized-index, execution-order, and action
-receipts before it emits this compiler's config. A hand-assembled config remains schema-valid only
-if it reproduces those exact pins, but it is not the registered operator path.
+[label-payload-excluded development execution](development-execution.md). Its
+`write-freeze-config` command reverifies the materialization, policy, embedding, authorized-index,
+execution-order, and action receipts before it emits this compiler's config. A hand-assembled
+config remains schema-valid only if it reproduces those exact pins, but it is not the registered
+operator path.
 
 The evidence path must be absent for BRIGHT and MIRACL Transfer. It must be present for the three
 evidence corpora.
@@ -139,8 +142,8 @@ nonfinite, unmatched, or dimensionally inconsistent rows are rejected. The old d
 the ANN epoch; the current document matrix is the exact-truth epoch. The compiler pins and verifies
 both matrices. It does not rerun retrieval after seeing labels.
 
-The remaining telemetry arrives from the completed label-free action run. The compiler rejects a
-caller value that disagrees with any independently derived field above.
+The remaining telemetry arrives from the completed label-payload-excluded action run. The compiler
+rejects a caller value that disagrees with any independently derived field above.
 
 ## Development trial design
 
@@ -477,12 +480,14 @@ staging and action-run receipts, not from a digest computed ad hoc during this c
 
 ## Freeze acceptance
 
-Before these bytes enter the registered study manifest, an independent reviewer should confirm:
+Before these bytes enter the registered study manifest, a second reviewer should confirm the
+following when genuine role separation has been provisioned. Under current sole-operator control,
+the same checks can be retained as an operator review but cannot be described as independent:
 
 1. the checked-in config is byte-identical to
    `canonical_development_freeze_config_bytes(load_development_freeze_config(path))`;
-2. all 57 source bindings resolve to the pre-label selection and intended fit or calibration
-   artifacts;
+2. all 57 source bindings resolve to the label-payload-excluded selection over qrel-derived
+   components and the intended fit or calibration artifacts;
 3. no source artifact ID, path, row, or family crosses the development boundary;
 4. the H1 and H2 bytes reproduce from the pinned development sources;
 5. every controller candidate and metric reproduces byte-for-byte;
@@ -492,4 +497,6 @@ Before these bytes enter the registered study manifest, an independent reviewer 
 9. the CLI `verify` command accepts both copies and rejects a one-byte mutation.
 
 Only after that review should the artifact URIs and digests be inserted into the frozen manifest,
-deposited with the external protocol record, and transferred to the independent label custodian.
+deposited with the external protocol record, and transferred to the registered label custodian.
+Calling that custodian independent requires separate administrative authority and credential
+control; the receipt chain alone does not establish either.

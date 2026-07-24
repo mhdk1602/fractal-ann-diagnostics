@@ -569,7 +569,7 @@ def _peak_rss_bytes() -> int:
 
 @dataclass(frozen=True)
 class ProductionCorpusFactoryConfig:
-    """Only the outcome-blind cohort denominator varies by corpus."""
+    """Only the frozen qrel-derived cohort denominator varies by corpus."""
 
     corpus_id: str
     available_family_count: int

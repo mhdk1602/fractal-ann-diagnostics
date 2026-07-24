@@ -1,10 +1,11 @@
-"""Outcome-blind selection and later label materialization for development cohorts.
+"""Label-payload-excluded selection and later development-label materialization.
 
 ``select`` commits one representative query from each deterministically ranked
-assignment component.  It is intentionally incapable of opening qrels or
-evidence.  ``materialize`` first reproduces that commitment from the same
-label-free inputs, verifies the paired embedding stores, and only then filters
-the development labels into a no-replace package.
+assignment component. Those components were constructed from positive-qrel
+edges during staging, but ``select`` is intentionally incapable of opening
+qrels or evidence payloads. ``materialize`` first reproduces that commitment
+from the same frozen component graph, verifies the paired embedding stores, and
+only then filters the development labels into a no-replace package.
 """
 
 from __future__ import annotations
@@ -193,7 +194,7 @@ def _decode(encoded: bytes, *, label: str) -> Any:
 
 @dataclass(frozen=True, order=True)
 class SelectedDevelopmentFamily:
-    """One outcome-blind component and its fixed representative query."""
+    """One frozen qrel-derived component and its fixed representative query."""
 
     family_rank_sha256: str
     component_sha256: str
@@ -346,7 +347,7 @@ class DevelopmentStageSelection:
 
 @dataclass(frozen=True)
 class DevelopmentCohortSelectionReceipt:
-    """A label-free commitment to every development representative."""
+    """A payload-excluded commitment to every qrel-derived representative."""
 
     staged_inventory_sha256: str
     assignment_artifact_sha256: str
@@ -601,7 +602,7 @@ def _select_label_free_sources(
     for source in (assignments[0], *query_sources):
         if audit_by_path.get(source.path) != source:
             raise DevelopmentCohortError(
-                f"label-free source {source.path!r} differs from the partition audit"
+                f"payload-excluded source {source.path!r} differs from the partition audit"
             )
     if assignments[0].sha256 != audit.assignment_artifact_sha256:
         raise DevelopmentCohortError("assignment digest differs from the partition audit")
@@ -862,7 +863,7 @@ def select_development_cohort(
     partition_audit_path: str | Path,
     partition_audit_sha256: str,
 ) -> DevelopmentCohortSelectionReceipt:
-    """Select and exclusively publish the fixed label-free development cohort."""
+    """Publish the fixed cohort without opening qrel or evidence payloads."""
 
     output = _require_absolute_path("selection receipt output", output_path)
     if os.path.lexists(output):
@@ -1691,7 +1692,7 @@ def materialize_development_cohort(
     partition_audit_path: str | Path,
     embedding_bindings: Sequence[DevelopmentEmbeddingBinding],
 ) -> DevelopmentCohortMaterializationReceipt:
-    """Materialize development labels only after reproducing the label-free receipt."""
+    """Materialize labels after reproducing the payload-excluded receipt."""
 
     output = _require_absolute_path("materialization output root", output_root)
     if os.path.lexists(output):
@@ -1709,8 +1710,8 @@ def materialize_development_cohort(
         expected_artifact_sha256=expected_selection_sha256,
     )
 
-    # This full reproduction is the gate.  No label-bearing source is selected
-    # or opened before these exact label-free bytes match.
+    # This full reproduction is the gate. No label-bearing source is selected
+    # or opened before these exact payload-excluded bytes match.
     reproduced = _derive_selection_receipt(
         staged_root,
         staged_inventory_sha256=selection.staged_inventory_sha256,
@@ -1718,7 +1719,7 @@ def materialize_development_cohort(
         partition_audit_sha256=selection.partition_audit_sha256,
     )
     if reproduced.canonical_file_bytes() != selection.canonical_file_bytes():
-        raise DevelopmentCohortError("selection receipt does not reproduce before labels")
+        raise DevelopmentCohortError("selection receipt does not reproduce before materialization")
 
     audit = load_scalable_partition_audit(
         partition_audit_path,
@@ -2173,7 +2174,10 @@ def canonical_development_embedding_bindings_bytes(
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fractal-development-cohort",
-        description="Select or materialize the fixed outcome-blind development cohort.",
+        description=(
+            "Select from frozen qrel-derived components without opening label payloads, "
+            "or materialize the fixed development cohort."
+        ),
     )
     commands = parser.add_subparsers(dest="command", required=True)
     select = commands.add_parser("select")

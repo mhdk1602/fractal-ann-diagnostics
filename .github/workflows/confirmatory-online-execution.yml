@@ -382,7 +382,7 @@ jobs:
           test "$("$RUNNER_LISTENER" --version)" = "$ACTIONS_RUNNER_VERSION"
           test -n "$GH_VERSION"
           "$GH_PATH" --version > "${RUNNER_TEMP}/gh-version.txt"
-          test "$(head -n 1 "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"
+          test "$(awk 'NR == 1 {print $3}' "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"
           test -s "${RUNNER_TEMP}/gh-version.txt"
           test "$(uname -s)" = 'Darwin'
           test "$(uname -m)" = 'arm64'

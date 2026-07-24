@@ -307,7 +307,7 @@ class PinnedEmbeddingStore:
 
 @dataclass(frozen=True)
 class PinnedDevelopmentSelectionReceipt:
-    """Direct exact pin to the pre-label representative selection."""
+    """Direct exact pin to the pre-materialization representative selection."""
 
     path: Path
     sha256: str
@@ -1296,7 +1296,8 @@ def _joint_power_config(
             artifact_sha256=dependence_sha256,
             partition="development-calibration",
             description=(
-                "Canonical paired calibration action outcomes compiled before sealed access."
+                "Canonical paired calibration action outcomes compiled before sealed execution "
+                "and outcome scoring."
             ),
         ),
         effect_scenarios=(
@@ -1634,7 +1635,7 @@ def _load_one_source(
     query_ids = _parse_queries(_read_pin(source.queries))
     if expected_query_ids is not None and set(query_ids) != set(expected_query_ids):
         raise DevelopmentFreezeError(
-            "pinned query source differs from the pre-label selection receipt"
+            "pinned query source differs from the pre-materialization selection receipt"
         )
     query_set = set(query_ids)
     qrels = _parse_qrels(_read_pin(source.qrels), query_set)

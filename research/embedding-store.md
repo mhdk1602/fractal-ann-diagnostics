@@ -1,4 +1,4 @@
-# Label-blind embedding store
+# Label-payload-excluded embedding store
 
 Status: the streaming store and the fixed five-corpus production controller are implemented. The
 controller derives source paths from the admitted online inventory, resumes at the store's flushed
@@ -6,10 +6,13 @@ checkpoint boundary, and records a terminal suite receipt.
 
 ## Production suite command
 
-Embedding construction is a pre-C1, label-blind artifact operation. It does not run in the Linux C0
+Embedding construction is a pre-C1 operation whose admitted source projection contains no qrel,
+answer, or evidence payload. The builder does not open those payloads. Query rows and partition
+bindings can still inherit qrel-derived component decisions from staging, so the receipt does not
+establish end-to-end label independence or human blinding. The build does not run in the Linux C0
 sealed-execution image. The measured and admitted builder is a separately pinned macOS arm64 MPS
 environment. C1 freezes its builder receipt, production config, five vector trees, five shard
-receipts, and terminal suite receipt before any outcome label is released. The Linux C0 runner later
+receipts, and terminal suite receipt before sealed payload release. The Linux C0 runner later
 consumes those immutable vector bytes.
 
 The exact optional dependency set is `fractal-ann-diagnostics[production-embedding]`: PyTorch
@@ -22,8 +25,8 @@ A 2026-07-18 dependency review found Transformers 5.14.1 as the latest release. 
 changes concern Inkling position bias, assisted generation with `EncoderDecoderCache` and
 OlmoHybrid, FP8 kernels, and multi-device DeepGEMM; none is used by this Qwen3 embedding path.
 The apparatus therefore retains 5.13.1, the version used for the development throughput and
-memory measurements below. Changing it would require a new label-blind benchmark and a new
-artifact closure. See the official [5.14.1 release
+memory measurements below. Changing it would require a new label-payload-excluded benchmark
+measurement and a new artifact closure. See the official [5.14.1 release
 record](https://github.com/huggingface/transformers/releases/tag/v5.14.1).
 
 After bootstrap source commit P is committed and its candidate image closure fixes P/T/D, use a

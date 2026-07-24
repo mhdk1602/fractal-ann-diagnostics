@@ -48,8 +48,10 @@ authorization. State that downstream retention after revocation lies outside thi
 
 Describe request-bound OPA decisions, authorized-only exact and HNSW indexes, bounded query probe,
 frozen controller, final authorization, pseudonymous audit chain, external protocol registration,
-custodian split, typed governed-result/audit admission, anchored pre-label action panel, and offline
-post-receipt label join.
+process-separated custodian and online-runner roles, label-payload-excluded online artifacts,
+qrel-derived components fixed upstream, typed governed-result/audit admission, an action panel
+anchored before label-payload release, and the offline post-receipt label join. Distinguish process
+separation from human blinding and organizational independence.
 
 ### 5. Candidate geometric mechanism
 
@@ -69,8 +71,8 @@ workloads.
 
 Report in this order:
 
-1. H1 diagnostic: label-free frozen full-model high-minus-low geometry-profile predictive-risk
-   contrast, reported without a primary success decision.
+1. H1 diagnostic: sealed-outcome-free frozen full-model high-minus-low geometry-profile
+   predictive-risk contrast, reported without a primary success decision.
 2. H2: held-out log-loss, Brier-score, and AUPRC gain for `full` versus `system-policy`, including
    the four-of-five corpus point rule. `system-policy` contains probe telemetry; `full` adds only the
    four geometric descriptors.
@@ -95,10 +97,22 @@ Failed transfer stays visible and limits the claim.
 ### 10. Limitations
 
 Cover generated rather than enterprise IAM, fixed-corpus inference, backend specificity, timing
-sensitivity, authorization-oracle assumptions, evaluator error, label-custodian trust, finite
-zero-event bounds, the absence of external attestation from ordinary Python objects, the external
-anchors required by the receipt and audit chain, and the rule that a technical failure ends v0.3
-rather than releasing a confirmatory reserve.
+sensitivity, authorization-oracle assumptions, evaluator error, finite zero-event bounds, and the
+absence of external attestation from ordinary Python objects.
+
+State the custody limits explicitly:
+
+- public benchmark labels remain accessible outside the apparatus, so the study does not establish
+  human outcome blindness;
+- query partitioning and cohort identities are partly qrel-derived even though downstream
+  selection, embedding, runtime, and online packages exclude qrel payload reads;
+- role-separated processes, timelock receipts, and digest chains do not establish independent
+  organizational custody, independent review, or the absence of another plaintext copy;
+- external registry and completion anchors attest byte identity, order, and availability within
+  their stated contracts. They do not attest operator ignorance or host behavior.
+
+Also cover label-custodian trust, the external anchors required by the receipt and audit chain, and
+the rule that a technical failure ends v0.3 rather than releasing a confirmatory reserve.
 
 ## Planned figures
 

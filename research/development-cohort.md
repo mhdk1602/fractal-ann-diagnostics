@@ -1,4 +1,4 @@
-# Outcome-blind development cohort
+# Label-payload-excluded development cohort ranking
 
 ## Why this boundary exists
 
@@ -10,11 +10,16 @@ that discretion.
 [`development_cohort.py`](../src/fractal_ann_diagnostics/development_cohort.py) divides the operation
 into two commands:
 
-1. `select` fixes query families and representatives without opening a label-bearing file.
+1. `select` fixes qrel-derived assignment components and representatives without opening a
+   label-bearing file.
 2. `materialize` reproduces the selection, verifies the paired embedding bindings, then filters the
    development qrels and evidence.
 
 Both commands use exclusive creation. Neither replaces an existing receipt or output directory.
+The assignment components and partition-audit bindings were constructed earlier using registered
+shared-positive-document edges from qrels. This boundary constrains direct payload exposure and
+post-selection discretion. It does not establish outcome-independent cohort construction or human
+blinding.
 
 ## Registered allocation
 
@@ -158,7 +163,7 @@ to these plans and the exact selection receipt.
 
 ## CLI
 
-Publish the label-free receipt:
+Publish the label-payload-excluded receipt:
 
 ```bash
 python -m fractal_ann_diagnostics.development_cohort select \
@@ -205,7 +210,7 @@ it opens qrels. Each materialized query file must equal that receipt's represent
 same corpus and stage. A caller cannot replace the queries, policy schedule, or paired actions with
 an outcome-chosen set while retaining the original selection pin.
 
-Do not construct the freeze config directly after cohort materialization. Run the outcome-blind
-paired execution first, then use `fractal-development-execution write-freeze-config`. That command
-derives every query, qrel, evidence, schedule, action-panel, embedding, and selection pin from the
-closed receipt chain.
+Do not construct the freeze config directly after cohort materialization. Run the
+label-payload-excluded paired execution first, then use
+`fractal-development-execution write-freeze-config`. That command derives every query, qrel,
+evidence, schedule, action-panel, embedding, and selection pin from the closed receipt chain.

@@ -1,9 +1,10 @@
-"""Outcome-blind paired-action execution for the fixed development cohort.
+"""Label-payload-excluded paired-action execution for the development cohort.
 
-The runner reads only the materialized query and execution-plan artifacts.  It
-never opens qrels or evidence bundles.  Each of the ten development strata is
+The runner reads only the materialized query and execution-plan artifacts. It
+never opens qrels or evidence bundles. The earlier materializer has already
+read development labels to construct the closed package. Each of the ten development strata is
 executed against receipt-bound dual-epoch embeddings, compiled policy masks,
-and authorized HNSW indexes.  The emitted action rows are the sole response-side
+and authorized HNSW indexes. The emitted action rows are the sole response-side
 input accepted by :mod:`fractal_ann_diagnostics.development_freeze`.
 """
 
@@ -2058,7 +2059,7 @@ def _execute_to_work_tree(
         )
     except Exception as exc:
         raise DevelopmentExecutionError(
-            f"label-free development materialization admission failed: {exc}"
+            f"development materialization admission with label payload reads disabled failed: {exc}"
         ) from exc
     if materialization.artifact_sha256 != config.materialization_receipt_sha256:
         raise DevelopmentExecutionError("development materialization receipt changed")
@@ -2211,7 +2212,7 @@ def verify_development_paired_execution(
         )
     except Exception as exc:
         raise DevelopmentExecutionError(
-            f"cannot reverify label-free materialization: {exc}"
+            f"cannot reverify materialization with label payload reads disabled: {exc}"
         ) from exc
     if (
         materialization.artifact_sha256 != config.materialization_receipt_sha256
@@ -2432,7 +2433,7 @@ def write_bound_development_freeze_config(
 def _cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fractal-development-execution",
-        description="Run or verify the outcome-blind paired development cohort.",
+        description=("Run or verify paired development execution without opening label payloads."),
     )
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run")

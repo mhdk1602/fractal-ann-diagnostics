@@ -130,7 +130,7 @@ receipt and pinned store bytes, then compares the executable rows with the
 custody key map. The full trial-runtime source/embedding verification remains a
 separate prerequisite.
 
-### Outcome-blind family selection
+### Label-payload-excluded ranking over qrel-derived components
 
 The builder does not package every sealed assignment by default. It enumerates
 the unique `partition_component_sha256` values in the pinned assignment file
@@ -147,15 +147,18 @@ LP(partition_component_sha256)
 ```
 
 `staged_inventory_sha256` is deliberately absent from both ranking formulas.
-That digest commits qrel and evidence bytes, so admitting it would make cohort
-membership a function of outcomes. The plan and receipt still bind the staged
-inventory independently; inventory substitution remains fatal without
-contaminating selection.
+That digest commits qrel and evidence bytes. Excluding it prevents later
+payload-byte changes from altering ranks once the component identifiers are
+fixed. The component identifiers are not label-independent: staging constructs them partly from
+positive-qrel document edges, and the partition audit verifies that graph. The plan and receipt
+still bind the staged inventory separately, so inventory substitution remains fatal.
 
 Components sort by `(rank_sha256, partition_component_sha256)`. The first
 `selected_families` components define the cohort. Ranking reads no qrel,
 answer, evidence, text, prediction, or other outcome. A count mismatch or fewer
-components than `selected_families` stops the build without publication.
+components than `selected_families` stops the build without publication. This
+direct no-read property does not turn the qrel-derived component graph into an
+outcome-independent sample.
 
 ### Representative query and nested trials
 
@@ -390,9 +393,10 @@ Linux), followed by a parent-directory fsync.
 2. Pin and verify the staged data inventory.
 3. Freeze the sharded online execution plan; record its artifact digest.
 4. Register `available_families`, `selected_families`, both fixed ranking
-   algorithms, `nested_rows_per_family=3`, and an independent selection-seed
-   digest from the power design. Do not choose any of them after label
-   inspection.
+   algorithms, `nested_rows_per_family=3`, and a separately registered
+   selection-seed digest from the power design. Freeze these values before the
+   custody build. This order constrains post-freeze changes; it does not show
+   that the operator never inspected publicly available labels.
 5. Write one canonical CLI config per sealed corpus with exact source pins.
 6. Run the module `build` command inside the custodian boundary.
 7. Verify the embedding-bound trial-runtime store, then run
@@ -418,8 +422,8 @@ The focused tests establish the following executable claims:
   family key, identical query text and labels, and nested indices `0,1,2`;
 - a runtime query store with one altered family key is rejected even when its
   supplied file digest matches the altered bytes;
-- family selection is deterministic from its registered pins, ignores qrel
-  values, and rejects selected-count underflow or available-count drift;
+- family ranking is deterministic from its registered pins, does not open qrel
+  payloads, and rejects selected-count underflow or available-count drift;
 - changing qrel bytes, the staged-inventory digest, and the resulting sealed
   labels cannot change family selection, representative choice, or online key
   map bytes when the registered seed and structural identifiers are fixed;
@@ -439,4 +443,7 @@ The focused tests establish the following executable claims:
 - the emitted package re-verifies its bytes and exact online-to-sealed key join.
 
 These checks establish apparatus integrity. They do not authorize label
-release or substitute for the registered custodian's independent audit.
+release or turn operator self-review into independent scientific review. A
+researcher who did not operate the apparatus can independently reproduce the
+checks from read-only copies. Separate administrative authority is required
+only for a claim of independent custody or host control.

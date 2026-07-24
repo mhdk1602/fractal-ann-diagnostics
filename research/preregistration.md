@@ -28,11 +28,13 @@ the suite into a random sample of organizations, policies, or retrieval systems.
 Answer emission, answer coverage, false permit, and false denial remain available as evaluation
 outputs. They are declared secondary analyses, with no role in the primary claim or success
 gate. Any later confirmatory answer claim requires its own frozen answer/refusal policy, estimand,
-margin, and analysis rule before label access.
+margin, and analysis rule before sealed execution and any answer-label join used for analysis.
 
-The separation between model construction and testing on unseen observations follows
-[Nosek et al.](https://doi.org/10.1073/pnas.1708274114). Artifact disclosure and executable
-reporting follow the practices described by
+The prospective ordering between model construction and scoring of sealed-stage payloads is
+motivated by [Nosek et al.](https://doi.org/10.1073/pnas.1708274114). It is a process-order claim,
+not evidence that the observations were unseen to the operator: benchmark labels are publicly
+accessible, and the registered component graph uses qrel-derived positive-relevance edges.
+Artifact disclosure and executable reporting follow the practices described by
 [Pineau et al.](https://www.jmlr.org/papers/v22/20-303.html).
 
 ## Prior work and tested conjunction
@@ -245,7 +247,7 @@ changed its value without changing the point cloud.
 
 ## Model artifacts and leakage controls
 
-Four logistic artifacts are fit before sealed access:
+Four logistic artifacts are fit before sealed execution and outcome scoring:
 
 1. `system-only`;
 2. `system-policy`;
@@ -260,19 +262,26 @@ policy, and probe-telemetry variables. `full` adds only the four geometric descr
 `lid_k50__x__lid_cv` interaction.
 
 Development fitting and development calibration use separate query-family groups. Both remain
-group-disjoint from the sealed stage. The serialized JSON artifact records feature schema,
-imputation, standardization, categorical levels, coefficients, Platt calibration, model digests,
-suite digest, and group hashes. No sealed intercept, coefficient, category level, threshold, or
-calibration parameter may be refit after labels become visible.
+group-disjoint from the sealed stage under the registered connected-component graph. That graph
+contains shared-positive-document edges derived from qrels. Component digests enter deterministic
+stage allocation for SciFact, MIRACL transfer, BRIGHT, and the HotpotQA FullWiki training split;
+HotpotQA development questions are fixed to sealed. Positive-qrel changes can therefore alter
+component membership, digest, rank, and assigned stage.
+The serialized JSON artifact records feature schema, imputation, standardization, categorical
+levels, coefficients, Platt calibration, model digests, suite digest, and group hashes. No sealed
+intercept, coefficient, category level, threshold, or calibration parameter may be refit after
+sealed execution begins or after sealed payloads enter the label-authorized analysis process.
 
-Development cohort choice is itself prospective. For each corpus, the label-free selector ranks
-assignment components with the shared `query_cohort` algorithm and fixed SHA-256 seeds, then keeps
-exactly 200 fit families and 75 calibration families. It chooses one representative per component
-by the registered representative rank. The canonical selection receipt is published before any
-development qrel or evidence file is opened. Materialization must reproduce that receipt byte for
-byte, verify the paired old/current embedding receipt and document universe, and only then filter
-development labels. The development-freeze config directly pins this receipt and rejects a query
-set that differs from it. The exact operational contract is specified in
+The development cohort ranking step is prospectively fixed. For each corpus, the selector ranks
+qrel-derived assignment components with the shared `query_cohort` algorithm and fixed SHA-256
+seeds, then keeps exactly 200 fit families and 75 calibration families. It chooses one
+representative per component by the registered representative rank. The selector itself opens no
+development qrel or evidence payload. Its canonical receipt is published before materialization
+opens those payloads. Materialization must reproduce that receipt byte for byte, verify the paired
+old/current embedding receipt and document universe, and only then filter development labels. This
+ordering limits post-selection discretion but does not make component construction
+label-independent. The development-freeze config directly pins the receipt and rejects a query set
+that differs from it. The exact operational contract is specified in
 [`development-cohort.md`](development-cohort.md).
 
 The corpus conformance check rejects an exact query family assigned to two stages. Before freeze,
@@ -285,8 +294,8 @@ the custodian must also pin the prespecified near-duplicate procedure and its re
 H1 asks whether the frozen full model assigns greater low-effort action-failure risk to the
 prespecified high-geometry profile than to the low-geometry profile while holding the sealed
 covariate distribution fixed. It uses no sealed outcome labels. The contrast is predictive,
-noncausal, and descriptive: it checks the orientation of a model fitted before sealed access rather
-than testing a held-out geometry-outcome association.
+noncausal, and descriptive: it checks the orientation of a model fitted before sealed execution
+and outcome scoring rather than testing a held-out geometry-outcome association.
 
 Within `run_confirmatory_analysis_once`, the pinned computation derives the per-row high-minus-low
 predictive-risk contrast and resamples query families inside each fixed corpus. Its directional
@@ -313,7 +322,7 @@ runner cannot instantiate an H2 decision from the current manifest.
 
 The static comparator is chosen on the calibration split as the lowest-latency single action that
 satisfies the frozen fidelity constraints. Its runtime action name and artifact digest are pinned
-before sealed access.
+before sealed execution and outcome scoring.
 
 Before the first action timer starts, the runner obtains one authorization for every distinct
 registered trial environment, loads the corresponding exact and HNSW objects, and seals the
@@ -484,7 +493,7 @@ factors and reported separately.
 
 The current manifest does not define an additional H4 success threshold. Combined-drift and
 transfer stress tests are secondary unless an amended protocol and frozen runner define a gate
-before sealed access.
+before sealed execution and outcome scoring.
 
 The paired-world conformance test holds authorized vectors, query, policy, controller, and index
 seed fixed while changing denied vectors. It compares deterministic visible fields. An unsafe
@@ -634,7 +643,7 @@ resampling counts, power model, and receipt URI template.
 
 The root `production_workloads` field is part of C1. While the repository is a draft, its sole
 permitted unresolved value is `unresolved-before-c1`. A frozen manifest instead contains exactly
-five rows in the registered corpus order. Each row discloses the complete label-free
+five rows in the registered corpus order. Each row discloses the complete label-payload-excluded
 `ProductionCorpusWorkloadSpec` object and the SHA-256 of its canonical UTF-8 JSON file, including
 the terminal newline. The wrapper corpus, embedded corpus, runner image, runner identity, code
 commit, and platform cannot vary independently. Before C1, the materializer writes those exact

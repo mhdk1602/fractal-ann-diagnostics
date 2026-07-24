@@ -262,7 +262,7 @@ def _scan_exact_flat_directory(
 
 @dataclass(frozen=True)
 class ProductionCorpusWorkloadSpec:
-    """C1-frozen, outcome-blind identity for one corpus workload."""
+    """C1-frozen, label-payload-excluded identity for one corpus workload."""
 
     corpus_id: str
     available_family_count: int

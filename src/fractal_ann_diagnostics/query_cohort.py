@@ -1,9 +1,11 @@
-"""Shared outcome-blind query-family cohort selection primitives.
+"""Shared deterministic query-family cohort selection primitives.
 
 Both the online trial builder and the separated label custodian must derive the
 same representative query and nested trial identities without exchanging raw
-query identifiers.  Keeping the ranking and source-value functions here makes
-that equality a code-level invariant instead of a duplicated convention.
+query identifiers. The assignment components supplied here were constructed
+from positive-qrel edges; these ranking functions do not establish outcome
+independence. Keeping the ranking and source-value functions here makes their
+equality a code-level invariant instead of a duplicated convention.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ def family_selection_rank(
     selection_seed_sha256: str,
     component_sha256: str,
 ) -> str:
-    """Return the registered outcome-blind rank for one assignment family."""
+    """Return the registered rank for one frozen assignment family."""
 
     return _length_prefixed_sha256(
         (
