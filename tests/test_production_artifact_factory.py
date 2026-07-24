@@ -1517,7 +1517,9 @@ def test_write_config_derives_closed_fields_and_writes_once(
         lambda *_a, **_k: SimpleNamespace(sha256=source_tree_sha256),
     )
     monkeypatch.setattr(
-        factory, "verify_production_embedding_suite", lambda *_a, **_k: embedding_suite
+        factory,
+        "admit_frozen_production_embedding_suite",
+        lambda *_a, **_k: embedding_suite,
     )
     monkeypatch.setattr(factory, "verify_online_staging_projection", lambda *_a, **_k: projection)
     monkeypatch.setattr(factory, "load_scalable_partition_audit", lambda *_a, **_k: audit)
@@ -1628,17 +1630,46 @@ def test_development_operator_binding_checks_every_factory_join(
         "partition_audit_sha256": _digest("partition-audit"),
         "selected_families_per_corpus": 7,
     }
-    observed: list[tuple[Path, str | None]] = []
+    observed: list[tuple[Path, str, object, object, Path, object]] = []
+    embedding_path = (tmp_path / "embedding-config.json").resolve()
+    partition_audit_path = (tmp_path / "partition-audit.json").resolve()
+    embedding_config = object()
+    embedding_suite = object()
+    partition_audit = object()
 
-    def verify(root: Path, *, expected_receipt_sha256: str | None = None) -> SimpleNamespace:
-        observed.append((root, expected_receipt_sha256))
+    def verify(
+        root: Path,
+        *,
+        expected_receipt_sha256: str,
+        production_embedding_config_path: Path,
+        embedding_config: object,
+        embedding_suite: object,
+        partition_audit_path: Path,
+        partition_audit: object,
+    ) -> SimpleNamespace:
+        observed.append(
+            (
+                root,
+                expected_receipt_sha256,
+                embedding_config,
+                embedding_suite,
+                partition_audit_path,
+                partition_audit,
+            )
+        )
+        assert production_embedding_config_path == embedding_path
         return SimpleNamespace(**values)
 
-    monkeypatch.setattr(development, "verify_post_embedding_development", verify)
+    monkeypatch.setattr(development, "admit_frozen_post_embedding_development", verify)
     operator_root = (tmp_path / "development-operator").resolve()
     common = {
         "root": operator_root,
         "receipt_sha256": values["artifact_sha256"],
+        "embedding_config_path": embedding_path,
+        "embedding_config": embedding_config,
+        "embedding_suite": embedding_suite,
+        "partition_audit_path": partition_audit_path,
+        "partition_audit": partition_audit,
         "embedding_suite_receipt_sha256": values["embedding_suite_receipt_sha256"],
         "development_materialization_receipt_sha256": values[
             "development_materialization_receipt_sha256"
@@ -1655,7 +1686,16 @@ def test_development_operator_binding_checks_every_factory_join(
         factory._verify_development_operator_binding(**cast(Any, common)).artifact_sha256
         == values["artifact_sha256"]
     )
-    assert observed == [(operator_root, values["artifact_sha256"])]
+    assert observed == [
+        (
+            operator_root,
+            values["artifact_sha256"],
+            embedding_config,
+            embedding_suite,
+            partition_audit_path,
+            partition_audit,
+        )
+    ]
 
     values["design_seed_sha256"] = _digest("wrong-design")
     with pytest.raises(ProductionArtifactFactoryError, match="design_seed_sha256"):

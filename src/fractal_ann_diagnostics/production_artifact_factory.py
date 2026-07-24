@@ -92,8 +92,8 @@ from .production_embedding_build import (
     ProductionEmbeddingBuildError,
     ProductionEmbeddingConfig,
     ProductionEmbeddingSuiteReceipt,
+    admit_frozen_production_embedding_suite,
     load_production_embedding_config,
-    verify_production_embedding_suite,
 )
 from .scalable_custody import _content_sha256 as custody_document_content_sha256
 from .scalable_execution import (
@@ -2088,6 +2088,11 @@ def _verify_development_operator_binding(
     *,
     root: Path,
     receipt_sha256: str,
+    embedding_config_path: Path,
+    embedding_config: ProductionEmbeddingConfig,
+    embedding_suite: ProductionEmbeddingSuiteReceipt,
+    partition_audit_path: Path,
+    partition_audit: ScalableQueryPartitionAuditReceipt,
     embedding_suite_receipt_sha256: str,
     partition_audit_sha256: str,
     index_config_sha256: str,
@@ -2102,16 +2107,21 @@ def _verify_development_operator_binding(
     try:
         from .post_embedding_development import (
             PostEmbeddingDevelopmentError,
-            verify_post_embedding_development,
+            admit_frozen_post_embedding_development,
         )
     except ImportError as exc:
         raise ProductionArtifactFactoryError(
             "post-embedding development verifier is unavailable"
         ) from exc
     try:
-        receipt = verify_post_embedding_development(
+        receipt = admit_frozen_post_embedding_development(
             root,
             expected_receipt_sha256=receipt_sha256,
+            production_embedding_config_path=embedding_config_path,
+            embedding_config=embedding_config,
+            embedding_suite=embedding_suite,
+            partition_audit_path=partition_audit_path,
+            partition_audit=partition_audit,
         )
     except PostEmbeddingDevelopmentError as exc:
         raise ProductionArtifactFactoryError(
@@ -2211,7 +2221,7 @@ def _admit_factory_inputs(config: ProductionArtifactFactoryConfig) -> _FactoryIn
             raise ProductionArtifactFactoryError(
                 "embedding source tree differs from its config pin"
             )
-        embedding_suite = verify_production_embedding_suite(embedding_config)
+        embedding_suite = admit_frozen_production_embedding_suite(embedding_config)
         if embedding_suite.receipt_sha256 != config.embedding_suite_receipt_sha256:
             raise ProductionArtifactFactoryError(
                 "embedding suite receipt differs from its config pin"
@@ -2265,6 +2275,11 @@ def _admit_factory_inputs(config: ProductionArtifactFactoryConfig) -> _FactoryIn
     development_operator = _verify_development_operator_binding(
         root=config.development_operator_root,
         receipt_sha256=config.development_operator_receipt_sha256,
+        embedding_config_path=config.embedding_build_config_path,
+        embedding_config=embedding_config,
+        embedding_suite=embedding_suite,
+        partition_audit_path=config.partition_audit_path,
+        partition_audit=audit,
         embedding_suite_receipt_sha256=embedding_suite.receipt_sha256,
         development_materialization_receipt_sha256=(
             config.development_materialization_receipt_sha256
@@ -5755,7 +5770,7 @@ def write_production_artifact_factory_config(
             label="embedding_source_root",
         )
         embedding_source_tree = digest_directory_tree(embedding_config.output_root)
-        embedding_suite = verify_production_embedding_suite(embedding_config)
+        embedding_suite = admit_frozen_production_embedding_suite(embedding_config)
         projection = verify_online_staging_projection(
             embedding_config.online_staging_root,
             expected_inventory_sha256=embedding_config.online_inventory_sha256,
@@ -5785,6 +5800,11 @@ def write_production_artifact_factory_config(
     development_receipt = _verify_development_operator_binding(
         root=development_operator,
         receipt_sha256=development_operator_receipt_sha256,
+        embedding_config_path=embedding_config_path,
+        embedding_config=embedding_config,
+        embedding_suite=embedding_suite,
+        partition_audit_path=audit_path,
+        partition_audit=audit,
         embedding_suite_receipt_sha256=embedding_suite.receipt_sha256,
         partition_audit_sha256=partition_audit_sha256,
         index_config_sha256=index_config.config_sha256,

@@ -29,17 +29,21 @@ operator rejects path tokens that denote sealed, custody, held-out, label, outco
 boundaries. Its interface has no path or parameter for a sealed label, confirmatory outcome,
 runtime callback, plugin, or alternate policy/index config.
 
-The full staged root is admitted because development qrels and evidence are required after the
-selection gate. The label-free selection receipt is reproduced byte for byte before the
-materializer resolves or opens those development label sources. Sealed qrels remain outside every
-development type and path admitted downstream.
+The logical staged root is admitted because development qrels and evidence are required after the
+selection gate. At execution it is a custody-produced development-only view, not the source
+package that holds sealed qrels. The label-free selection receipt is reproduced byte for byte
+before the materializer resolves or opens development label sources. Sealed qrels remain outside
+every development type and mounted path admitted downstream.
 
 ## Fixed derivation
 
 The operator first verifies the production embedding config and rehashes all five stores through
-`verify_production_embedding_suite`. The production suite, staged inventory, and partition audit
-must name the same inventory digest. The canonical audit's semantic digest must equal its exact
-file digest.
+`admit_frozen_production_embedding_suite`. Its label-free online projection and completed embedding
+root must be read-only mounts at the exact absolute paths recorded by the Mac builder. This
+cross-host admission reproduces every source, store, evidence, and suite binding without pretending
+that Linux can re-observe the earlier MPS process. The production suite, staged inventory, and
+partition audit must name the same inventory digest. The canonical audit's semantic digest must
+equal its exact file digest.
 
 Each corpus store supplies two `DevelopmentEmbeddingBinding` rows, one for
 `development-fit` and one for `development-calibration`. Both rows name the same store root and
@@ -157,58 +161,160 @@ file or directory pins. Its `artifact_sha256` is also the exact SHA-256 of
 `post-embedding-development-receipt.json`.
 
 The production factory accepts the operator root plus that one receipt digest. It calls
-`verify_post_embedding_development(root, expected_receipt_sha256=...)` and derives its
-materialization, design, audit, index, and power inputs from the verified receipt. Those fields are
-not repeated as operator choices in the factory command.
+`admit_frozen_post_embedding_development` with the embedding config, embedding-suite receipt, and
+label-free partition-audit receipt that the factory admitted in the same operation. The frozen
+path requires the operator package on a read-only mount and replays every package-local stage, but
+it never opens `full_staged_root`. The raw staged package, including sealed-label custody paths, is
+therefore absent from the factory namespace. Materialization, design, audit, index, and power
+inputs come from the verified operator receipt rather than repeated operator choices.
 
 ## Commands
+
+Run the operator from the digest-pinned candidate image. The compute principal receives a
+development staging view at `FULL_STAGED_ROOT`, not the custody-complete source package. The
+custodian creates that view at the exact recorded path with only:
+
+- `inventory.json`, `inventory.sha256`, and `assignments.jsonl`;
+- `datasets/<corpus>/{fit,calibration}/queries.jsonl`;
+- `datasets/<corpus>/{fit,calibration}/qrels.jsonl`; and
+- the registered development evidence bundles for corpora that have them.
+
+No `sealed/` directory or sealed qrel is present. The unchanged inventory and partition-audit pins
+let the operator verify every file it actually opens against the custody-complete cohort while the
+sealed payloads remain outside its mount namespace.
+
+Set paths and externally recorded digests explicitly. Do not derive mount sources from an
+unverified config:
+
+```bash
+set -euo pipefail
+
+IMAGE='ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-candidate@sha256:<scientific-index-digest>'
+EMBEDDING_CONFIG='/absolute/producer/path/production-embedding-config.json'
+EMBEDDING_CONFIG_SHA256='replace-with-production-embedding-config-sha256'
+ONLINE_STAGING='/absolute/producer/path/online-staging-projection'
+EMBEDDING_SOURCE='/absolute/producer/path/production-embedding-suite'
+FULL_STAGED_ROOT='/absolute/controlled/path/development-staging-view'
+FULL_STAGED_INVENTORY_SHA256='replace-with-full-staged-inventory-sha256'
+PARTITION_AUDIT='/absolute/controlled/path/query-partition-audit.json'
+PARTITION_AUDIT_SHA256='replace-with-partition-audit-file-sha256'
+DESIGN_SEED_SHA256='replace-with-design-seed-sha256'
+OPERATOR_CONTROL_ROOT='/absolute/host/path/post-embedding-control'
+OPERATOR_CONFIG="$OPERATOR_CONTROL_ROOT/operator-config.json"
+OPERATOR_CONFIG_SHA256='replace-after-write-config'
+OPERATOR_OUTPUT_PARENT='/absolute/host/path/post-embedding-output'
+OPERATOR_OUTPUT="$OPERATOR_OUTPUT_PARENT/operator-v1"
+OPERATOR_RECEIPT_SHA256='replace-after-run'
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
+umask 077
+test "$HOST_UID" -ne 0
+mkdir -m 0700 "$OPERATOR_CONTROL_ROOT" "$OPERATOR_OUTPUT_PARENT"
+test ! -e "$OPERATOR_CONFIG"
+test ! -e "$OPERATOR_OUTPUT"
+
+POST_CONTAINER_GUARDS=(
+  --network none
+  --read-only
+  --cap-drop ALL
+  --security-opt no-new-privileges
+  --env PYTHONDONTWRITEBYTECODE=1
+  --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=64m,uid=$HOST_UID,gid=$HOST_GID,mode=1777"
+)
+
+POST_INPUT_MOUNTS=(
+  --mount "type=bind,src=$EMBEDDING_CONFIG,dst=$EMBEDDING_CONFIG,readonly"
+  --mount "type=bind,src=$ONLINE_STAGING,dst=$ONLINE_STAGING,readonly"
+  --mount "type=bind,src=$EMBEDDING_SOURCE,dst=$EMBEDDING_SOURCE,readonly"
+  --mount "type=bind,src=$FULL_STAGED_ROOT,dst=$FULL_STAGED_ROOT,readonly"
+  --mount "type=bind,src=$PARTITION_AUDIT,dst=$PARTITION_AUDIT,readonly"
+)
+```
 
 Write the canonical config after the five embedding stores are final:
 
 ```bash
-fractal-post-embedding-development write-config \
-  --production-embedding-config /controlled/embedding-build-config.json \
-  --production-embedding-config-sha256 <sha256> \
-  --full-staged-root /controlled/study-data-v2 \
-  --full-staged-inventory-sha256 <sha256> \
-  --partition-audit /controlled/suite-partition-audit-v2.json \
-  --partition-audit-file-sha256 <sha256> \
-  --design-seed-sha256 <sha256> \
-  --output-root /controlled/development/operator-v1 \
-  --output /controlled/development/operator-v1-config.json
+docker run --rm \
+  --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${POST_CONTAINER_GUARDS[@]}" \
+  --entrypoint /opt/venv/bin/python \
+  "${POST_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$OPERATOR_CONTROL_ROOT,dst=$OPERATOR_CONTROL_ROOT" \
+  --mount "type=bind,src=$OPERATOR_OUTPUT_PARENT,dst=$OPERATOR_OUTPUT_PARENT" \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.post_embedding_development \
+  write-config \
+  --production-embedding-config "$EMBEDDING_CONFIG" \
+  --production-embedding-config-sha256 "$EMBEDDING_CONFIG_SHA256" \
+  --full-staged-root "$FULL_STAGED_ROOT" \
+  --full-staged-inventory-sha256 "$FULL_STAGED_INVENTORY_SHA256" \
+  --partition-audit "$PARTITION_AUDIT" \
+  --partition-audit-file-sha256 "$PARTITION_AUDIT_SHA256" \
+  --design-seed-sha256 "$DESIGN_SEED_SHA256" \
+  --output-root "$OPERATOR_OUTPUT" \
+  --output "$OPERATOR_CONFIG"
 ```
 
-Run inside the exact C0 Linux/arm64 image:
+Record the emitted config digest in `OPERATOR_CONFIG_SHA256`, then run:
 
 ```bash
-fractal-post-embedding-development run \
-  --config /controlled/development/operator-v1-config.json \
-  --config-sha256 <sha256>
+docker run --rm \
+  --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${POST_CONTAINER_GUARDS[@]}" \
+  --entrypoint /opt/venv/bin/python \
+  "${POST_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$OPERATOR_CONTROL_ROOT,dst=$OPERATOR_CONTROL_ROOT,readonly" \
+  --mount "type=bind,src=$OPERATOR_OUTPUT_PARENT,dst=$OPERATOR_OUTPUT_PARENT" \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.post_embedding_development \
+  run \
+  --config "$OPERATOR_CONFIG" \
+  --config-sha256 "$OPERATOR_CONFIG_SHA256"
 ```
 
-After a clean stop at a completed boundary:
+After a clean stop at a completed boundary, use the same mounts and replace `run` with `resume`.
+Record the terminal receipt digest emitted by either successful command in
+`OPERATOR_RECEIPT_SHA256`.
+
+Reverify the terminal package and deterministic power report with the input and output mounts
+read-only:
 
 ```bash
-fractal-post-embedding-development resume \
-  --config /controlled/development/operator-v1-config.json \
-  --config-sha256 <sha256>
+docker run --rm \
+  --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${POST_CONTAINER_GUARDS[@]}" \
+  --entrypoint /opt/venv/bin/python \
+  "${POST_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$OPERATOR_CONTROL_ROOT,dst=$OPERATOR_CONTROL_ROOT,readonly" \
+  --mount "type=bind,src=$OPERATOR_OUTPUT_PARENT,dst=$OPERATOR_OUTPUT_PARENT,readonly" \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.post_embedding_development \
+  verify \
+  --config "$OPERATOR_CONFIG" \
+  --config-sha256 "$OPERATOR_CONFIG_SHA256" \
+  --receipt-sha256 "$OPERATOR_RECEIPT_SHA256"
 ```
 
-Read status without opening development labels:
+Status does not admit embeddings or open development labels, so it receives only the config and
+output roots:
 
 ```bash
-fractal-post-embedding-development status \
-  --config /controlled/development/operator-v1-config.json \
-  --config-sha256 <sha256>
-```
-
-Reverify the terminal package and deterministic power report:
-
-```bash
-fractal-post-embedding-development verify \
-  --config /controlled/development/operator-v1-config.json \
-  --config-sha256 <sha256> \
-  --receipt-sha256 <sha256>
+docker run --rm \
+  --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${POST_CONTAINER_GUARDS[@]}" \
+  --entrypoint /opt/venv/bin/python \
+  --mount "type=bind,src=$OPERATOR_CONTROL_ROOT,dst=$OPERATOR_CONTROL_ROOT,readonly" \
+  --mount "type=bind,src=$OPERATOR_OUTPUT_PARENT,dst=$OPERATOR_OUTPUT_PARENT,readonly" \
+  "$IMAGE" \
+  -m fractal_ann_diagnostics.post_embedding_development \
+  status \
+  --config "$OPERATOR_CONFIG" \
+  --config-sha256 "$OPERATOR_CONFIG_SHA256"
 ```
 
 An interrupted joint-power marker is terminal. Do not delete it, replace it, or call the simulator

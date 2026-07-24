@@ -225,9 +225,24 @@ here.
 
 `status` inspects filesystem state only. Its `diagnostic-only` marker means that `complete` reports
 the presence of five stores, five evidence records, and the suite receipt; it does not rehash those
-objects. `verify` re-admits the staging projection, re-derives all allowlists, verifies every vector
-matrix and model/config binding, rehashes every store and evidence file, and reproduces the suite
-receipt without writes.
+objects. The producer-side `verify` command freshly re-observes the Darwin/MPS builder, re-admits the
+staging projection and model trees, re-derives all allowlists, verifies every vector matrix and
+model/config binding, rehashes every store and evidence file, and reproduces the suite receipt
+without writes.
+
+After that producer check, Linux post-embedding and factory stages call
+`admit_frozen_production_embedding_suite`. The online projection and completed embedding root must
+be mounted read-only at the literal absolute paths recorded in the embedding config. Frozen
+admission rehashes the source projection, all five store trees, vector descriptors, model and
+encoder bindings, evidence files, and terminal suite. It treats the embedded builder receipt as
+producer-time provenance. It never opens the recorded Mac checkout, venv, model paths, or MPS
+device, and it makes no claim that those mutable resources still exist after handoff.
+
+`ST_RDONLY` proves that the container cannot write through its admitted mount; it is not a defense
+against a privileged host retaining another writable alias to the same backing files. The
+production handoff must therefore use a closed snapshot or volume with no writable alias during
+admission. If the host itself is outside the trust boundary, filesystem immutability needs an
+independent storage control rather than another Python check.
 
 The output root is closed to these names during either execution mode:
 

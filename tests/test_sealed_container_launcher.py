@@ -583,6 +583,28 @@ def test_preflight_contract_round_trips_and_is_closed(tmp_path: Path) -> None:
         )
 
 
+def test_launcher_geometry_rejects_production_closure_beneath_tmpfs(
+    tmp_path: Path,
+) -> None:
+    contract, _, _ = _fixture(tmp_path)
+    hostile_closure = replace(
+        contract.geometry.production_run_closure_mount,
+        source="/tmp/production-run-closure",
+        target="/tmp/production-run-closure",
+    )
+    hostile_mounts = tuple(
+        sorted(
+            (
+                hostile_closure if mount.role == PRODUCTION_RUN_CLOSURE_ROLE else mount
+                for mount in contract.geometry.bind_mounts
+            ),
+            key=lambda mount: mount.target.encode("utf-8"),
+        )
+    )
+    with pytest.raises(SealedContainerLauncherError, match="overlap a writable root"):
+        replace(contract.geometry, bind_mounts=hostile_mounts)
+
+
 def test_transition_changes_only_predeclared_observations(tmp_path: Path) -> None:
     contract, receipt, plan_path = _fixture(tmp_path)
     transition = materialize_runtime_plan_transition(contract, receipt)

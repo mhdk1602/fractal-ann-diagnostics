@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -228,7 +229,11 @@ def test_upstream_admission_rejects_audit_and_embedding_mismatch(
         "load_production_embedding_config",
         lambda *a, **k: embedding_config,
     )
-    monkeypatch.setattr(operator, "verify_production_embedding_suite", lambda value: suite)
+    monkeypatch.setattr(
+        operator,
+        "admit_frozen_production_embedding_suite",
+        lambda value: suite,
+    )
     monkeypatch.setattr(operator, "load_scalable_partition_audit", lambda *a, **k: audit)
     with pytest.raises(PostEmbeddingDevelopmentError, match="not one cohort"):
         operator._admit_upstream(config)
@@ -397,6 +402,214 @@ def test_public_verifier_is_read_only_and_passes_verify_only_flags(
     ]
     assert exact_replays == [True]
     assert operator.digest_directory_tree(config.output_root).sha256 == before
+
+
+def test_frozen_verifier_replays_package_without_full_staged_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    _write_operator_top_level(config)
+    embedding_config = Mock(spec=operator.ProductionEmbeddingConfig)
+    embedding_config.file_sha256 = config.production_embedding_config_sha256
+    embedding_config.online_inventory_sha256 = config.full_staged_inventory_sha256
+    embedding_suite = Mock(spec=operator.ProductionEmbeddingSuiteReceipt)
+    embedding_suite.production_config_sha256 = config.production_embedding_config_sha256
+    embedding_suite.online_inventory_sha256 = config.full_staged_inventory_sha256
+    partition_audit = Mock(spec=operator.ScalableQueryPartitionAuditReceipt)
+    partition_audit.artifact_sha256 = config.partition_audit_file_sha256
+    partition_audit.staged_inventory_sha256 = config.full_staged_inventory_sha256
+    terminal = object()
+    observed: list[operator._AdmittedUpstream] = []
+    execution_receipt = SimpleNamespace(artifact_sha256=_digest("execution"))
+    execution_config = SimpleNamespace(config_sha256=_digest("execution-config"))
+    report = SimpleNamespace(sha256=_digest("report"), selected_families_per_corpus=75)
+
+    monkeypatch.setattr(operator, "_require_read_only_filesystem", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        operator,
+        "_admit_upstream",
+        lambda _config: (_ for _ in ()).throw(
+            AssertionError("frozen admission reopened the full staged tree")
+        ),
+    )
+
+    def cohort(
+        value: PostEmbeddingDevelopmentConfig,
+        admitted_upstream: operator._AdmittedUpstream,
+        *,
+        allow_writes: bool,
+    ) -> tuple[str, str, str]:
+        assert value == config
+        assert allow_writes is False
+        observed.append(admitted_upstream)
+        return _digest("selection"), _digest("bindings"), _digest("materialization")
+
+    monkeypatch.setattr(operator, "_ensure_selection_and_materialization", cohort)
+    monkeypatch.setattr(
+        operator,
+        "_ensure_policy_and_indexes",
+        lambda *_a, **_k: (_strata(), _digest("index")),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_ensure_execution",
+        lambda *_a, **_k: (execution_config, execution_receipt),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_ensure_freeze",
+        lambda *_a, **_k: (_digest("a"), _digest("b"), _digest("c")),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_verify_joint_power_bundle",
+        lambda *_a, **_k: (
+            SimpleNamespace(sha256=_digest("power-config")),
+            (),
+            report,
+            _digest("power-tree"),
+        ),
+    )
+    monkeypatch.setattr(operator, "_build_receipt", lambda *_a, **_k: terminal)
+    monkeypatch.setattr(
+        operator,
+        "load_post_embedding_development_receipt",
+        lambda *_a, **_k: terminal,
+    )
+
+    assert (
+        operator.admit_frozen_post_embedding_development(
+            config.output_root,
+            expected_receipt_sha256=_digest("terminal"),
+            production_embedding_config_path=config.production_embedding_config_path,
+            embedding_config=embedding_config,
+            embedding_suite=embedding_suite,
+            partition_audit_path=config.partition_audit_path,
+            partition_audit=partition_audit,
+        )
+        is terminal
+    )
+    assert observed == [
+        operator._AdmittedUpstream(
+            embedding_config=embedding_config,
+            embedding_suite=embedding_suite,
+            partition_audit=partition_audit,
+        )
+    ]
+    assert not config.full_staged_root.exists()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "embedding-path",
+        "embedding-config-sha256",
+        "inventory-sha256",
+        "audit-path",
+        "audit-file-sha256",
+        "suite-config-sha256",
+        "suite-inventory-sha256",
+        "audit-inventory-sha256",
+    ),
+)
+def test_frozen_verifier_rejects_every_upstream_join_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    config = _config(tmp_path)
+    _write_operator_top_level(config)
+    embedding_config = Mock(spec=operator.ProductionEmbeddingConfig)
+    embedding_config.file_sha256 = config.production_embedding_config_sha256
+    embedding_config.online_inventory_sha256 = config.full_staged_inventory_sha256
+    embedding_suite = Mock(spec=operator.ProductionEmbeddingSuiteReceipt)
+    embedding_suite.production_config_sha256 = config.production_embedding_config_sha256
+    embedding_suite.online_inventory_sha256 = config.full_staged_inventory_sha256
+    partition_audit = Mock(spec=operator.ScalableQueryPartitionAuditReceipt)
+    partition_audit.artifact_sha256 = config.partition_audit_file_sha256
+    partition_audit.staged_inventory_sha256 = config.full_staged_inventory_sha256
+    embedded_config = config
+    embedding_path = config.production_embedding_config_path
+    audit_path = config.partition_audit_path
+    wrong = _digest(f"wrong:{mutation}")
+    if mutation == "embedding-path":
+        embedded_config = replace(
+            config,
+            production_embedding_config_path=(tmp_path / "alternate-embedding.json").resolve(),
+        )
+    elif mutation == "embedding-config-sha256":
+        embedded_config = replace(config, production_embedding_config_sha256=wrong)
+    elif mutation == "inventory-sha256":
+        embedded_config = replace(config, full_staged_inventory_sha256=wrong)
+    elif mutation == "audit-path":
+        embedded_config = replace(
+            config,
+            partition_audit_path=(tmp_path / "alternate-audit.json").resolve(),
+        )
+    elif mutation == "audit-file-sha256":
+        embedded_config = replace(config, partition_audit_file_sha256=wrong)
+    elif mutation == "suite-config-sha256":
+        embedding_suite.production_config_sha256 = wrong
+    elif mutation == "suite-inventory-sha256":
+        embedding_suite.online_inventory_sha256 = wrong
+    else:
+        partition_audit.staged_inventory_sha256 = wrong
+    (config.output_root / OPERATOR_CONFIG_FILENAME).write_bytes(
+        embedded_config.canonical_file_bytes()
+    )
+    verifier_calls: list[object] = []
+    monkeypatch.setattr(operator, "_require_read_only_filesystem", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        operator,
+        "_verify_post_embedding_development_config",
+        lambda *_a, **_k: verifier_calls.append(object()),
+    )
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="upstream differs"):
+        operator.admit_frozen_post_embedding_development(
+            config.output_root,
+            expected_receipt_sha256=_digest("terminal"),
+            production_embedding_config_path=embedding_path,
+            embedding_config=embedding_config,
+            embedding_suite=embedding_suite,
+            partition_audit_path=audit_path,
+            partition_audit=partition_audit,
+        )
+    assert verifier_calls == []
+
+
+def test_frozen_verifier_rejects_writable_package_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    reads: list[Path] = []
+    monkeypatch.setattr(
+        operator,
+        "_require_read_only_filesystem",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            PostEmbeddingDevelopmentError("frozen operator root must be mounted read-only")
+        ),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_read_control",
+        lambda path, **_kwargs: reads.append(path) or b"",
+    )
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="mounted read-only"):
+        operator.admit_frozen_post_embedding_development(
+            config.output_root,
+            expected_receipt_sha256=_digest("terminal"),
+            production_embedding_config_path=config.production_embedding_config_path,
+            embedding_config=Mock(spec=operator.ProductionEmbeddingConfig),
+            embedding_suite=Mock(spec=operator.ProductionEmbeddingSuiteReceipt),
+            partition_audit_path=config.partition_audit_path,
+            partition_audit=Mock(spec=operator.ScalableQueryPartitionAuditReceipt),
+        )
+    assert reads == []
 
 
 def test_public_verifier_detects_changed_package_after_receipt(

@@ -33,6 +33,7 @@ from fractal_ann_diagnostics.production_embedding_build import (
     ProductionEmbeddingConfig,
     ProductionEmbeddingProbeReceipt,
     PythonImportRoot,
+    admit_frozen_production_embedding_suite,
     aggregate_production_embedding_shards,
     build_production_embedding_shard,
     build_production_embedding_suite,
@@ -893,14 +894,66 @@ def test_five_corpus_build_resumes_and_suite_verification_rejects_substitution(
     assert tuple(row.corpus_id for row in suite.corpora) == FIXED_CORPORA
     assert production_embedding_status(config)["status"] == "complete"
     assert verify_production_embedding_suite(config) == suite
+    before = production.digest_directory_tree(config.output_root)
+
+    def reject_live_builder_or_model_reobservation(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("frozen downstream admission touched a mutable builder input")
+
+    with monkeypatch.context() as downstream:
+        downstream.setattr(
+            production,
+            "_require_read_only_filesystem",
+            lambda *_args, **_kwargs: None,
+        )
+        downstream.setattr(
+            production,
+            "verify_production_embedding_builder_runtime",
+            reject_live_builder_or_model_reobservation,
+        )
+        downstream.setattr(
+            production,
+            "_verify_model_roots",
+            reject_live_builder_or_model_reobservation,
+        )
+        assert admit_frozen_production_embedding_suite(config) == suite
+    assert production.digest_directory_tree(config.output_root) == before
 
     evidence_path = config.output_root / PRODUCTION_EMBEDDING_EVIDENCE_DIRECTORY / "scifact.json"
     evidence = json.loads(evidence_path.read_text())
     assert evidence["status"] == "resumed"
     evidence["embedding_tree_sha256"] = _digest("substituted-tree")
     evidence_path.write_bytes(_canonical(evidence) + b"\n")
-    with pytest.raises(ProductionEmbeddingBuildError, match="differs from the final store"):
-        verify_production_embedding_suite(config)
+    with monkeypatch.context() as downstream:
+        downstream.setattr(
+            production,
+            "_require_read_only_filesystem",
+            lambda *_args, **_kwargs: None,
+        )
+        with pytest.raises(ProductionEmbeddingBuildError, match="differs from the final store"):
+            admit_frozen_production_embedding_suite(config)
+
+
+def test_frozen_suite_admission_requires_read_only_handoff_mounts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _path = _write_config(tmp_path, monkeypatch)
+    observations: list[str] = []
+
+    monkeypatch.setattr(
+        production.os,
+        "statvfs",
+        lambda _path: SimpleNamespace(f_flag=0),
+    )
+    monkeypatch.setattr(
+        production,
+        "_verify_projection",
+        lambda _config: observations.append("projection"),
+    )
+
+    with pytest.raises(ProductionEmbeddingBuildError, match="staging projection.*read-only"):
+        admit_frozen_production_embedding_suite(config)
+    assert observations == []
 
 
 def _install_fake_store_builder(

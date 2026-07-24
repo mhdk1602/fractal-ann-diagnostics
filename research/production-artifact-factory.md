@@ -53,9 +53,10 @@ replica, or an undeclared JSON field fails during config admission.
 
 The embedding config's `output_root` must equal the factory's `embedding_source_root`. The source
 root must be a real read-only filesystem mount. The factory verifies the canonical production
-embedding config, hashes the whole source tree, reproduces the embedding-suite receipt, checks all
-five typed embedding stores, and joins their inventory to the development materialization,
-partition audit, online projection, and power decision.
+embedding config, hashes the whole source tree, admits the producer-frozen embedding suite, checks
+all five typed embedding stores, and joins their inventory to the development materialization,
+partition audit, online projection, and power decision. Frozen admission rehashes the recorded
+source and output bytes but does not rerun the Mac/MPS probe inside the Linux image.
 
 The post-embedding receipt closes the development-to-production provenance join. Its typed
 verifier must reproduce the same embedding-suite receipt, materialization receipt, design seed,
@@ -65,31 +66,107 @@ verified operator package. It does not accept parallel caller values for those f
 
 The candidate image contract guarantees `/opt/venv/bin/python`; it does not promise that the
 `fractal-production-artifacts` console script is installed. Every invocation therefore uses the
-module entry point explicitly. Create the empty private artifact root first, then write the config:
+module entry point explicitly.
+
+Absolute paths are evidence. A `/host/input` to `/input` alias changes those paths and cannot satisfy
+the signed upstream configs. Define the exact producer paths, bind each one to itself, and expose
+only the listed development and label-free inputs. Do not mount a broader control or custody tree.
+The pre-C1 construction containers use the invoking host UID/GID so private host bind mounts remain
+owned by the process. This override applies only to factory construction. Sealed execution retains
+UID/GID `65532:65532` and the named-volume launcher in [runner-image.md](runner-image.md).
+
+Create distinct empty mode-`0700` roots for factory artifacts and factory controls, then write the
+config. Fill every input path from the accepted handoff record; do not let an unverified config
+choose a bind source through `jq` or shell evaluation. The typed admission inside the container
+will reject any disagreement between those paths and the pinned configs. `full_staged_root` is
+deliberately absent: frozen operator admission needs the development package and label-free audit,
+not the raw staged tree or its sealed-label custody subtree.
 
 ```bash
+set -euo pipefail
+
 IMAGE='ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-candidate@sha256:<scientific-index-digest>'
+DEVELOPMENT_ROOT='/absolute/host/path/post-embedding-output/operator-v1'
+DEVELOPMENT_CONFIG="$DEVELOPMENT_ROOT/operator-config.json"
+DEVELOPMENT_RECEIPT_SHA256='replace-with-post-embedding-receipt-sha256'
+EMBEDDING_CONFIG='/absolute/producer/path/production-embedding-config.json'
+EMBEDDING_CONFIG_SHA256='replace-with-production-embedding-config-sha256'
+ONLINE_STAGING='/absolute/producer/path/online-staging-projection'
+EMBEDDING_SOURCE='/absolute/producer/path/production-embedding-suite'
+PARTITION_AUDIT='/absolute/controlled/path/query-partition-audit.json'
+PARTITION_AUDIT_SHA256='replace-with-partition-audit-file-sha256'
+FACTORY_ROOT='/absolute/host/path/production-artifacts'
+FACTORY_CONTROL_ROOT='/absolute/host/path/factory-control'
+FACTORY_CONFIG="$FACTORY_CONTROL_ROOT/production-artifact-factory.json"
+FACTORY_CONFIG_SHA256='replace-after-write-config'
+SCIFACT_REQUEST_SHA256='replace-after-prepare-shards'
+HMAC_FILE='/absolute/private/host/path/query-id-hmac.bin'
+HOST_UID="$(id -u)"
+HOST_GID="$(id -g)"
+
+umask 077
+test "$HOST_UID" -ne 0
+mkdir -m 0700 "$FACTORY_ROOT" "$FACTORY_CONTROL_ROOT"
+test -f "$HMAC_FILE"
+test ! -L "$HMAC_FILE"
+case "$(uname -s)" in
+  Darwin) HMAC_METADATA="$(stat -f '%u %Lp %l' "$HMAC_FILE")" ;;
+  Linux) HMAC_METADATA="$(stat -c '%u %a %h' "$HMAC_FILE")" ;;
+  *) exit 1 ;;
+esac
+read -r HMAC_OWNER HMAC_MODE HMAC_LINKS <<< "$HMAC_METADATA"
+test "$HMAC_OWNER" = "$HOST_UID"
+test "$HMAC_LINKS" = 1
+case "$HMAC_MODE" in 400|600) ;; *) exit 1 ;; esac
+case "$HMAC_FILE/" in
+  "$DEVELOPMENT_ROOT/"*|"$ONLINE_STAGING/"*|"$EMBEDDING_SOURCE/"*|\
+  "$FACTORY_ROOT/"*|"$FACTORY_CONTROL_ROOT/"*) exit 1 ;;
+esac
+
+FACTORY_CONTAINER_GUARDS=(
+  --network none
+  --read-only
+  --cap-drop ALL
+  --security-opt no-new-privileges
+  --env PYTHONDONTWRITEBYTECODE=1
+  --tmpfs "/tmp:rw,noexec,nosuid,nodev,size=64m,uid=$HOST_UID,gid=$HOST_GID,mode=1777"
+)
+
+FACTORY_INPUT_MOUNTS=(
+  --mount "type=bind,src=$EMBEDDING_CONFIG,dst=$EMBEDDING_CONFIG,readonly"
+  --mount "type=bind,src=$ONLINE_STAGING,dst=$ONLINE_STAGING,readonly"
+  --mount "type=bind,src=$EMBEDDING_SOURCE,dst=$EMBEDDING_SOURCE,readonly"
+  --mount "type=bind,src=$DEVELOPMENT_ROOT,dst=$DEVELOPMENT_ROOT,readonly"
+  --mount "type=bind,src=$PARTITION_AUDIT,dst=$PARTITION_AUDIT,readonly"
+)
 
 docker run --rm -i \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   write-config \
-  --artifact-root /output/production-artifacts \
-  --embedding-config /input/production-embedding-config.json \
-  --embedding-config-sha256 <embedding-config-sha256> \
-  --development-operator-root /input/post-embedding-development \
-  --development-operator-receipt-sha256 <post-embedding-receipt-sha256> \
-  --partition-audit /input/query-partition-audit.json \
-  --partition-audit-sha256 <partition-audit-file-sha256> \
+  --artifact-root "$FACTORY_ROOT" \
+  --embedding-config "$EMBEDDING_CONFIG" \
+  --embedding-config-sha256 "$EMBEDDING_CONFIG_SHA256" \
+  --development-operator-root "$DEVELOPMENT_ROOT" \
+  --development-operator-receipt-sha256 "$DEVELOPMENT_RECEIPT_SHA256" \
+  --partition-audit "$PARTITION_AUDIT" \
+  --partition-audit-sha256 "$PARTITION_AUDIT_SHA256" \
   --runner-image "$IMAGE" \
   --hmac-secret-fd 0 \
-  --output /output/production-artifact-factory.json \
-  < /host/secret/query-id-hmac.bin
+  --output "$FACTORY_CONFIG" \
+  < "$HMAC_FILE"
 ```
+
+The guard array has been exercised with the non-root UID/GID recipe: the root filesystem is
+read-only, networking and Linux capabilities are absent, privilege escalation is disabled, and
+only a bounded `/tmp` tmpfs plus the declared output binds are writable.
 
 ## Copy boundary
 
@@ -222,15 +299,18 @@ Run preparation once, with the request directory outside `artifact_root`:
 ```bash
 docker run --rm \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   prepare-shards \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256> \
-  --request-directory /output/factory-shard-control/requests
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256" \
+  --request-directory "$FACTORY_CONTROL_ROOT/requests"
 ```
 
 Preparation emits these files in protocol order:
@@ -243,6 +323,12 @@ Preparation emits these files in protocol order:
 05-miracl-transfer.json
 ```
 
+Create the private receipt directory once, before any worker starts:
+
+```bash
+mkdir -m 0700 "$FACTORY_CONTROL_ROOT/receipts"
+```
+
 Launch one worker per request. The request digest is an external byte pin, not a corpus selector.
 The same private HMAC bytes go to descriptor 0 for every worker. Give each worker a distinct
 receipt output outside `artifact_root`:
@@ -250,19 +336,22 @@ receipt output outside `artifact_root`:
 ```bash
 docker run --rm -i \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   build-shard \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256> \
-  --request /output/factory-shard-control/requests/01-scifact.json \
-  --request-sha256 <scifact-request-sha256> \
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256" \
+  --request "$FACTORY_CONTROL_ROOT/requests/01-scifact.json" \
+  --request-sha256 "$SCIFACT_REQUEST_SHA256" \
   --hmac-secret-fd 0 \
-  --receipt-output /output/factory-shard-control/receipts/01-scifact.json \
-  < /secret/query-id-hmac.bin
+  --receipt-output "$FACTORY_CONTROL_ROOT/receipts/01-scifact.json" \
+  < "$HMAC_FILE"
 ```
 
 Use `resume-shard` with the same request, request digest, secret bytes, and receipt destination if a
@@ -278,19 +367,22 @@ owned-tree digest, and only then writes the three shared terminal receipts:
 ```bash
 docker run --rm \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   aggregate-shards \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256> \
-  --shard-receipt /output/factory-shard-control/receipts/05-miracl-transfer.json \
-  --shard-receipt /output/factory-shard-control/receipts/02-hotpotqa-fullwiki.json \
-  --shard-receipt /output/factory-shard-control/receipts/01-scifact.json \
-  --shard-receipt /output/factory-shard-control/receipts/04-bright.json \
-  --shard-receipt /output/factory-shard-control/receipts/03-t2-ragbench.json
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256" \
+  --shard-receipt "$FACTORY_CONTROL_ROOT/receipts/05-miracl-transfer.json" \
+  --shard-receipt "$FACTORY_CONTROL_ROOT/receipts/02-hotpotqa-fullwiki.json" \
+  --shard-receipt "$FACTORY_CONTROL_ROOT/receipts/01-scifact.json" \
+  --shard-receipt "$FACTORY_CONTROL_ROOT/receipts/04-bright.json" \
+  --shard-receipt "$FACTORY_CONTROL_ROOT/receipts/03-t2-ragbench.json"
 ```
 
 Missing, duplicate, extra, replayed, wrong-config, wrong-secret, and partial-tree evidence fails
@@ -312,19 +404,26 @@ For a new build, pass 32–4096 raw bytes only on file descriptor 0. The CLI rej
 descriptor. It reads to EOF before admitting an upstream input or creating an output, hashes the
 bytes, and compares the digest with `hmac_secret_sha256`.
 
+Before the first invocation, verify that `HMAC_FILE` is an owned, private, non-symbolic, singly
+linked regular file outside every input, artifact, and control root. The path is never mounted into
+the container; host-side stdin redirection is the only transport.
+
 ```bash
 docker run --rm -i \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   build \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256> \
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256" \
   --hmac-secret-fd 0 \
-  < /secret/query-id-hmac.bin
+  < "$HMAC_FILE"
 ```
 
 Do not place the secret in an argument, environment variable, config, receipt, log, image layer,
@@ -338,38 +437,47 @@ commitment before any further write.
 ```bash
 docker run --rm -i \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   resume \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256> \
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256" \
   --hmac-secret-fd 0 \
-  < /secret/query-id-hmac.bin
+  < "$HMAC_FILE"
 
 docker run --rm \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output,readonly \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT,readonly" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT,readonly" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   verify \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256>
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256"
 
 docker run --rm \
   --platform linux/arm64 \
+  --user "$HOST_UID:$HOST_GID" \
+  "${FACTORY_CONTAINER_GUARDS[@]}" \
   --entrypoint /opt/venv/bin/python \
-  --mount type=bind,src=/host/input,dst=/input,readonly \
-  --mount type=bind,src=/host/output,dst=/output,readonly \
+  "${FACTORY_INPUT_MOUNTS[@]}" \
+  --mount "type=bind,src=$FACTORY_ROOT,dst=$FACTORY_ROOT,readonly" \
+  --mount "type=bind,src=$FACTORY_CONTROL_ROOT,dst=$FACTORY_CONTROL_ROOT,readonly" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.production_artifact_factory \
   status \
-  --config /input/production-artifact-factory.json \
-  --config-sha256 <factory-config-sha256>
+  --config "$FACTORY_CONFIG" \
+  --config-sha256 "$FACTORY_CONFIG_SHA256"
 ```
 
 `status` only inventories declared phase paths. It does not admit inputs, open the secret, repair

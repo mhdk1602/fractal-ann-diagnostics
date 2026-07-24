@@ -1166,6 +1166,18 @@ def _require_fully_read_only_tree(root: Path, *, label: str) -> None:
             _require_read_only_path(current_path / name, label=f"{label} entry")
 
 
+def _require_read_only_filesystem(path: Path, *, label: str) -> None:
+    """Require an OS-enforced read-only handoff mount."""
+
+    try:
+        flags = os.statvfs(path).f_flag
+    except OSError as exc:
+        raise ProductionEmbeddingBuildError(f"cannot inspect {label} mount: {exc}") from exc
+    read_only_flag = getattr(os, "ST_RDONLY", 1)
+    if not flags & read_only_flag:
+        raise ProductionEmbeddingBuildError(f"{label} must be mounted read-only")
+
+
 def _site_packages_tree_identity(site_packages_root: Path) -> dict[str, object]:
     _require_fully_read_only_tree(site_packages_root, label="builder site-packages")
     try:
@@ -3474,49 +3486,82 @@ def build_production_embedding_suite(
         return _publish_suite(config, completed)
 
 
+def _reproduce_production_embedding_suite(
+    config: ProductionEmbeddingConfig,
+) -> ProductionEmbeddingSuiteReceipt:
+    """Rehash the closed output tree after the caller admits its stage boundary."""
+
+    _validate_output_membership(config.output_root, final=True)
+    adapter = QwenPairedRevisionEmbeddingAdapter(
+        config.current_encoder_config,
+        config.stale_encoder_config,
+    )
+    rows: list[
+        tuple[
+            ProductionCorpusSources,
+            EmbeddingStoreReceipt,
+            str,
+            ProductionCorpusBuildEvidence,
+        ]
+    ] = []
+    for row in config.corpora:
+        receipt, expected, tree_sha256 = _verify_one_store(config, row, adapter=adapter)
+        evidence = _load_evidence(
+            config.output_root / PRODUCTION_EMBEDDING_EVIDENCE_DIRECTORY / f"{row.corpus_id}.json"
+        )
+        _evidence_matches(
+            evidence,
+            corpus_id=row.corpus_id,
+            config=config,
+            expected=expected,
+            receipt=receipt,
+            tree_sha256=tree_sha256,
+        )
+        rows.append((row, receipt, tree_sha256, evidence))
+    reproduced = _suite_from_rows(config, rows)
+    observed = _load_suite(config.output_root / PRODUCTION_EMBEDDING_SUITE_FILENAME)
+    if observed != reproduced:
+        raise ProductionEmbeddingBuildError("suite receipt differs from reproduced stores")
+    return observed
+
+
+def admit_frozen_production_embedding_suite(
+    config: ProductionEmbeddingConfig,
+) -> ProductionEmbeddingSuiteReceipt:
+    """Admit producer-frozen bytes on a downstream host without replaying MPS.
+
+    The typed config retains the canonical Darwin/MPS builder receipt and fixed
+    model-tree identities. This downstream path freshly verifies the online
+    source projection, all five stores, their vector and model bindings, every
+    evidence file, and the terminal suite. It does not claim that the original
+    mutable builder checkout, Python environment, model paths, or MPS device
+    remain present after the artifact handoff.
+    """
+
+    if not isinstance(config, ProductionEmbeddingConfig):
+        raise ProductionEmbeddingBuildError("config must be ProductionEmbeddingConfig")
+    _require_read_only_filesystem(
+        config.online_staging_root,
+        label="frozen online staging projection",
+    )
+    _require_read_only_filesystem(
+        config.output_root,
+        label="frozen production embedding suite",
+    )
+    _verify_projection(config)
+    return _reproduce_production_embedding_suite(config)
+
+
 def verify_production_embedding_suite(
     config: ProductionEmbeddingConfig,
 ) -> ProductionEmbeddingSuiteReceipt:
-    """Rehash all five stores and reproduce the terminal receipt without writes."""
+    """Reobserve the live builder and reproduce all five stores without writes."""
 
     if not isinstance(config, ProductionEmbeddingConfig):
         raise ProductionEmbeddingBuildError("config must be ProductionEmbeddingConfig")
     with _corpus_worker_locks(config.output_root, FIXED_CORPORA):
         _admit_build_inputs(config, prepare_output=False)
-        _validate_output_membership(config.output_root, final=True)
-        adapter = QwenPairedRevisionEmbeddingAdapter(
-            config.current_encoder_config,
-            config.stale_encoder_config,
-        )
-        rows: list[
-            tuple[
-                ProductionCorpusSources,
-                EmbeddingStoreReceipt,
-                str,
-                ProductionCorpusBuildEvidence,
-            ]
-        ] = []
-        for row in config.corpora:
-            receipt, expected, tree_sha256 = _verify_one_store(config, row, adapter=adapter)
-            evidence = _load_evidence(
-                config.output_root
-                / PRODUCTION_EMBEDDING_EVIDENCE_DIRECTORY
-                / f"{row.corpus_id}.json"
-            )
-            _evidence_matches(
-                evidence,
-                corpus_id=row.corpus_id,
-                config=config,
-                expected=expected,
-                receipt=receipt,
-                tree_sha256=tree_sha256,
-            )
-            rows.append((row, receipt, tree_sha256, evidence))
-        reproduced = _suite_from_rows(config, rows)
-        observed = _load_suite(config.output_root / PRODUCTION_EMBEDDING_SUITE_FILENAME)
-        if observed != reproduced:
-            raise ProductionEmbeddingBuildError("suite receipt differs from reproduced stores")
-        return observed
+        return _reproduce_production_embedding_suite(config)
 
 
 def production_embedding_status(config: ProductionEmbeddingConfig) -> dict[str, object]:

@@ -96,8 +96,8 @@ from .production_embedding_build import (
     ProductionEmbeddingBuildError,
     ProductionEmbeddingConfig,
     ProductionEmbeddingSuiteReceipt,
+    admit_frozen_production_embedding_suite,
     load_production_embedding_config,
-    verify_production_embedding_suite,
 )
 from .scalable_partition_audit import (
     ScalablePartitionAuditError,
@@ -376,6 +376,16 @@ def _require_real_directory(path: Path, *, label: str, private: bool = False) ->
         )
 
 
+def _require_read_only_filesystem(path: Path, *, label: str) -> None:
+    try:
+        flags = os.statvfs(path).f_flag
+    except OSError as exc:
+        raise PostEmbeddingDevelopmentError(f"cannot inspect {label} mount: {exc}") from exc
+    read_only_flag = getattr(os, "ST_RDONLY", 1)
+    if not flags & read_only_flag:
+        raise PostEmbeddingDevelopmentError(f"{label} must be mounted read-only")
+
+
 def _read_control(path: Path, *, label: str) -> bytes:
     try:
         return read_secure_regular_file(path, max_bytes=_MAX_CONTROL_BYTES, label=label)
@@ -529,7 +539,7 @@ def _admit_upstream(config: PostEmbeddingDevelopmentConfig) -> _AdmittedUpstream
             config.production_embedding_config_path,
             expected_sha256=config.production_embedding_config_sha256,
         )
-        embedding_suite = verify_production_embedding_suite(embedding_config)
+        embedding_suite = admit_frozen_production_embedding_suite(embedding_config)
         audit = load_scalable_partition_audit(
             config.partition_audit_path,
             expected_inventory_sha256=config.full_staged_inventory_sha256,
@@ -1696,6 +1706,7 @@ def _verify_post_embedding_development_config(
     *,
     expected_receipt_sha256: str | None = None,
     fresh_joint_power: _FreshJointPowerVerification | None = None,
+    admitted_upstream: _AdmittedUpstream | None = None,
 ) -> PostEmbeddingDevelopmentReceipt:
     root = config.output_root
     _require_real_directory(root, label="operator output root", private=True)
@@ -1703,7 +1714,7 @@ def _verify_post_embedding_development_config(
     observed_config = _read_control(root / OPERATOR_CONFIG_FILENAME, label="operator config copy")
     if observed_config != config.canonical_file_bytes():
         raise PostEmbeddingDevelopmentError("operator config copy differs")
-    upstream = _admit_upstream(config)
+    upstream = admitted_upstream if admitted_upstream is not None else _admit_upstream(config)
     selection_sha, bindings_sha, materialization_sha = _ensure_selection_and_materialization(
         config,
         upstream,
@@ -1790,6 +1801,80 @@ def verify_post_embedding_development(
     return _verify_post_embedding_development_config(
         config,
         expected_receipt_sha256=expected_receipt_sha256,
+    )
+
+
+def admit_frozen_post_embedding_development(
+    root: str | Path,
+    *,
+    expected_receipt_sha256: str,
+    production_embedding_config_path: str | Path,
+    embedding_config: ProductionEmbeddingConfig,
+    embedding_suite: ProductionEmbeddingSuiteReceipt,
+    partition_audit_path: str | Path,
+    partition_audit: ScalableQueryPartitionAuditReceipt,
+) -> PostEmbeddingDevelopmentReceipt:
+    """Verify a frozen operator package without reopening the full staged tree.
+
+    The caller supplies the typed embedding suite and label-free partition
+    audit admitted in the same downstream operation. The terminal operator
+    package is then replayed read-only against those exact objects. Raw staged
+    data, including the sealed-label custody subtree, is neither required nor
+    opened.
+    """
+
+    package = _canonical_absolute_path(str(root), label="frozen post-embedding operator root")
+    _require_real_directory(package, label="frozen operator root", private=True)
+    _require_read_only_filesystem(package, label="frozen operator root")
+    if not isinstance(embedding_config, ProductionEmbeddingConfig):
+        raise PostEmbeddingDevelopmentError("frozen embedding config must be typed")
+    if not isinstance(embedding_suite, ProductionEmbeddingSuiteReceipt):
+        raise PostEmbeddingDevelopmentError("frozen embedding suite must be typed")
+    if not isinstance(partition_audit, ScalableQueryPartitionAuditReceipt):
+        raise PostEmbeddingDevelopmentError("frozen partition audit must be typed")
+    embedding_path = _canonical_absolute_path(
+        str(production_embedding_config_path),
+        label="frozen production embedding config path",
+    )
+    audit_path = _canonical_absolute_path(
+        str(partition_audit_path),
+        label="frozen partition audit path",
+    )
+    encoded = _read_control(package / OPERATOR_CONFIG_FILENAME, label="operator config copy")
+    config = PostEmbeddingDevelopmentConfig.from_dict(
+        _decode(encoded, label="operator config copy")
+    )
+    if encoded != config.canonical_file_bytes():
+        raise PostEmbeddingDevelopmentError("operator config copy is not canonical")
+    if config.output_root != package:
+        raise PostEmbeddingDevelopmentError("operator config names another output root")
+    mismatches = []
+    expected = {
+        "production_embedding_config_path": embedding_path,
+        "production_embedding_config_sha256": embedding_config.file_sha256,
+        "full_staged_inventory_sha256": embedding_config.online_inventory_sha256,
+        "partition_audit_path": audit_path,
+        "partition_audit_file_sha256": partition_audit.artifact_sha256,
+    }
+    mismatches.extend(name for name, value in expected.items() if getattr(config, name) != value)
+    if (
+        embedding_suite.production_config_sha256 != embedding_config.file_sha256
+        or embedding_suite.online_inventory_sha256 != config.full_staged_inventory_sha256
+        or partition_audit.staged_inventory_sha256 != config.full_staged_inventory_sha256
+    ):
+        mismatches.append("upstream cohort")
+    if mismatches:
+        raise PostEmbeddingDevelopmentError(
+            "frozen operator upstream differs at: " + ", ".join(sorted(set(mismatches)))
+        )
+    return _verify_post_embedding_development_config(
+        config,
+        expected_receipt_sha256=expected_receipt_sha256,
+        admitted_upstream=_AdmittedUpstream(
+            embedding_config=embedding_config,
+            embedding_suite=embedding_suite,
+            partition_audit=partition_audit,
+        ),
     )
 
 
