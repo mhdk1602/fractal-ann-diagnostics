@@ -2875,7 +2875,17 @@ def _validate_and_remove_temporary_tree(path: Path, *, label: str) -> None:
             pass
         else:
             raise ProductionArtifactFactoryError(f"{label} name survived quarantine")
-        shutil.rmtree(quarantine_name, dir_fd=parent_descriptor)
+        for _root, directories, files, directory_descriptor in os.fwalk(
+            ".",
+            topdown=False,
+            follow_symlinks=False,
+            dir_fd=quarantine_descriptor,
+        ):
+            for name in files:
+                os.unlink(name, dir_fd=directory_descriptor)
+            for name in directories:
+                os.rmdir(name, dir_fd=directory_descriptor)
+        os.rmdir(quarantine_name, dir_fd=parent_descriptor)
         try:
             os.stat(quarantine_name, dir_fd=parent_descriptor, follow_symlinks=False)
         except FileNotFoundError:

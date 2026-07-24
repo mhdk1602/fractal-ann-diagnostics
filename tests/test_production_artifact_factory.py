@@ -1147,6 +1147,11 @@ def test_resume_removes_only_private_unpublished_authorized_index_residue(
     partial = staging / "partial.hnsw"
     partial.write_bytes(b"partial")
     partial.chmod(0o600)
+    nested = staging / "nested"
+    nested.mkdir(mode=0o700)
+    nested_payload = nested / "checkpoint.json"
+    nested_payload.write_bytes(b"checkpoint")
+    nested_payload.chmod(0o600)
 
     factory._recover_authorized_index_builder_residue(output)
 
