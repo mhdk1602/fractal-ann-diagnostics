@@ -23,6 +23,8 @@ All material changes to this research codebase are recorded here.
 - Removed the unavailable coreutils `install` command from the pinned Python slim build stage;
   the pinned interpreter now creates the four runner-owned directories with explicit ownership and
   mode.
+- Corrected the truncated OPA patched `go.sum` pin to the independently regenerated SHA-256; the
+  concatenated dependency-patch digest remains unchanged.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific
