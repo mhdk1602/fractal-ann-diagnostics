@@ -99,9 +99,13 @@ to `/home/runner`, `/input`, `/output`, and `/workspace`. `/tmp` becomes writabl
 launcher supplies the registered disposable tmpfs.
 
 The executable comparison admits a closed runtime config rather than a blacklist.
-Its only fields are `Cmd`, `Entrypoint`, `Env`, `Labels`, `User`, and `WorkingDir`. The label map
-must equal the C0 Dockerfile's declared map. The environment key set must equal the runner variables
-declared on the distroless final stage. No
+Its only fields are `ArgsEscaped`, `Cmd`, `Entrypoint`, `Env`, `Labels`, `User`, and `WorkingDir`.
+The [pinned BuildKit
+frontend](https://github.com/moby/buildkit/blob/dd2170e156c9633da1b2d1a58a6188e3f7d36fa4/frontend/dockerfile/dockerfile2llb/convert.go#L1577-L1590)
+emits `ArgsEscaped=true` when it processes the JSON-form `CMD`; the comparison requires that exact
+compatibility marker rather than admitting another value. The label map must equal the C0
+Dockerfile's declared map. The environment key set must equal the runner variables declared on the
+distroless final stage. No
 additional environment name, label, stop signal, port, volume, health check, shell override, or
 `ONBUILD` instruction is admitted. The receipt retains every observed label and environment value.
 

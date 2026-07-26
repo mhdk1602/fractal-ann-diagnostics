@@ -120,7 +120,9 @@ _EXPECTED_RUNTIME_ENVIRONMENT = {
     "VECLIB_MAXIMUM_THREADS": "1",
     "XDG_CACHE_HOME": "/tmp/fractal-cache",
 }
-_RUNTIME_CONFIG_FIELDS = frozenset({"Cmd", "Entrypoint", "Env", "Labels", "User", "WorkingDir"})
+_RUNTIME_CONFIG_FIELDS = frozenset(
+    {"ArgsEscaped", "Cmd", "Entrypoint", "Env", "Labels", "User", "WorkingDir"}
+)
 
 _SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -1704,8 +1706,18 @@ def _inspect_executable(
         )
     if labels != required_labels:
         raise C0ReproducibilityError("image Labels differ from the closed C0 label set")
-    if set(runtime_config) != _RUNTIME_CONFIG_FIELDS:
-        raise C0ReproducibilityError("image runtime config fields differ from the closed C0 set")
+    runtime_config_fields = set(runtime_config)
+    if runtime_config_fields != _RUNTIME_CONFIG_FIELDS:
+        missing_fields = sorted(_RUNTIME_CONFIG_FIELDS - runtime_config_fields)
+        unexpected_fields = sorted(runtime_config_fields - _RUNTIME_CONFIG_FIELDS)
+        raise C0ReproducibilityError(
+            "image runtime config fields differ from the closed C0 set: "
+            f"missing={missing_fields!r}; unexpected={unexpected_fields!r}"
+        )
+    if runtime_config.get("ArgsEscaped") is not True:
+        raise C0ReproducibilityError(
+            "image runtime ArgsEscaped compatibility marker differs from true"
+        )
     if runtime_config.get("User") != "65532:65532":
         raise C0ReproducibilityError("image runtime user differs from 65532:65532")
     if runtime_config.get("WorkingDir") != "/workspace":

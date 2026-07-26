@@ -416,6 +416,7 @@ def _archive(
     extra_environment: tuple[str, str] | None = None,
     extra_label: tuple[str, str] | None = None,
     extra_runtime_config: tuple[str, object] | None = None,
+    omit_runtime_config_field: str | None = None,
     unrelated: bytes = b"first",
     wrong_diff_id: bool = False,
     noncanonical_receipt: bool = False,
@@ -590,6 +591,7 @@ def _archive(
     if extra_environment is not None:
         environment.append(f"{extra_environment[0]}={extra_environment[1]}")
     runtime_config: dict[str, object] = {
+        "ArgsEscaped": True,
         "Cmd": ["--help"],
         "Entrypoint": [
             "/opt/venv/bin/python",
@@ -603,6 +605,8 @@ def _archive(
     }
     if extra_runtime_config is not None:
         runtime_config[extra_runtime_config[0]] = extra_runtime_config[1]
+    if omit_runtime_config_field is not None:
+        runtime_config.pop(omit_runtime_config_field)
     config = _canonical(
         {
             "architecture": "arm64",
@@ -876,7 +880,15 @@ def test_crossed_hnsw_receipt_and_wheel_are_rejected(tmp_path: Path) -> None:
         ({"runtime_user": "0:0"}, "runtime user"),
         ({"extra_environment": ("PYTHONINSPECT", "1")}, "closed C0 set"),
         ({"extra_label": ("io.attacker.injected", "true")}, "closed C0 label set"),
-        ({"extra_runtime_config": ("StopSignal", "SIGTERM")}, "runtime config fields"),
+        (
+            {"extra_runtime_config": ("StopSignal", "SIGTERM")},
+            r"unexpected=\['StopSignal'\]",
+        ),
+        ({"extra_runtime_config": ("ArgsEscaped", False)}, "ArgsEscaped"),
+        (
+            {"omit_runtime_config_field": "ArgsEscaped"},
+            r"missing=\['ArgsEscaped'\]",
+        ),
         ({"opa": _elf(b"wrong-machine", machine=62)}, "AArch64"),
         ({"opa_policy": b"package substituted\n"}, "final OPA policy"),
         ({"uv_lock": b"version = 2\n"}, "final uv.lock"),
