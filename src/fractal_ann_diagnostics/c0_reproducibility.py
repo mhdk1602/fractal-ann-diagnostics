@@ -714,6 +714,14 @@ def _canonical_tar_member_path(value: str, *, label: str) -> str:
     return canonical
 
 
+def _canonical_layer_member_path(value: str, *, label: str) -> str:
+    serialized = _require_canonical_string(value, label=label)
+    normalized = serialized[2:] if serialized.startswith("./") else serialized
+    if serialized.startswith("./") and normalized == ".":
+        raise C0ReproducibilityError(f"{label} contains a noncanonical or traversal component")
+    return _canonical_tar_member_path(normalized, label=label)
+
+
 @dataclass
 class _ArchiveHandle:
     path: Path
@@ -1016,7 +1024,7 @@ def _apply_layer(
                     raise C0ReproducibilityError(
                         f"executable layer {position} contains too many members"
                     )
-                path = _canonical_tar_member_path(
+                path = _canonical_layer_member_path(
                     member.name,
                     label=f"executable layer {position} member path",
                 )

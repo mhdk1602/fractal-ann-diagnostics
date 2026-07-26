@@ -81,12 +81,12 @@ def _descriptor(payload: bytes, media_type: str) -> dict[str, object]:
     }
 
 
-def _wheel() -> tuple[bytes, bytes]:
+def _wheel(*, member_name: str = EXTENSION_NAME) -> tuple[bytes, bytes]:
     extension = _elf(b"synthetic-arm64-hnsw-extension")
     output = io.BytesIO()
     timestamp = time.gmtime(SOURCE_EPOCH - SOURCE_EPOCH % 2)[:6]
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        member = zipfile.ZipInfo(EXTENSION_NAME, date_time=timestamp)
+        member = zipfile.ZipInfo(member_name, date_time=timestamp)
         member.compress_type = zipfile.ZIP_DEFLATED
         member.external_attr = (stat.S_IFREG | 0o444) << 16
         archive.writestr(member, extension)
@@ -294,10 +294,12 @@ def _layer(
     special: str | None = None,
     unrelated: bytes = b"first",
     tle: bytes | None = None,
+    dot_prefix: bool = False,
 ) -> bytes:
     if opa is None:
         opa = _elf(b"synthetic-arm64-opa")
-    wheel, extension = _wheel()
+    wheel_member_name = f"./{EXTENSION_NAME}" if special == "wheel-dot-prefix" else EXTENSION_NAME
+    wheel, extension = _wheel(member_name=wheel_member_name)
     receipt = _receipt(
         wheel,
         extension,
@@ -312,6 +314,15 @@ def _layer(
     )
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
+        if dot_prefix:
+            root = tarfile.TarInfo(".")
+            root.type = tarfile.DIRTYPE
+            root.mode = 0o755
+            archive.addfile(root)
+            directory = tarfile.TarInfo("./etc/")
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o755
+            archive.addfile(directory)
         rows = [
             ("usr/local/bin/opa", opa, 0o555),
             ("opt/app/policy/opa_compiled_masks.rego", opa_policy, 0o444),
@@ -352,8 +363,10 @@ def _layer(
                     ),
                 ]
             )
+        if special in {"dot-prefix-symlink", "dot-prefix-hardlink"}:
+            rows = [row for row in rows if row[0] != "usr/local/bin/opa"]
         for name, payload, mode in rows:
-            member = tarfile.TarInfo(name)
+            member = tarfile.TarInfo(f"./{name}" if dot_prefix else name)
             member.size = len(payload)
             member.mode = mode
             archive.addfile(member, io.BytesIO(payload))
@@ -363,9 +376,10 @@ def _layer(
             member.size = len(payload)
             member.mode = 0o555
             archive.addfile(member, io.BytesIO(payload))
-        elif special in {"symlink", "hardlink"}:
-            member = tarfile.TarInfo("usr/local/bin/opa")
-            member.type = tarfile.SYMTYPE if special == "symlink" else tarfile.LNKTYPE
+        elif special in {"symlink", "hardlink", "dot-prefix-symlink", "dot-prefix-hardlink"}:
+            dot_prefixed = special.startswith("dot-prefix-")
+            member = tarfile.TarInfo("./usr/local/bin/opa" if dot_prefixed else "usr/local/bin/opa")
+            member.type = tarfile.SYMTYPE if special.endswith("symlink") else tarfile.LNKTYPE
             member.linkname = "elsewhere"
             archive.addfile(member)
         elif special == "device":
@@ -377,10 +391,46 @@ def _layer(
             member = tarfile.TarInfo("../escape")
             member.size = len(payload)
             archive.addfile(member, io.BytesIO(payload))
+        elif special == "dot-prefix-alias":
+            payload = b"\x7fELF-duplicate"
+            member = tarfile.TarInfo("./usr/local/bin/opa")
+            member.size = len(payload)
+            member.mode = 0o555
+            archive.addfile(member, io.BytesIO(payload))
+        elif special == "dot-prefix-traversal":
+            payload = b"escape"
+            member = tarfile.TarInfo("./../escape")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        elif special == "repeated-dot-prefix":
+            payload = b"escape"
+            member = tarfile.TarInfo("././escape")
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        elif special in {
+            "absolute",
+            "backslash",
+            "dot-prefix-backslash",
+            "collapsed-dot-prefix",
+            "root-only-dot-prefix",
+            "dot-prefix-root-alias",
+        }:
+            names = {
+                "absolute": "/escape",
+                "backslash": r"foo\bar",
+                "dot-prefix-backslash": r"./foo\bar",
+                "collapsed-dot-prefix": ".//escape",
+                "root-only-dot-prefix": "./",
+                "dot-prefix-root-alias": "./.",
+            }
+            payload = b"escape"
+            member = tarfile.TarInfo(names[special])
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
     return output.getvalue()
 
 
-def _replacement_layer() -> bytes:
+def _replacement_layer(*, dot_prefix: bool = False) -> bytes:
     wheel, _extension = _wheel()
     output = io.BytesIO()
     with tarfile.open(fileobj=output, mode="w") as archive:
@@ -388,7 +438,7 @@ def _replacement_layer() -> bytes:
             "usr/local/bin/.wh.opa",
             "opt/artifacts/hnswlib/.wh..wh..opq",
         ):
-            whiteout = tarfile.TarInfo(name)
+            whiteout = tarfile.TarInfo(f"./{name}" if dot_prefix else name)
             whiteout.size = 0
             whiteout.mode = 0o000
             archive.addfile(whiteout, io.BytesIO())
@@ -397,7 +447,7 @@ def _replacement_layer() -> bytes:
             (f"opt/artifacts/hnswlib/{WHEEL_NAME}", wheel, 0o444),
         ]
         for name, payload, mode in rows:
-            member = tarfile.TarInfo(name)
+            member = tarfile.TarInfo(f"./{name}" if dot_prefix else name)
             member.size = len(payload)
             member.mode = mode
             archive.addfile(member, io.BytesIO(payload))
@@ -427,11 +477,13 @@ def _archive(
     attestation_count: int = 1,
     wrong_descriptor_size: bool = False,
     outer_traversal: bool = False,
+    outer_dot_prefix: bool = False,
     malformed_index: bool = False,
     two_layers: bool = False,
     nested_index: bool = False,
     image_role: str = "scientific",
     tle: bytes | None = None,
+    layer_dot_prefix: bool = False,
 ) -> None:
     if image_role == "timelock-release" and tle is None:
         tle = _static_tle_elf()
@@ -444,10 +496,11 @@ def _archive(
         special=layer_special,
         unrelated=unrelated,
         tle=tle,
+        dot_prefix=layer_dot_prefix,
     )
     layer_tars = [layer_tar]
     if two_layers:
-        layer_tars.append(_replacement_layer())
+        layer_tars.append(_replacement_layer(dot_prefix=layer_dot_prefix))
     layer_blobs = [gzip.compress(payload, mtime=0) for payload in layer_tars]
     layer_media_type = (
         "application/vnd.oci.image.layer.v1.tar+zstd" if unsupported_compression else OCI_LAYER_GZIP
@@ -707,6 +760,8 @@ def _archive(
         }
         if outer_traversal:
             files["../escape"] = b"escape"
+        if outer_dot_prefix:
+            files["./index.json"] = files.pop("index.json")
         for name, payload in files.items():
             member = tarfile.TarInfo(name)
             member.size = len(payload)
@@ -795,6 +850,63 @@ def test_whiteout_and_opaque_directory_replacement_preserve_final_targets(tmp_pa
 
     assert receipt.executable_equal is True
     assert len(receipt.archive_a.executable.ordered_layers) == 2
+
+
+def test_distroless_single_dot_prefix_layer_members_are_normalized(tmp_path: Path) -> None:
+    first = tmp_path / "first.oci.tar"
+    second = tmp_path / "second.oci.tar"
+    output = tmp_path / "comparison.json"
+    _archive(first, attestation_nonce="first", layer_dot_prefix=True, two_layers=True)
+    _archive(second, attestation_nonce="second", layer_dot_prefix=True, two_layers=True)
+
+    receipt = compare_c0_oci_archives(
+        archive_a_path=first,
+        archive_b_path=second,
+        expected_build_context_tree_sha256=BUILD_CONTEXT_TREE_SHA256,
+        expected_source_date_epoch=SOURCE_EPOCH,
+        expected_uv_lock_sha256=UV_LOCK_SHA256,
+        expected_opa_policy_sha256=OPA_POLICY_SHA256,
+        output_path=output,
+    )
+
+    assert receipt.executable_equal is True
+    assert all(
+        not runtime_file.image_path.startswith("/./")
+        for runtime_file in receipt.archive_a.executable.runtime_files
+    )
+
+
+@pytest.mark.parametrize(
+    ("special", "message"),
+    [
+        ("dot-prefix-alias", r"repeats member 'usr/local/bin/opa'"),
+        ("dot-prefix-traversal", "noncanonical or traversal component"),
+        ("repeated-dot-prefix", "noncanonical or traversal component"),
+        ("absolute", "canonical relative POSIX path"),
+        ("backslash", "canonical relative POSIX path"),
+        ("dot-prefix-backslash", "canonical relative POSIX path"),
+        ("collapsed-dot-prefix", "canonical relative POSIX path"),
+        ("root-only-dot-prefix", "canonical relative POSIX path"),
+        ("dot-prefix-root-alias", "noncanonical or traversal component"),
+        ("dot-prefix-symlink", "crosses link member 'usr/local/bin/opa'"),
+        ("dot-prefix-hardlink", "crosses link member 'usr/local/bin/opa'"),
+        ("wheel-dot-prefix", "wheel member"),
+    ],
+)
+def test_layer_dot_prefix_normalization_remains_fail_closed(
+    tmp_path: Path,
+    special: str,
+    message: str,
+) -> None:
+    with pytest.raises(C0ReproducibilityError, match=message):
+        _compare(tmp_path, layer_special=special)
+    assert not (tmp_path / "comparison.json").exists()
+
+
+def test_single_dot_prefix_remains_invalid_for_outer_oci_paths(tmp_path: Path) -> None:
+    with pytest.raises(C0ReproducibilityError, match="OCI tar member path"):
+        _compare(tmp_path, outer_dot_prefix=True)
+    assert not (tmp_path / "comparison.json").exists()
 
 
 def test_buildx_style_nested_execution_index_is_traversed_and_recorded(tmp_path: Path) -> None:

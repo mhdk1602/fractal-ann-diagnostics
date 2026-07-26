@@ -197,7 +197,11 @@ It then checks the arm64 config, C0 labels, source epoch, ordered layer descript
 fixed exec-form Python entrypoint, the `--help` default command, the registered runtime environment,
 and the absence of populated ports, volumes, health checks, and `ONBUILD` instructions. The OPA,
 Python, and hnsw extension bytes must be AArch64 ELF objects. The layer reader implements OCI
-whiteouts in memory and materializes no host path. Its final-state projection contains the exact
+whiteouts in memory and materializes no host path. It normalizes the single OCI-style leading `./`
+spelling present in the pinned distroless base before whiteout, duplicate, and traversal checks. A
+second `./`, `..`, absolute path, backslash, root-only `./`, or normalized alias remains invalid;
+the base layer's exact `.` root marker remains permitted. OCI-layout and wheel member paths receive
+no such normalization. Its final-state projection contains the exact
 bytes, size, digest, and mode of:
 
 ```text

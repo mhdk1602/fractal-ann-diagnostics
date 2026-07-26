@@ -32,6 +32,9 @@ All material changes to this research codebase are recorded here.
 - Closed the OCI runtime-config contract over the Dockerfile frontend's deterministic
   `ArgsEscaped=true` compatibility marker, pinned that frontend by digest, and continued to reject
   every other undeclared field or value.
+- Admitted the single leading `./` spelling present in the pinned distroless OCI layers only at the
+  executable-layer decoder boundary, before whiteout, duplicate, and traversal checks; OCI-layout
+  and wheel paths remain strictly canonical.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific
