@@ -1204,9 +1204,14 @@ jobs:
               --driver docker-container \
               --driver-opt "image=${BUILDKIT_IMAGE}" \
               --buildkitd-flags '--debug=false' >/dev/null
-            docker buildx inspect --builder "$active_builder" --bootstrap \
-              --format '{{json .}}' \
-              | jq -S -c . > "$evidence_dir/arm64-build-${replicate}-builder.json"
+            docker buildx inspect --builder "$active_builder" --bootstrap >/dev/null
+            docker buildx ls --format '{{json .}}' \
+              | jq -s -S -c --arg builder "$active_builder" \
+                'map(select(.Name == $builder))
+                | if length == 1 then .[0]
+                  else error("expected exactly one builder record for \($builder)")
+                  end' \
+              > "$evidence_dir/arm64-build-${replicate}-builder.json"
             builder_container="buildx_buildkit_${active_builder}0"
             test "$(docker inspect --format '{{.Config.Image}}' "$builder_container")" \
               = "$BUILDKIT_IMAGE"
@@ -1292,9 +1297,13 @@ jobs:
               --driver docker-container \
               --driver-opt "image=${BUILDKIT_IMAGE}" \
               --buildkitd-flags '--debug=false' >/dev/null
-            docker buildx inspect --builder "$active_builder" --bootstrap \
-              --format '{{json .}}' \
-              | jq -S -c . \
+            docker buildx inspect --builder "$active_builder" --bootstrap >/dev/null
+            docker buildx ls --format '{{json .}}' \
+              | jq -s -S -c --arg builder "$active_builder" \
+                'map(select(.Name == $builder))
+                | if length == 1 then .[0]
+                  else error("expected exactly one builder record for \($builder)")
+                  end' \
               > "$evidence_dir/release-arm64-build-${replicate}-builder.json"
             builder_container="buildx_buildkit_${active_builder}0"
             test "$(docker inspect --format '{{.Config.Image}}' "$builder_container")" \
@@ -3010,8 +3019,14 @@ jobs:
           done
           docker version --format '{{json .}}' \
             | jq -S -c . > "$record_dir/docker-version.json"
-          docker buildx inspect --builder c0-builder --bootstrap --format '{{json .}}' \
-            | jq -S -c . > "$record_dir/builder.json"
+          docker buildx inspect --builder c0-builder --bootstrap >/dev/null
+          docker buildx ls --format '{{json .}}' \
+            | jq -s -S -c --arg builder c0-builder \
+              'map(select(.Name == $builder))
+              | if length == 1 then .[0]
+                else error("expected exactly one builder record for \($builder)")
+                end' \
+            > "$record_dir/builder.json"
           docker buildx version > "$record_dir/buildx-version.txt"
           docker exec buildx_buildkit_c0-builder0 buildkitd --version \
             > "$record_dir/buildkit-version.txt"
