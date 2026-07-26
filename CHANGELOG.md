@@ -25,6 +25,8 @@ All material changes to this research codebase are recorded here.
   mode.
 - Corrected the truncated OPA patched `go.sum` pin to the independently regenerated SHA-256; the
   concatenated dependency-patch digest remains unchanged.
+- Closed the HNSW runtime inventory over the locked drand verification dependencies and added a
+  nonroot smoke import of the provider-activation path; Torch and Transformers remain excluded.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

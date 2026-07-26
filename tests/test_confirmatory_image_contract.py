@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import os
 import re
@@ -50,6 +51,29 @@ ACTION_PINS = {
     "docker/setup-buildx-action": "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
     "docker/setup-qemu-action": "96fe6ef7f33517b61c61be40b68a1882f3264fb8",
     "sigstore/cosign-installer": "6f9f17788090df1f26f669e9d70d6ae9567deba6",
+}
+
+CONFIRMATORY_RUNTIME_DISTRIBUTIONS = {
+    "annotated-types": "0.7.0",
+    "cytoolz": "1.1.0",
+    "eth-hash": "0.8.0",
+    "eth-typing": "6.0.0",
+    "eth-utils": "6.0.0",
+    "hnswlib": "0.8.0",
+    "joblib": "1.5.3",
+    "narwhals": "2.24.0",
+    "numpy": "2.5.1",
+    "py-ecc": "8.0.0",
+    "pydantic": "2.13.4",
+    "pydantic-core": "2.46.4",
+    "scikit-learn": "1.9.0",
+    "scipy": "1.18.0",
+    "threadpoolctl": "3.6.0",
+    "toolz": "1.1.0",
+    "tqdm": "4.68.4",
+    "truststore": "0.10.4",
+    "typing-extensions": "4.16.0",
+    "typing-inspection": "0.4.2",
 }
 
 
@@ -145,20 +169,24 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert "source=examples/opa_compiled_masks_test.rego" in dockerfile
     assert "python -m fractal_ann_diagnostics.cli --help" in dockerfile
     assert "uv pip check --python /opt/venv/bin/python" in dockerfile
-    for distribution, version in {
-        "hnswlib": "0.8.0",
-        "joblib": "1.5.3",
-        "numpy": "2.5.1",
-        "scikit-learn": "1.9.0",
-        "scipy": "1.18.0",
-        "threadpoolctl": "3.6.0",
-        "tqdm": "4.68.4",
-    }.items():
-        assert f'"{distribution}": "{version}"' in dockerfile
+    runtime_inventory_match = re.search(
+        r"expected = (\{[^;\n]+\}); observed = ",
+        dockerfile,
+    )
+    assert runtime_inventory_match is not None
+    assert (
+        ast.literal_eval(runtime_inventory_match.group(1))
+        == CONFIRMATORY_RUNTIME_DISTRIBUTIONS
+    )
+    lock_text = lock_bytes.decode("utf-8")
+    for distribution, version in CONFIRMATORY_RUNTIME_DISTRIBUTIONS.items():
+        assert f'name = "{distribution}"\nversion = "{version}"' in lock_text
     assert "assert observed == expected" in dockerfile
     assert 'assert "torch" not in observed and "transformers" not in observed' in dockerfile
     assert "import torch" not in dockerfile
     assert "import transformers" not in dockerfile
+    assert "fractal_ann_diagnostics.drand_beacon" in dockerfile
+    assert "fractal_ann_diagnostics.provider_activation_factory" in dockerfile
     assert (
         'importlib.util.find_spec(name) is None for name in ("torch", "transformers")' in dockerfile
     )
