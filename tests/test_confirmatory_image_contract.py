@@ -703,7 +703,8 @@ def test_builder_toolchain_and_transitive_images_are_fixed() -> None:
         '            > "$record_dir/binfmt-version.txt" 2>&1' in workflow
     )
     assert "--bootstrap --format" not in workflow
-    assert workflow.count("docker buildx ls --format '{{json .}}'") == 3
+    assert "docker buildx ls --format '{{json .}}'" not in workflow
+    assert workflow.count("docker buildx ls --format json") == 3
     assert workflow.count("map(select(.Name == $builder))") == 3
     assert 'github-token: ""' in workflow
     assert 'DOCKER_BUILD_RECORD_UPLOAD: "false"' in workflow

@@ -17,8 +17,9 @@ All material changes to this research codebase are recorded here.
   rather than the complete `gh --version` banner.
 - Corrected the candidate image workflow to capture the pinned binfmt/QEMU version from stderr for
   both admission and retained evidence.
-- Corrected pinned Buildx builder evidence capture to use the supported `buildx ls` JSON formatter
-  after explicit bootstrap; Buildx v0.34.1 does not accept `--format` on `buildx inspect`.
+- Corrected pinned Buildx builder evidence capture to use literal `buildx ls --format json`
+  after explicit bootstrap; Buildx v0.34.1 neither accepts `--format` on `buildx inspect` nor treats
+  the `{{json .}}` Go template as its builder-aware JSON mode.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

@@ -1205,7 +1205,7 @@ jobs:
               --driver-opt "image=${BUILDKIT_IMAGE}" \
               --buildkitd-flags '--debug=false' >/dev/null
             docker buildx inspect --builder "$active_builder" --bootstrap >/dev/null
-            docker buildx ls --format '{{json .}}' \
+            docker buildx ls --format json \
               | jq -s -S -c --arg builder "$active_builder" \
                 'map(select(.Name == $builder))
                 | if length == 1 then .[0]
@@ -1298,7 +1298,7 @@ jobs:
               --driver-opt "image=${BUILDKIT_IMAGE}" \
               --buildkitd-flags '--debug=false' >/dev/null
             docker buildx inspect --builder "$active_builder" --bootstrap >/dev/null
-            docker buildx ls --format '{{json .}}' \
+            docker buildx ls --format json \
               | jq -s -S -c --arg builder "$active_builder" \
                 'map(select(.Name == $builder))
                 | if length == 1 then .[0]
@@ -3020,7 +3020,7 @@ jobs:
           docker version --format '{{json .}}' \
             | jq -S -c . > "$record_dir/docker-version.json"
           docker buildx inspect --builder c0-builder --bootstrap >/dev/null
-          docker buildx ls --format '{{json .}}' \
+          docker buildx ls --format json \
             | jq -s -S -c --arg builder c0-builder \
               'map(select(.Name == $builder))
               | if length == 1 then .[0]
