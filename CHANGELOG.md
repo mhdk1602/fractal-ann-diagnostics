@@ -15,6 +15,8 @@ All material changes to this research codebase are recorded here.
   independent organizational custody.
 - Corrected all three production phase workflows to compare the pinned semantic GitHub CLI version
   rather than the complete `gh --version` banner.
+- Corrected the candidate image workflow to capture the pinned binfmt/QEMU version from stderr for
+  both admission and retained evidence.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

@@ -697,6 +697,11 @@ def test_builder_toolchain_and_transitive_images_are_fixed() -> None:
     assert "buildkitd-flags: --debug=false" in workflow
     assert "driver-opts: image=${{ env.BUILDKIT_IMAGE }}" in workflow
     assert "builder: c0-builder" in workflow
+    assert 'test "$(docker run --rm "$BINFMT_IMAGE" --version 2>&1)" \\' in workflow
+    assert (
+        'docker run --rm "$BINFMT_IMAGE" --version \\\n'
+        '            > "$record_dir/binfmt-version.txt" 2>&1' in workflow
+    )
     assert 'github-token: ""' in workflow
     assert 'DOCKER_BUILD_RECORD_UPLOAD: "false"' in workflow
     assert 'DOCKER_BUILD_SUMMARY: "false"' in workflow

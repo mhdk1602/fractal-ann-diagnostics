@@ -1089,7 +1089,7 @@ jobs:
             = "$BUILDKIT_IMAGE"
           test "$(docker exec buildx_buildkit_c0-builder0 buildkitd --version)" \
             = 'buildkitd github.com/moby/buildkit v0.30.0 dd2170e156c9633da1b2d1a58a6188e3f7d36fa4'
-          test "$(docker run --rm "$BINFMT_IMAGE" --version)" \
+          test "$(docker run --rm "$BINFMT_IMAGE" --version 2>&1)" \
             = 'binfmt/e29e7d7 qemu/v10.2.3 go/1.26.4'
           case ",${QEMU_PLATFORMS}," in
             *,linux/arm64,*) ;;
@@ -3015,7 +3015,8 @@ jobs:
           docker buildx version > "$record_dir/buildx-version.txt"
           docker exec buildx_buildkit_c0-builder0 buildkitd --version \
             > "$record_dir/buildkit-version.txt"
-          docker run --rm "$BINFMT_IMAGE" --version > "$record_dir/binfmt-version.txt"
+          docker run --rm "$BINFMT_IMAGE" --version \
+            > "$record_dir/binfmt-version.txt" 2>&1
           uname -srvmo > "$record_dir/kernel.txt"
           jq -S -c -n \
             --arg actor "$GITHUB_ACTOR" \
