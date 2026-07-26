@@ -23,6 +23,9 @@ PYTHON_DIGEST = "sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c
 UV_DIGEST = "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
 GO_DIGEST = "sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651"
 DISTROLESS_DIGEST = "sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe"
+DOCKERFILE_FRONTEND_DIGEST = (
+    "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
+)
 OPA_COMMIT = "e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297"
 OPA_SOURCE_SHA256 = "a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637"
 UV_LOCK_SHA256 = "a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6"
@@ -85,6 +88,9 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     go_image = f"docker.io/library/golang:1.26.5-bookworm@{GO_DIGEST}"
     distroless_image = f"gcr.io/distroless/base-nossl-debian12:nonroot@{DISTROLESS_DIGEST}"
 
+    assert dockerfile.splitlines()[0] == (
+        f"# syntax=docker/dockerfile:1.7@{DOCKERFILE_FRONTEND_DIGEST}"
+    )
     assert f"ARG PYTHON_IMAGE={python_image}" in dockerfile
     assert f"ARG GO_IMAGE={go_image}" in dockerfile
     assert f"ARG DISTROLESS_IMAGE={distroless_image}" in dockerfile

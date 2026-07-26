@@ -100,12 +100,12 @@ launcher supplies the registered disposable tmpfs.
 
 The executable comparison admits a closed runtime config rather than a blacklist.
 Its only fields are `ArgsEscaped`, `Cmd`, `Entrypoint`, `Env`, `Labels`, `User`, and `WorkingDir`.
-The [pinned BuildKit
-frontend](https://github.com/moby/buildkit/blob/dd2170e156c9633da1b2d1a58a6188e3f7d36fa4/frontend/dockerfile/dockerfile2llb/convert.go#L1577-L1590)
+The [Dockerfile 1.7.1
+frontend](https://github.com/moby/buildkit/blob/2e18d709fefdcc2db20853ee241c75b058189d39/frontend/dockerfile/dockerfile2llb/convert.go#L1396-L1404)
 emits `ArgsEscaped=true` when it processes the JSON-form `CMD`; the comparison requires that exact
-compatibility marker rather than admitting another value. The label map must equal the C0
-Dockerfile's declared map. The environment key set must equal the runner variables declared on the
-distroless final stage. No
+compatibility marker rather than admitting another value. The syntax directive pins that frontend's
+multi-platform OCI index by digest. The label map must equal the C0 Dockerfile's declared map. The
+environment key set must equal the runner variables declared on the distroless final stage. No
 additional environment name, label, stop signal, port, volume, health check, shell override, or
 `ONBUILD` instruction is admitted. The receipt retains every observed label and environment value.
 
@@ -130,6 +130,7 @@ identity. The build tools that affect image bytes are fixed separately:
 
 | Tool | Fixed identity |
 |---|---|
+| Dockerfile frontend | v1.7.1 `docker/dockerfile@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e` |
 | Buildx | v0.34.1 linux-amd64 binary SHA-256 `f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b` |
 | BuildKit | `moby/buildkit@sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f` |
 | binfmt/QEMU | `tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
