@@ -27,6 +27,8 @@ All material changes to this research codebase are recorded here.
   concatenated dependency-patch digest remains unchanged.
 - Closed the HNSW runtime inventory over the locked drand verification dependencies and added a
   nonroot smoke import of the provider-activation path; Torch and Transformers remain excluded.
+- Restored the pinned Debian tool path only inside the four source-runtime build checks while
+  preserving the restricted PATH shipped by both distroless runtime images.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

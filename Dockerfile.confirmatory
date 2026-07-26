@@ -888,7 +888,8 @@ COPY --from=opa-builder --chown=0:0 /out/artifacts /opt/artifacts/opa-build
 COPY --chown=0:0 examples/opa_compiled_masks.rego /opt/app/policy/opa_compiled_masks.rego
 COPY --chown=0:0 src /opt/app/src
 
-RUN chmod -R a-w /opt/venv /opt/native-libs /opt/artifacts /opt/app/src \
+RUN export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
+    && chmod -R a-w /opt/venv /opt/native-libs /opt/artifacts /opt/app/src \
     && chmod 0555 /opt/venv/bin/python \
     && chmod 0555 /usr/local/bin/opa \
     && chmod 0444 /opt/app/uv.lock \
@@ -927,7 +928,8 @@ WORKDIR /workspace
 # read-only build-context mount, so its bytes do not enter the runtime layers.
 RUN --network=none \
     --mount=type=bind,source=examples/opa_compiled_masks_test.rego,target=/tmp/opa_compiled_masks_test.rego,readonly \
-    test "$(id -u)" = '65532' \
+    export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
+    && test "$(id -u)" = '65532' \
     && test "$(id -g)" = '65532' \
     && test ! -w /opt/venv \
     && test ! -w /opt/native-libs \
@@ -953,7 +955,8 @@ USER 0:0
 # Prune shell-adjacent optional modules and assemble only the ELF closure that
 # is absent from the signed distroless base. The generated package status and
 # library manifest make every copied native byte scanner-visible.
-RUN rm -f \
+RUN export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
+    && rm -f \
         /usr/local/lib/python3.12/lib-dynload/_curses*.so \
         /usr/local/lib/python3.12/lib-dynload/_tkinter*.so \
         /usr/local/lib/python3.12/lib-dynload/_uuid*.so \
@@ -1151,7 +1154,8 @@ USER 0:0
 COPY --from=tle-builder --chown=0:0 /out/bin/tle /usr/local/bin/tle
 COPY --from=tle-builder --chown=0:0 /out/artifacts/tle-build-receipt.json /opt/artifacts/tle-build/tle-build-receipt.json
 
-RUN test "${TARGETARCH}" = arm64 \
+RUN export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
+    && test "${TARGETARCH}" = arm64 \
     && printf '%s  %s\n' \
         ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5 \
         /usr/local/bin/tle | sha256sum -c - \

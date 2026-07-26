@@ -164,6 +164,13 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     )
     assert "os.chown(path, 65532, 65532)" in dockerfile
     assert "path.chmod(0o755)" in dockerfile
+    assert dockerfile.count("    PATH=/opt/venv/bin:/usr/local/bin \\") == 2
+    assert (
+        dockerfile.count(
+            "export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
+        )
+        == 4
+    )
     assert "opa version" in dockerfile
     assert "--network=none" in dockerfile
     assert "source=examples/opa_compiled_masks_test.rego" in dockerfile
