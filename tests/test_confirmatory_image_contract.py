@@ -116,6 +116,12 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert '"${UV_LOCK_SHA256}"' in dockerfile
     assert "/opt/app/uv.lock" in dockerfile
     assert "chmod 0444 /opt/app/policy/opa_compiled_masks.rego" in dockerfile
+    assert "install -d -o 65532 -g 65532" not in dockerfile
+    assert (
+        'for raw_path in ("/home/runner", "/input", "/output", "/workspace"):' in dockerfile
+    )
+    assert "os.chown(path, 65532, 65532)" in dockerfile
+    assert "path.chmod(0o755)" in dockerfile
     assert "opa version" in dockerfile
     assert "--network=none" in dockerfile
     assert "source=examples/opa_compiled_masks_test.rego" in dockerfile
