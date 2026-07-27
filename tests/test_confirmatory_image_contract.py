@@ -32,12 +32,8 @@ UV_LOCK_SHA256 = "a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57
 HNSWLIB_SHA256 = "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
 OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c"
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
-OPA_PATCHED_GO_SUM_SHA256 = (
-    "594c9098656b4b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903"
-)
-OPA_DEPENDENCY_DELTA_SHA256 = (
-    "2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524"
-)
+OPA_PATCHED_GO_SUM_SHA256 = "594c9098656b4b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903"
+OPA_DEPENDENCY_DELTA_SHA256 = "2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524"
 BUILDX_SHA256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b"
 BUILDKIT_DIGEST = "sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
 BINFMT_DIGEST = "sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0"
@@ -118,8 +114,7 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     )
     assert digest_arguments
     assert all(
-        re.fullmatch(r"[0-9a-f]{64}", value) is not None
-        for _name, value in digest_arguments
+        re.fullmatch(r"[0-9a-f]{64}", value) is not None for _name, value in digest_arguments
     )
     assert "uv sync" in dockerfile
     assert "--frozen" in dockerfile
@@ -165,18 +160,11 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert "/opt/app/uv.lock" in dockerfile
     assert "chmod 0444 /opt/app/policy/opa_compiled_masks.rego" in dockerfile
     assert "install -d -o 65532 -g 65532" not in dockerfile
-    assert (
-        'for raw_path in ("/home/runner", "/input", "/output", "/workspace"):' in dockerfile
-    )
+    assert 'for raw_path in ("/home/runner", "/input", "/output", "/workspace"):' in dockerfile
     assert "os.chown(path, 65532, 65532)" in dockerfile
     assert "path.chmod(0o755)" in dockerfile
     assert dockerfile.count("    PATH=/opt/venv/bin:/usr/local/bin \\") == 2
-    assert (
-        dockerfile.count(
-            "export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin"
-        )
-        == 4
-    )
+    assert dockerfile.count("export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin") == 4
     assert "opa version" in dockerfile
     assert "--network=none" in dockerfile
     assert "source=examples/opa_compiled_masks_test.rego" in dockerfile
@@ -187,10 +175,7 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
         dockerfile,
     )
     assert runtime_inventory_match is not None
-    assert (
-        ast.literal_eval(runtime_inventory_match.group(1))
-        == CONFIRMATORY_RUNTIME_DISTRIBUTIONS
-    )
+    assert ast.literal_eval(runtime_inventory_match.group(1)) == CONFIRMATORY_RUNTIME_DISTRIBUTIONS
     lock_text = lock_bytes.decode("utf-8")
     for distribution, version in CONFIRMATORY_RUNTIME_DISTRIBUTIONS.items():
         assert f'name = "{distribution}"\nversion = "{version}"' in lock_text
@@ -271,6 +256,8 @@ def test_runtime_is_nonroot_deterministic_and_read_only_compatible() -> None:
     assert "--mount=type=secret" not in dockerfile
     assert "local-prototype-system-certs" not in dockerfile
     assert "BCG" not in dockerfile
+    assert dockerfile.count("os.chmod(status_path, 0o444)") == 1
+    assert dockerfile.count("os.chmod(manifest_path, 0o444)") == 1
 
 
 def test_locked_runtime_wheels_cover_both_published_platforms() -> None:

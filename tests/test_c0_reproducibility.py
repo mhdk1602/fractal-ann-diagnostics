@@ -4,6 +4,7 @@ import gzip
 import hashlib
 import io
 import json
+import re
 import stat
 import tarfile
 import time
@@ -295,6 +296,7 @@ def _layer(
     unrelated: bytes = b"first",
     tle: bytes | None = None,
     dot_prefix: bool = False,
+    writable_runtime_target: str | None = None,
 ) -> bytes:
     if opa is None:
         opa = _elf(b"synthetic-arm64-opa")
@@ -368,7 +370,7 @@ def _layer(
         for name, payload, mode in rows:
             member = tarfile.TarInfo(f"./{name}" if dot_prefix else name)
             member.size = len(payload)
-            member.mode = mode
+            member.mode = 0o644 if name == writable_runtime_target else mode
             archive.addfile(member, io.BytesIO(payload))
         if special == "duplicate":
             payload = b"\x7fELF-duplicate"
@@ -484,6 +486,7 @@ def _archive(
     image_role: str = "scientific",
     tle: bytes | None = None,
     layer_dot_prefix: bool = False,
+    writable_runtime_target: str | None = None,
 ) -> None:
     if image_role == "timelock-release" and tle is None:
         tle = _static_tle_elf()
@@ -497,6 +500,7 @@ def _archive(
         unrelated=unrelated,
         tle=tle,
         dot_prefix=layer_dot_prefix,
+        writable_runtime_target=writable_runtime_target,
     )
     layer_tars = [layer_tar]
     if two_layers:
@@ -829,6 +833,24 @@ def test_attestation_and_outer_index_variation_are_recorded_but_accepted(tmp_pat
         "/usr/local/bin/opa",
         "/var/lib/dpkg/status",
     }
+
+
+@pytest.mark.parametrize(
+    "runtime_target",
+    (
+        "opt/artifacts/runtime-library-manifest.json",
+        "var/lib/dpkg/status",
+    ),
+)
+def test_generated_runtime_control_must_be_read_only(
+    tmp_path: Path,
+    runtime_target: str,
+) -> None:
+    with pytest.raises(
+        C0ReproducibilityError,
+        match=re.escape(f"runtime target {runtime_target!r} remains writable"),
+    ):
+        _compare(tmp_path, writable_runtime_target=runtime_target)
 
 
 def test_whiteout_and_opaque_directory_replacement_preserve_final_targets(tmp_path: Path) -> None:

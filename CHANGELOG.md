@@ -40,6 +40,8 @@ All material changes to this research codebase are recorded here.
 - Declared the pinned scikit-learn/joblib OpenMP values and TorchInductor cache path in the MPS
   builder environment before import, with a subprocess regression that rejects any import-time
   environment mutation.
+- Set the rootfs-generated runtime-library manifest and minimized Debian status database to mode
+  `0444`; the executable-image gate already rejected both controls when owner-write bits remained.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

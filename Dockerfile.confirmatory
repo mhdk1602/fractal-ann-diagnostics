@@ -1124,6 +1124,7 @@ status_path.write_text(
     "\n\n".join(selected[name] for name in sorted(selected)) + "\n",
     encoding="utf-8",
 )
+os.chmod(status_path, 0o444)
 manifest_path = destination / "opt/artifacts/runtime-library-manifest.json"
 manifest_path.parent.mkdir(parents=True, exist_ok=True)
 manifest_path.write_text(
@@ -1139,6 +1140,7 @@ manifest_path.write_text(
     + "\n",
     encoding="utf-8",
 )
+os.chmod(manifest_path, 0o444)
 for relative in ("home/runner", "input", "output", "workspace", "tmp"):
     path = destination / relative
     path.mkdir(parents=True, exist_ok=True)

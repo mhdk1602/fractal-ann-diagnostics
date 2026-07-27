@@ -97,6 +97,9 @@ to UID/GID 65532 during the build and checks that none is writable. The OPA bina
 the Rego module is mode `0444` and is rehashed in the image. Runner-owned directories are limited
 to `/home/runner`, `/input`, `/output`, and `/workspace`. `/tmp` becomes writable only when the
 launcher supplies the registered disposable tmpfs.
+The rootfs assembler creates the minimized Debian status database and runtime-library manifest
+after the earlier recursive permission pass, so it sets both generated controls to mode `0444`
+before the distroless stage copies them.
 
 The executable comparison admits a closed runtime config rather than a blacklist.
 Its only fields are `ArgsEscaped`, `Cmd`, `Entrypoint`, `Env`, `Labels`, `User`, and `WorkingDir`.
