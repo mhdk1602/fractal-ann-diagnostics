@@ -2014,11 +2014,18 @@ def _validate_sealed_execution(
     )
     if results_store is not None:
         parsed_store = urlsplit(results_store)
-        if parsed_store.scheme not in {"file", "gs", "s3"} or not (
-            parsed_store.netloc or parsed_store.path
+        results_path = Path(unquote(parsed_store.path))
+        if (
+            parsed_store.scheme != "file"
+            or parsed_store.netloc
+            or parsed_store.query
+            or parsed_store.fragment
+            or not results_path.is_absolute()
+            or results_path.as_uri() != results_store
+            or any(part in {"", ".", ".."} for part in results_path.parts[1:])
         ):
             raise StudyManifestError(
-                "sealed_execution.results_store must be a pinned file, gs, or s3 URI"
+                "sealed_execution.results_store must be one canonical absolute file URI"
             )
     _validate_hardware(sealed["hardware"], frozen=frozen)
     _validate_production_control_bindings(

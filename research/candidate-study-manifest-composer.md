@@ -69,15 +69,16 @@ location, and receipt path template. They enter through
 {
   "custodian": "custodian@example.org",
   "receipt_uri_template": "file:///controlled/receipts/{manifest_sha256}.json",
-  "results_store": "s3://immutable-results/study-candidate",
+  "results_store": "file:///controlled/results/study-candidate",
   "schema_version": "fractal-candidate-deployment-fragment-v1"
 }
 ```
 
 The schema is closed. The custodian must be canonical non-placeholder text. The results store must
-be one credential-free `file:`, `gs:`, or `s3:` URI. The receipt template must be an absolute
-`file:` URI whose final member is exactly `{manifest_sha256}.json`. Scientific values and digests
-cannot enter through this fragment.
+be one canonical absolute local `file:` URI, matching the registered built-in one-shot analysis
+runner. The receipt template must be an absolute `file:` URI whose final member is exactly
+`{manifest_sha256}.json`. Scientific values and digests cannot enter through this fragment. A
+remote store requires a separately pinned create-if-absent adapter and is outside protocol v0.3.
 
 ## Producer cross-bindings
 

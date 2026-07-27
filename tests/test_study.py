@@ -610,7 +610,7 @@ def _manifest(
             "reserve_fraction": 0.0,
             "custodian": "custodian@example.test" if frozen else "unassigned",
             "approval_environment": "confirmatory" if frozen else "tbd",
-            "results_store": "s3://immutable-results" if frozen else "tbd",
+            "results_store": "file:///controlled/immutable-results" if frozen else "tbd",
             "runner_identity": _RUNNER_IDENTITY if frozen else "tbd",
             "code_commit": _COMMIT if frozen else "tbd",
             "c0_evidence_release": (_c0_evidence_release_binding(_COMMIT) if frozen else "tbd"),

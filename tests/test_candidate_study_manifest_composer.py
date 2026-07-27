@@ -214,7 +214,7 @@ def _design_authorities(
         deployment=composer.CandidateDeploymentFragment(
             custodian="custodian@example.test",
             receipt_uri_template=("file:///controlled/receipts/{manifest_sha256}.json"),
-            results_store="s3://immutable-results/candidate",
+            results_store="file:///controlled/results/candidate",
         ),
     )
     monkeypatch.setattr(
@@ -264,6 +264,8 @@ def test_request_file_requires_exact_digest_and_canonical_bytes(tmp_path: Path) 
         ("results_store", "file:relative"),
         ("results_store", "s3:/missing-bucket"),
         ("results_store", "s3://user:secret@bucket/prefix"),
+        ("results_store", "file://localhost/controlled/results"),
+        ("results_store", "file:///controlled/results/../replacement"),
         (
             "receipt_uri_template",
             "file:///controlled/receipts/manifest.json",
@@ -281,7 +283,7 @@ def test_deployment_fragment_rejects_movable_or_credentialed_values(
     value = {
         "custodian": "custodian@example.test",
         "receipt_uri_template": "file:///receipts/{manifest_sha256}.json",
-        "results_store": "s3://immutable-results/candidate",
+        "results_store": "file:///controlled/results/candidate",
         "schema_version": composer.DEPLOYMENT_FRAGMENT_SCHEMA,
     }
     value[field] = replacement

@@ -478,7 +478,7 @@ def _frozen_manifest(
             "reserve_fraction": 0.0,
             "custodian": "custodian@example.test",
             "approval_environment": "confirmatory",
-            "results_store": "s3://immutable-results",
+            "results_store": "file:///controlled/immutable-results",
             "runner_identity": RUNNER_IDENTITY,
             "code_commit": "c" * 40,
             "c0_evidence_release": registered_c0_evidence_release(code_commit="c" * 40),

@@ -178,7 +178,8 @@ data = sys.stdin.buffer.read()
 sys.stdout.buffer.write(b"tlock-v1:" + data[::-1])
 """
     )
-    path.write_text(f"#!{sys.executable}\n{program.lstrip()}", encoding="utf-8")
+    interpreter = Path(sys.executable).resolve()
+    path.write_text(f"#!{interpreter}\n{program.lstrip()}", encoding="utf-8")
     path.chmod(0o700)
 
 
@@ -265,7 +266,7 @@ def _frozen_manifest(
     sealed = manifest["sealed_execution"]
     sealed["custodian"] = "custodian@example.test"
     sealed["approval_environment"] = "confirmatory"
-    sealed["results_store"] = "s3://immutable-confirmatory-results"
+    sealed["results_store"] = (tmp_path / "immutable-confirmatory-results").as_uri()
     sealed["runner_identity"] = _RUNNER_IDENTITY
     sealed["code_commit"] = _COMMIT
     sealed["c0_evidence_release"] = registered_c0_evidence_release(code_commit=_COMMIT)

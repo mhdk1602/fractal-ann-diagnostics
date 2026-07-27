@@ -445,29 +445,21 @@ class CandidateDeploymentFragment:
             ) from exc
         results_path = unquote(results.path)
         if (
-            results.scheme not in {"file", "gs", "s3"}
+            results.scheme != "file"
             or results.username is not None
             or results.password is not None
             or results.query
             or results.fragment
             or "{" in self.results_store
             or "}" in self.results_store
-            or (
-                results.scheme == "file"
-                and (results.netloc not in {"", "localhost"} or not results_path.startswith("/"))
-            )
-            or (
-                results.scheme in {"gs", "s3"}
-                and (
-                    not results.netloc
-                    or "@" in results.netloc
-                    or ":" in results.netloc
-                    or (results_path and not results_path.startswith("/"))
-                )
-            )
+            or results.netloc
+            or not results_path.startswith("/")
+            or Path(results_path).as_uri() != self.results_store
             or any(part in {".", ".."} for part in results_path.split("/"))
         ):
-            raise CandidateSourceComposerError("candidate results_store is not one pinned URI")
+            raise CandidateSourceComposerError(
+                "candidate results_store must be one canonical absolute file URI"
+            )
         try:
             receipt = urlsplit(self.receipt_uri_template)
         except ValueError as exc:
