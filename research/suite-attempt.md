@@ -9,6 +9,14 @@ production-closure capabilities and the single finalization receipt. It also
 verifies each registered runtime-plan instantiation by reversing exactly two
 post-C1 substitutions: the C1 manifest SHA-256 and the final shared closure-tree
 SHA-256. The earlier manifest-only template check is not an admission path.
+The host-side [OPENED genesis operator](opened-genesis-operator.md) assembles
+this transition from one digest-pinned, closed custody request; it accepts no
+scientific field or output-path argument. Before it invokes the transition, it
+durably creates one suite-scoped attempt marker bound to that custody request.
+The marker survives descriptor-bound namespace quarantine, so an indeterminate
+publication cannot be replayed under the same attempt ID. Quarantine retains
+the complete partial tree; cleanup never removes a pathname after a separate
+identity check.
 
 The launcher writes label-free results to the pre-C1 staging root fixed by that
 same finalization receipt. The canonical namespace begins with an empty

@@ -56,6 +56,13 @@ All material changes to this research codebase are recorded here.
   manifest and a fresh public C0 verification receipt signed by the C1 predicate.
 - Added a four-transition suite ledger: `OPENED`, `ONLINE_COMPLETE`, `LABELS_RELEASED`, and
   `ANALYSIS_COMPLETE`, with externally verified GitHub/Sigstore evidence at every transition.
+- Added a closed, outcome-blind host operator for the `OPENED` genesis. Its 58-role custody request
+  pins every explicit input file, retains no-follow descriptors through C1 and finalization
+  verification, detects transient path substitution with kernel vnode watches, derives all
+  scientific bindings from typed apparatus, and crosses a durable suite-scoped no-replay marker
+  before publishing only into the absent manifest-derived namespace. Failed partial publication is
+  atomically quarantined without deleting pathname entries; a raced replacement is restored and
+  classified as indeterminate.
 - Added a typed Git Database publisher with a fixed no-bypass ruleset, create-or-fast-forward CAS,
   exact remote readback, canonical publication receipts, and commits authored only as `mhdk1602`.
 - Added pinned tlock provenance, five timelock ciphertext contracts, drand release checks, and a

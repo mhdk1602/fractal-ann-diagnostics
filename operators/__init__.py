@@ -1,1 +1,1 @@
-"""Standalone operators excluded from the confirmatory image context."""
+"""Outcome-blind standalone host operators excluded from the confirmatory image context."""
