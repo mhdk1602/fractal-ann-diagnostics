@@ -68,6 +68,17 @@ All material changes to this research codebase are recorded here.
 
 ### Confirmatory study apparatus
 
+- Added a standalone, outcome-blind candidate source composer that admits sixteen
+  digest-pinned producer files, cross-binds freeze and joint-power metadata, preserves exactly
+  seven pre-provider C0 sentinels, and publishes an exclusive two-file source package.
+- Bound inventory admission to its captured request-pinned bytes. The request, all sixteen input
+  files, and their distinct parents now remain open under exclusive cooperative POSIX advisory
+  leases; typed derivation uses retained bytes rather than reopening producer paths. The receipt
+  records the capture-set digest and its explicit same-UID cooperation assumption.
+- Closed composition and verification over both retained package-member descriptors, replaced
+  stat-then-remove cleanup with a quarantine-and-restore state machine, and routed INT, TERM, and
+  HUP through clean rollback or publication-indeterminate recovery. `O_NOFOLLOW` parent identity
+  checks and exact `0700`/`0600` modes remain mandatory.
 - Added a closed study-manifest contract with freeze blockers, artifact pins,
   hardware declarations, receipt templates, and exclusive sealed-run receipts.
 - Added corpus normalizers for SciFact, HotpotQA, T2-RAGBench, and qrels-style

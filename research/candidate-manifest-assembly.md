@@ -50,6 +50,37 @@ After the first pass, all 79 targets are rehashed. Any mutation in digest or acc
 transaction. A `tbd` URI in the tracked schema can become only the `file:` URI of its controlled
 layout target. Non-placeholder URI and license text can only be copied from the tracked schema.
 
+## Closed source composition
+
+The artifact inventory closes only the 79 artifact rows. Analysis, workload, hardware, deployment,
+and image fields come from other typed producers. Join those producers with the standalone
+[candidate source composer](candidate-study-manifest-composer.md):
+
+```bash
+python3 operators/candidate_study_manifest_composer.py compose \
+  --request "$controlled/candidate-source-request.json" \
+  --request-sha256 "$CANDIDATE_SOURCE_REQUEST_SHA256" \
+  --output-directory "$controlled/candidate-source-package"
+
+python3 operators/candidate_study_manifest_composer.py verify \
+  --directory "$controlled/candidate-source-package"
+```
+
+The request pins sixteen exact files, including both members of the artifact-inventory package.
+The CLI accepts no individual manifest field or producer hash. The only new producer is the closed
+non-scientific deployment fragment for custodian, results-store, and receipt-template values.
+Composition captures those sixteen files and the request once under retained exclusive advisory
+locks on every file and distinct parent, then derives only from the captured bytes. This requires
+all processes with mutation authority to honor the same lease. The source receipt records that
+same-UID noncooperation is excluded; use a separate identity or read-only immutable snapshot when
+that premise cannot be defended.
+
+Composition remains outcome-blind. It compares the freeze, joint-power, production-control, image,
+and inventory metadata without opening development outcome rows, power panels, sealed labels,
+action panels, or results. The output source retains exactly seven C0 sentinels and only
+`sealed_execution.c0_evidence_release` plus `sealed_execution.provider_phase_plans` as unresolved
+`tbd` paths.
+
 ## Assembly boundary
 
 `apply_candidate_artifact_inventory` changes only `uri`, `revision`, `sha256`, and `license` on the
@@ -60,8 +91,9 @@ a role/corpus substitution, and candidate/production locator confusion. The fina
 13 C0 sentinels and applies frozen scientific, workload, runtime, image, hardware, provider-plan,
 and artifact admission after resolving only those sentinels in memory.
 
-Once the typed analysis, workload, hardware, custody, image, and provider-plan producers have
-materialized the candidate, publish it through the same boundary:
+After the provider-plan operator has consumed `candidate-study-manifest.source.json` from the
+source package and added its three typed phase plans, publish the resulting thirteen-sentinel
+candidate through the same boundary:
 
 ```bash
 fractal-candidate-manifest-assembler publish-closed \
@@ -99,12 +131,12 @@ neither that probe nor future C0 commit A enters the manifest or receipt. After 
 bytes are committed, the resulting Git commit is A and rehearsal resolves the registered sentinels
 to A externally.
 
-The remaining manifest sections must come from their existing typed producers before the final
-package writer is invoked: post-embedding development and development freeze for analysis,
-production controls for workloads and hardware, candidate image closure v2 for P/T/D, custody and
-drand registration for sealed execution, and the three provider-plan operator records. If one of
-those producers cannot state a required value, extend that producer's closed schema. Do not add a
-digest or manifest-field flag to this CLI.
+The remaining manifest sections must come from typed producers before the final package writer is
+invoked: post-embedding development and development freeze for analysis, production controls for
+workloads and hardware, candidate image closure v2 for P/T/D, the deployment fragment for
+custodian and output locations, custody and drand registration for sealed execution, and the three
+provider-plan operator records. If one of those producers cannot state a required value, extend
+that producer's closed schema. Do not add a digest or manifest-field flag to either CLI.
 
 ## Failure interpretation
 

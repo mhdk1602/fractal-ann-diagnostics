@@ -176,6 +176,7 @@ The operator contracts are split by responsibility:
 |---|---|
 | Development-family selection and paired measurements | [development cohort](research/development-cohort.md), [development execution](research/development-execution.md) |
 | Embedding, policy, index, model, and power artifacts | [embedding store](research/embedding-store.md), [artifact pipeline](research/artifact-pipeline.md), [freeze package](research/freeze-package.md) |
+| Outcome-blind candidate source composition | [candidate source composer](research/candidate-study-manifest-composer.md), [candidate manifest assembly](research/candidate-manifest-assembly.md) |
 | Image and process identity | [runner image](research/runner-image.md), [runtime attestation](research/runtime-attestation.md) |
 | Durable C0 evidence and C1 release binding | [runner image](research/runner-image.md), [external anchors](research/external-anchors.md) |
 | Provider CAS state and no-rescue phase lineage | [suite attempt](research/suite-attempt.md), [GitHub state attestation](research/github-state-attestation.md), [provider-plan construction](research/provider-plan-operator.md), [runner registration and activation](research/provider-runner-activation.md), [provider phase workflows](research/provider-phase-workflows.md) |
@@ -443,8 +444,11 @@ fractal-ann-diagnostics/
 ├── examples/
 │   ├── opa_authorization.rego                # request-time policy contract
 │   └── opa_compiled_masks.rego               # offline bulk-mask contract
+├── operators/
+│   └── candidate_study_manifest_composer.py   # exact typed evidence-to-source join
 ├── research/
 │   ├── study-manifest.json                   # draft C1 lock, 79 typed artifacts at freeze
+│   ├── candidate-study-manifest-composer.md  # closed pre-provider source boundary
 │   ├── preregistration.md                    # estimands, gates, exclusions, nulls
 │   ├── confirmatory-execution.md             # role-separated operator sequence
 │   ├── confirmatory-input-operator.md        # LABELS_RELEASED to ANALYSIS_COMPLETE
