@@ -447,6 +447,50 @@ def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
     assert ".vex_documents == []" in workflow
 
 
+def test_offline_trivy_image_scans_use_memory_cache_with_read_only_db() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow[
+        workflow.index(
+            "- name: Retain and adjudicate raw Trivy and CycloneDX evidence"
+        ) : workflow.index("- name: Retain govulncheck source and symbol reachability evidence")
+    ]
+    commands = tuple(re.finditer(r"(?m)^\s+run_trivy (image|sbom) \\\n", step))
+
+    assert [match.group(1) for match in commands] == [
+        "image",
+        "image",
+        "sbom",
+        "image",
+        "image",
+        "sbom",
+    ]
+    for position, match in enumerate(commands):
+        end = commands[position + 1].start() if position + 1 < len(commands) else len(step)
+        command = step[match.start() : end]
+        if match.group(1) == "image":
+            assert "--cache-backend memory" in command
+        else:
+            assert "--cache-backend memory" not in command
+    assert step.count("--cache-backend memory") == 4
+    assert '--mount "type=bind,src=${trivy_cache},dst=/root/.cache/trivy,readonly"' in step
+
+
+def test_candidate_closure_binds_the_admitted_build_context_tree() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow[
+        workflow.index("- name: Materialize the candidate rehearsal closure") : workflow.index(
+            "- name: Upload the candidate rehearsal closure"
+        )
+    ]
+
+    binding = '--arg build_context_tree_sha256 "$BUILD_CONTEXT_TREE_SHA256" \\'
+    assert step.count(binding) == 1
+    assert step.count("$build_context_tree_sha256") == 1
+    assert step.index(binding) < step.index(
+        "{build_context_tree_sha256: $build_context_tree_sha256"
+    )
+
+
 def test_candidate_rehearsal_and_production_use_one_shared_execution_core() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 

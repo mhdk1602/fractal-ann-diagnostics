@@ -348,6 +348,11 @@ then signs the exact OCI index digest through GitHub OIDC, pushes the attestatio
 returns a Sigstore bundle. `gh attestation verify` requires the C0 workflow identity, source
 digest, source ref, repository, and a GitHub-hosted runner.
 
+The vulnerability database is downloaded before the network is removed, then retained under a
+read-only cache mount. Each Trivy image scan selects the in-memory scan-cache backend explicitly;
+the database stays immutable while Trivy avoids creating or updating its default Bolt
+`fanal/fanal.db`. Direct image results and CycloneDX rescans must still agree exactly.
+
 The retained package contains more than the registry digest:
 
 ```text

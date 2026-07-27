@@ -35,6 +35,8 @@ All material changes to this research codebase are recorded here.
 - Admitted the single leading `./` spelling present in the pinned distroless OCI layers only at the
   executable-layer decoder boundary, before whiteout, duplicate, and traversal checks; OCI-layout
   and wheel paths remain strictly canonical.
+- Kept the offline Trivy database read-only while moving all four image scan caches to memory, and
+  bound the candidate closure's previously undeclared build-context-tree jq variable.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific
