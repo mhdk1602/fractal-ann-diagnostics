@@ -40,6 +40,14 @@ layers.
 | Native toolchain repository | Debian snapshot `20260714T000000Z`, Bookworm main | [Debian Snapshot](https://snapshot.debian.org/archive/debian/20260714T000000Z/) |
 | hnswlib build wheels | `requirements.confirmatory-build.txt`, exact versions and SHA-256 hashes | [PyPI JSON API](https://docs.pypi.org/api/json/) |
 
+The tlock builder applies the declared security-version overlay, runs `go mod tidy`, downloads the
+complete module graph, verifies that graph, and records `go list -m -json all`. Only then does it
+check and retain the final `go.mod` and `go.sum` bytes. This ordering matters because
+`go mod download all` adds transitive zip checksums that are absent from the tidy-only file. The
+retained `go.sum` SHA-256, `988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c`,
+therefore identifies the actual network-disabled test and build input rather than an earlier
+intermediate file.
+
 The lock also resolves the `production-embedding` optional set for the separate macOS arm64 MPS
 builder. `Dockerfile.confirmatory` does not select that extra, does not install PyTorch or
 Transformers, and calls `uv pip check` after removing every build-only distribution. It then

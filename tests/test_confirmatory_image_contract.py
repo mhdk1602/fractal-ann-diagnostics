@@ -34,6 +34,7 @@ OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e3
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
 OPA_PATCHED_GO_SUM_SHA256 = "594c9098656b4b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903"
 OPA_DEPENDENCY_DELTA_SHA256 = "2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524"
+TLE_PATCHED_GO_SUM_SHA256 = "988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c"
 BUILDX_SHA256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b"
 BUILDKIT_DIGEST = "sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
 BINFMT_DIGEST = "sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0"
@@ -107,6 +108,7 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert f"ARG OPA_REGO_TEST_SHA256={OPA_REGO_TEST_SHA256}" in dockerfile
     assert f"ARG OPA_PATCHED_GO_SUM_SHA256={OPA_PATCHED_GO_SUM_SHA256}" in dockerfile
     assert f"ARG OPA_DEPENDENCY_DELTA_SHA256={OPA_DEPENDENCY_DELTA_SHA256}" in dockerfile
+    assert dockerfile.count(f"ARG TLE_PATCHED_GO_SUM_SHA256={TLE_PATCHED_GO_SUM_SHA256}") == 2
     digest_arguments = re.findall(
         r"^ARG ([A-Z0-9_]*SHA256[A-Z0-9_]*)=([^\s]+)$",
         dockerfile,
@@ -212,6 +214,31 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     hashes = [line for line in requirement_lines if "--hash=sha256:" in line]
     assert len(pins) == len(hashes) == 3
     assert all(re.fullmatch(r"--hash=sha256:[0-9a-f]{64}", line) for line in hashes)
+
+
+def test_tlock_module_pin_closes_the_downloaded_offline_build_graph() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    source_builder = dockerfile.split("FROM ${GO_IMAGE} AS tle-source-builder", maxsplit=1)[
+        1
+    ].split("FROM ${PYTHON_IMAGE} AS tle-builder", maxsplit=1)[0]
+
+    tidy = source_builder.index("GOFLAGS=-mod=mod go mod tidy")
+    download = source_builder.index("go mod download all")
+    verify = source_builder.index("go mod verify")
+    module_inventory = source_builder.index("go list -m -json all")
+    final_mod_pin = source_builder.index(
+        "TLE_PATCHED_GO_MOD_SHA256",
+        source_builder.index("WORKDIR /build/patched"),
+    )
+    final_sum_pin = source_builder.index(
+        "TLE_PATCHED_GO_SUM_SHA256",
+        final_mod_pin,
+    )
+    retained_sum = source_builder.index("cp go.sum /out/artifacts/go.sum.patched")
+
+    assert tidy < download < verify < module_inventory < final_mod_pin < final_sum_pin
+    assert final_sum_pin < retained_sum
+    assert TLE_PATCHED_GO_SUM_SHA256 in source_builder
 
 
 def test_runtime_is_nonroot_deterministic_and_read_only_compatible() -> None:

@@ -458,7 +458,7 @@ ARG TLE_SOURCE_ARCHIVE_SHA256=98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c3
 ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
 ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
 ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
-ARG TLE_PATCHED_GO_SUM_SHA256=baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0
+ARG TLE_PATCHED_GO_SUM_SHA256=988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c
 ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
 ARG GO_VERSION=1.26.5
 ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
@@ -527,11 +527,11 @@ RUN GOFLAGS=-mod=mod go get \
         google.golang.org/grpc@v1.82.1 \
         google.golang.org/protobuf@v1.36.11 \
     && GOFLAGS=-mod=mod go mod tidy \
-    && printf '%s  %s\n' "${TLE_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \
-    && printf '%s  %s\n' "${TLE_PATCHED_GO_SUM_SHA256}" go.sum | sha256sum -c - \
     && go mod download all \
     && go mod verify \
     && go list -m -json all > /out/artifacts/go-modules.json \
+    && printf '%s  %s\n' "${TLE_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \
+    && printf '%s  %s\n' "${TLE_PATCHED_GO_SUM_SHA256}" go.sum | sha256sum -c - \
     && cp /build/original/go.mod /out/artifacts/go.mod.original \
     && cp /build/original/go.sum /out/artifacts/go.sum.original \
     && cp go.mod /out/artifacts/go.mod.patched \
@@ -581,7 +581,7 @@ ARG TLE_SOURCE_TREE_MANIFEST_SHA256=6fedff45430fc81e9dbf5b13b1a2dc90e9840ae91f03
 ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
 ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
 ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
-ARG TLE_PATCHED_GO_SUM_SHA256=baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0
+ARG TLE_PATCHED_GO_SUM_SHA256=988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c
 ARG TLE_DEPENDENCY_DELTA_SHA256=1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59
 ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
 ARG GO_VERSION=1.26.5
@@ -1245,7 +1245,7 @@ LABEL org.opencontainers.image.title="Fractal ANN confirmatory release runner" \
       io.fractal-ann.confirmatory.tle-go-tarball-sha256="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49" \
       io.fractal-ann.confirmatory.tle-go-tool-sha256="22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b" \
       io.fractal-ann.confirmatory.tle-patched-go-mod-sha256="ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08" \
-      io.fractal-ann.confirmatory.tle-patched-go-sum-sha256="baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0" \
+      io.fractal-ann.confirmatory.tle-patched-go-sum-sha256="988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c" \
       io.fractal-ann.confirmatory.tle-present="true" \
       io.fractal-ann.confirmatory.tle-release-version="1.2.0" \
       io.fractal-ann.confirmatory.tle-runtime-scope="linux/arm64-only" \

@@ -48,6 +48,10 @@ def _prefreeze() -> TlockReleaseProvenance:
 def test_prefreeze_record_pins_release_lineage_binary_and_quicknet_without_round() -> None:
     provenance = _prefreeze()
 
+    assert (
+        TLOCK_PATCHED_GO_SUM_SHA256
+        == "988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c"
+    )
     assert provenance.release_tag_object_git_sha1 == TLOCK_RELEASE_TAG_OBJECT_GIT_SHA1
     assert provenance.source_commit_git_sha1 == TLOCK_SOURCE_COMMIT_GIT_SHA1
     assert provenance.target_operating_system == "linux"

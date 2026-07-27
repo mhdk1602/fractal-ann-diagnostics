@@ -42,6 +42,9 @@ All material changes to this research codebase are recorded here.
   environment mutation.
 - Set the rootfs-generated runtime-library manifest and minimized Debian status database to mode
   `0444`; the executable-image gate already rejected both controls when owner-write bits remained.
+- Corrected the tlock `go.sum` closure to hash the post-download module graph used by the offline
+  tests and binary build. The former tidy-only pin preceded `go mod download all`, while the
+  retained artifact followed it.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific
