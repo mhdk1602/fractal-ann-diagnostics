@@ -60,6 +60,8 @@ builder_python() {
     HF_HUB_DISABLE_TELEMETRY=1 \
     HF_HUB_OFFLINE=1 \
     HOME=/private/var/empty \
+    KMP_DUPLICATE_LIB_OK=True \
+    KMP_INIT_AT_FORK=FALSE \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     MKL_NUM_THREADS=1 \
@@ -73,6 +75,7 @@ builder_python() {
     PYTORCH_ENABLE_MPS_FALLBACK=0 \
     TOKENIZERS_PARALLELISM=false \
     TMPDIR=/private/tmp \
+    TORCHINDUCTOR_CACHE_DIR=/private/var/empty \
     TRANSFORMERS_OFFLINE=1 \
     TZ=UTC \
     VECLIB_MAXIMUM_THREADS=1 \
@@ -109,10 +112,15 @@ The first command that can load either model is `write-builder-receipt`. It refu
 checkout (including ignored import shadows), a source commit mismatch, another lockfile, another
 Python or package tree, a writable executable-input tree, a changed minimal process environment, a
 non-Darwin platform, a non-arm64 machine, absent MPS, model-tree drift, or a changed fixed probe. It
-records the macOS product and build, Mac model, chip, logical cores, physical memory, fixed system
+sets the pinned scikit-learn/joblib OpenMP policy and TorchInductor cache path before package
+import, then proves that importing the production module, PyTorch, and the lazy Transformer classes
+does not add, remove, or change any environment key. It records the macOS product and build, Mac
+model, chip, logical cores, physical memory, fixed system
 Git and SHA-256, resolved Python binary and SHA-256, `pyvenv.cfg`, every base `sys.path` file/tree,
 the full site-packages tree (including `.pth`, distribution metadata, and native libraries), exact
 import origins, source-tree identity, Qwen arm configs, and byte-identical repeated probe vectors.
+The cache path is the existing root-owned, non-writable `/private/var/empty`; an unregistered
+TorchInductor write therefore fails instead of creating mutable cache state.
 
 ```bash
 BUILDER_RECEIPT="$CONTROL/controls/production-embedding-builder.json"

@@ -6,8 +6,10 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from contextlib import contextmanager
 from dataclasses import replace
+from importlib.util import find_spec
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -415,6 +417,107 @@ def test_builder_receipt_is_canonical_hash_pinned_and_runtime_revalidated(
     )
     with pytest.raises(ProductionEmbeddingBuildError, match="fixed-probe vectors"):
         verify_production_embedding_builder_runtime(receipt)
+
+
+def _run_builder_environment_import_probe(*, include_ml_stack: bool) -> None:
+    expected = production._current_builder_environment()
+    expected_map = dict(expected)
+    source_root = Path(__file__).resolve().parents[1] / "src"
+    probe = """
+import os
+import sys
+
+sys.path.insert(0, sys.argv[1])
+import fractal_ann_diagnostics.production_embedding_build as production
+
+if sys.argv[2] == "with-ml-stack":
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM, Qwen3Model
+
+    assert torch is not None
+    assert AutoModel is not None
+    assert AutoTokenizer is not None
+    assert Qwen3ForCausalLM is not None
+    assert Qwen3Model is not None
+observed = tuple(
+    sorted(os.environ.items(), key=lambda item: item[0].encode("utf-8"))
+)
+expected = production._current_builder_environment()
+if observed != expected:
+    added = sorted(set(dict(observed)) - set(dict(expected)))
+    removed = sorted(set(dict(expected)) - set(dict(observed)))
+    changed = sorted(
+        name
+        for name in set(dict(observed)) & set(dict(expected))
+        if dict(observed)[name] != dict(expected)[name]
+    )
+    raise SystemExit(
+        f"builder imports changed the fixed environment: "
+        f"added={added!r}, removed={removed!r}, changed={changed!r}"
+    )
+production._validated_builder_environment(observed)
+"""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-P",
+            "-s",
+            "-c",
+            probe,
+            str(source_root),
+            "with-ml-stack" if include_ml_stack else "package-only",
+        ],
+        cwd=source_root.parent,
+        env=expected_map,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_builder_environment_pins_import_time_openmp_and_torch_cache_policy() -> None:
+    expected = production._current_builder_environment()
+    expected_map = dict(expected)
+    assert expected_map["KMP_DUPLICATE_LIB_OK"] == "True"
+    assert expected_map["KMP_INIT_AT_FORK"] == "FALSE"
+    assert expected_map["TORCHINDUCTOR_CACHE_DIR"] == "/private/var/empty"
+    assert production._validated_builder_environment(expected) == expected
+    _run_builder_environment_import_probe(include_ml_stack=False)
+
+
+@pytest.mark.skipif(
+    find_spec("torch") is None or find_spec("transformers") is None,
+    reason="production embedding extras are not installed",
+)
+def test_builder_environment_remains_closed_after_production_ml_imports() -> None:
+    _run_builder_environment_import_probe(include_ml_stack=True)
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "KMP_DUPLICATE_LIB_OK",
+        "KMP_INIT_AT_FORK",
+        "TORCHINDUCTOR_CACHE_DIR",
+    ),
+)
+def test_builder_environment_rejects_missing_or_changed_import_policy(name: str) -> None:
+    expected = dict(production._current_builder_environment())
+    missing = tuple(
+        sorted(
+            ((key, value) for key, value in expected.items() if key != name),
+            key=lambda item: item[0].encode("utf-8"),
+        )
+    )
+    with pytest.raises(ProductionEmbeddingBuildError, match="fixed minimal environment"):
+        production._validated_builder_environment(missing)
+
+    expected[name] = "substituted"
+    changed = tuple(sorted(expected.items(), key=lambda item: item[0].encode("utf-8")))
+    with pytest.raises(ProductionEmbeddingBuildError, match="fixed minimal environment"):
+        production._validated_builder_environment(changed)
 
 
 def test_builder_receipt_writer_observes_identity_around_fixed_probe(
