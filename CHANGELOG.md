@@ -45,6 +45,18 @@ All material changes to this research codebase are recorded here.
 - Corrected the tlock `go.sum` closure to hash the post-download module graph used by the offline
   tests and binary build. The former tidy-only pin preceded `go mod download all`, while the
   retained artifact followed it.
+- Added a standalone host operator that atomically publishes the exact fit/calibration selection
+  view from the read-only online projection. Its canonical receipt binds the staged inventory,
+  projection, complete typed partition audit, and all fixed corpus/stage counts while excluding
+  sealed, qrel, evidence, label, and custody payload files. Descriptor-relative traversal,
+  nonblocking single-link stable reads, prepublication `0500`/`0400` sealing, externally pinned
+  verification, observed name/inode state transitions, post-rename source and artifact rereads,
+  and proved no-replace rollback close the host filesystem race boundary.
+- Added receipt-level input-custody evidence to that host operator. It captures source bytes under
+  retained file and parent leases, states that noncooperating same-UID mutation is excluded, and
+  classifies every post-proof descriptor-close interruption as publication-indeterminate without
+  removing the proved public tree. The contract now names a separate UID or read-only immutable
+  snapshot when advisory cooperation is insufficient.
 - Added dual-epoch Qwen embedding stores, compiled OPA mask catalogs, policy-stage bundles,
   authorized HNSW index stores, and one typed compiler for the complete C1 artifact tree.
 - Added a digest-pinned Linux runner image, exact process and mount evidence, five corpus-specific

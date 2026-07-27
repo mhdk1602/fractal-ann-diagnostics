@@ -1,7 +1,7 @@
-"""Make ``src/fractal_ann_diagnostics`` importable in editable-free environments.
+"""Make repository Python modules importable in editable-free environments.
 
-Adds the repo's ``src/`` directory to ``sys.path`` so tests run from a clean
-checkout without requiring ``pip install -e .`` first.
+Adds the repository root and its ``src/`` directory to ``sys.path`` so tests run
+from a clean checkout without requiring ``pip install -e .`` first.
 """
 
 from __future__ import annotations

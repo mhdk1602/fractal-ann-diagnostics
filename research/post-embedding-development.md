@@ -35,6 +35,16 @@ package that holds sealed qrels. The label-free selection receipt is reproduced 
 before the materializer resolves or opens development label sources. Sealed qrels remain outside
 every development type and mounted path admitted downstream.
 
+The phase-1 selection can be prepared under a smaller mount. The standalone
+[`development_staging_view.py`](../operators/development_staging_view.py) host operator copies only
+the inventory controls, complete assignment-control ledger, and ten fit/calibration query files
+from the read-only online projection. Its
+[operator contract](development-staging-view.md) rejects label payloads and binds the projection
+and partition-audit receipts. Its POSIX lease contract assumes every producer follows the same
+file-and-parent advisory-lock protocol. Use a separate producer UID or a read-only immutable
+snapshot when same-UID noncooperation is in scope. It does not construct the later label-bearing
+materialization view.
+
 ## Fixed derivation
 
 The operator first verifies the production embedding config and rehashes all five stores through
@@ -170,9 +180,11 @@ inputs come from the verified operator receipt rather than repeated operator cho
 
 ## Commands
 
-Run the operator from the digest-pinned candidate image. The compute principal receives a
-development staging view at `FULL_STAGED_ROOT`, not the custody-complete source package. The
-custodian creates that view at the exact recorded path with only:
+Run the post-embedding operator from the digest-pinned candidate image. The compute principal
+receives a label-bearing development view at `FULL_STAGED_ROOT`, not the custody-complete source
+package. This is the phase-2 view. It is distinct from the label-payload-excluded host view used to
+commit the selection receipt. The custodian creates the phase-2 view at the exact recorded path
+with only:
 
 - `inventory.json`, `inventory.sha256`, and `assignments.jsonl`;
 - `datasets/<corpus>/{fit,calibration}/queries.jsonl`;
@@ -182,6 +194,10 @@ custodian creates that view at the exact recorded path with only:
 No `sealed/` directory or sealed qrel is present. The unchanged inventory and partition-audit pins
 let the operator verify every file it actually opens against the custody-complete cohort while the
 sealed payloads remain outside its mount namespace.
+
+The host-side view operator never creates this phase-2 tree and never receives any qrel or evidence
+payload. Its independently produced selection must reproduce byte for byte when the all-in-one
+operator selects again from `FULL_STAGED_ROOT`, before materialization opens development labels.
 
 Set paths and externally recorded digests explicitly. Do not derive mount sources from an
 unverified config:
