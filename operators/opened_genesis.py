@@ -771,11 +771,21 @@ class _PathMutationGuard:
                 "cannot initialize request-bound path-mutation notification"
             ) from OSError(error, os.strerror(error))
 
-        self_changes = 0x00000004 | 0x00000400 | 0x00000800 | 0x00002000 | 0x00008000
+        attribute_change = 0x00000004
+        self_changes = attribute_change | 0x00000400 | 0x00000800 | 0x00002000 | 0x00008000
         child_changes = 0x00000002 | 0x00000008 | 0x00000040 | 0x00000080 | 0x00000100 | 0x00000200
         try:
             for watch in watches:
                 mask = self_changes
+                # Linux reports a child-directory link-count update as IN_ATTRIB
+                # on the watched parent. The OPENED namespace may intentionally
+                # share that parent with its request, so treating this ambiguous
+                # directory event as path replacement rejects the operator's own
+                # mkdir. Directory replacement and disappearance remain covered
+                # by DELETE_SELF, MOVE_SELF, UNMOUNT, and IGNORED; pinned regular
+                # files retain IN_ATTRIB in addition to their content events.
+                if stat.S_ISDIR(os.fstat(watch.descriptor).st_mode):
+                    mask &= ~attribute_change
                 if watch.include_child_changes:
                     mask |= child_changes
                 watched = add_watch(
