@@ -114,7 +114,7 @@ from .study import (
     validate_study_manifest,
 )
 
-SUITE_STATE_SCHEMA = "fractal-suite-state-v8"
+SUITE_STATE_SCHEMA = "fractal-suite-state-v9"
 SUITE_ATTESTATION_DESCRIPTOR_SCHEMA = "fractal-suite-attestation-descriptor-v1"
 SUITE_ATTESTATION_EVIDENCE_SCHEMA = "fractal-suite-attestation-evidence-v1"
 SUITE_PROVIDER_CLAIMS_SCHEMA = "fractal-suite-provider-claims-v1"
@@ -1617,6 +1617,10 @@ class LabelCorpusClosure:
 @dataclass(frozen=True)
 class AnalysisClosure:
     confirmatory_input_artifact_sha256: str
+    analysis_execution_receipt_uri: str
+    analysis_execution_receipt_sha256: str
+    analysis_execution_receipt_file_sha256: str
+    analysis_execution_receipt_byte_count: int
     analysis_attempt_receipt_uri: str
     analysis_attempt_receipt_sha256: str
     analysis_attempt_file_sha256: str
@@ -1633,6 +1637,8 @@ class AnalysisClosure:
     def __post_init__(self) -> None:
         for name in (
             "confirmatory_input_artifact_sha256",
+            "analysis_execution_receipt_sha256",
+            "analysis_execution_receipt_file_sha256",
             "analysis_attempt_receipt_sha256",
             "analysis_attempt_file_sha256",
             "analysis_result_receipt_sha256",
@@ -1642,12 +1648,14 @@ class AnalysisClosure:
         ):
             _digest(name, getattr(self, name))
         for name in (
+            "analysis_execution_receipt_uri",
             "analysis_attempt_receipt_uri",
             "analysis_result_receipt_uri",
             "final_result_uri",
         ):
             _local_file_uri(name, getattr(self, name))
         for name in (
+            "analysis_execution_receipt_byte_count",
             "analysis_attempt_byte_count",
             "analysis_result_receipt_byte_count",
             "final_result_byte_count",
@@ -5852,6 +5860,12 @@ def verify_suite_state(
             raise SuiteAttemptError("ANALYSIS_COMPLETE payload is malformed")
         analysis_files = (
             (
+                "offline analysis execution receipt",
+                closure.analysis_execution_receipt_uri,
+                closure.analysis_execution_receipt_file_sha256,
+                closure.analysis_execution_receipt_byte_count,
+            ),
+            (
                 "analysis attempt receipt",
                 closure.analysis_attempt_receipt_uri,
                 closure.analysis_attempt_file_sha256,
@@ -6015,8 +6029,29 @@ def require_verified_online_completion(
     corpus_id: str,
     online_result_receipt_sha256: str,
 ) -> OnlineCorpusClosure:
-    """Validate the file-backed all-five token at the label-release boundary."""
+    """Revalidate the all-five online closure at the label-release boundary."""
 
+    if isinstance(token, VerifiedProviderPredecessor):
+        if token.state.state != "LABEL_RELEASE_CLAIMED":
+            raise SuiteAttemptError(
+                "provider label release requires verified LABEL_RELEASE_CLAIMED lineage"
+            )
+        matches = [record for record in token.records if record.state == "ONLINE_COMPLETE"]
+        if len(matches) != 1:
+            raise SuiteAttemptError("provider label-release chain lacks one ONLINE_COMPLETE state")
+        online_state = matches[0]
+        token.assert_current()
+        if online_state.manifest_sha256 != manifest_digest:
+            raise SuiteAttemptError("verified suite completion belongs to another manifest")
+        if not isinstance(online_state.payload, OnlineSuiteClosure):
+            raise SuiteAttemptError("verified ONLINE_COMPLETE payload is malformed")
+        corpora = [row for row in online_state.payload.corpora if row.corpus_id == corpus_id]
+        if len(corpora) != 1 or not isinstance(corpora[0], OnlineCorpusClosure):
+            raise SuiteAttemptError("verified suite completion lacks the requested corpus")
+        closure = corpora[0]
+        if closure.result_receipt_sha256 != online_result_receipt_sha256:
+            raise SuiteAttemptError("verified suite completion binds another online result")
+        return closure
     if not isinstance(token, VerifiedSuiteOnlineCompletion):
         raise SuiteAttemptError(
             "label release requires externally verified ONLINE_COMPLETE canonical files"
@@ -6067,6 +6102,8 @@ def complete_label_release(
     manifest: Mapping[str, Any],
     decryption_receipt_paths: Mapping[str, str | Path],
     plaintext_paths: Mapping[str, str | Path],
+    post_online_completion_aggregate_file_sha256: str,
+    label_release_authorities: Mapping[str, object],
 ) -> SuiteStateRecord:
     """Bind five verified release receipts and exact frozen plaintext files."""
 
@@ -6093,6 +6130,16 @@ def complete_label_release(
         raise SuiteAttemptError("LABELS_RELEASED requires one receipt for each fixed corpus")
     if set(plaintext_paths) != set(FIXED_CORPORA) or len(plaintext_paths) != len(FIXED_CORPORA):
         raise SuiteAttemptError("LABELS_RELEASED requires one plaintext file for each fixed corpus")
+    _digest(
+        "post_online_completion_aggregate_file_sha256",
+        post_online_completion_aggregate_file_sha256,
+    )
+    if set(label_release_authorities) != set(FIXED_CORPORA) or len(
+        label_release_authorities
+    ) != len(FIXED_CORPORA):
+        raise SuiteAttemptError(
+            "LABELS_RELEASED requires one action authority for each fixed corpus"
+        )
     try:
         validate_study_manifest(manifest, require_frozen=True)
     except ValueError as exc:
@@ -6126,26 +6173,80 @@ def complete_label_release(
     online_payload = online_records[0].payload
     online_rows = {row.corpus_id: row for row in online_payload.corpora}
     claim_rows = {row.corpus_id: row for row in phase_claim.contract.corpora}
+    from .provider_phase_runtime import LabelReleaseOutputAuthority
+
+    action_authorities: dict[str, LabelReleaseOutputAuthority] = {}
+    for corpus_id in ordered:
+        authority = label_release_authorities[corpus_id]
+        if not isinstance(authority, LabelReleaseOutputAuthority):
+            raise SuiteAttemptError("LABELS_RELEASED action authority is not typed")
+        if (
+            authority.corpus_id != corpus_id
+            or authority.post_online_completion_aggregate_file_sha256
+            != post_online_completion_aggregate_file_sha256
+            or authority.label_release_claim_state_sha256 != phase_claim.phase_claim_state_sha256
+            or authority.label_release_claim_ledger_commit != phase_claim.phase_claim_ledger_commit
+            or authority.label_release_phase_claim_contract_sha256
+            != phase_claim.contract.contract_sha256
+            or authority.label_release_provider_identity_sha256
+            != phase_claim.provider_identity.identity_sha256
+        ):
+            raise SuiteAttemptError(
+                "LABELS_RELEASED action authority differs from the winning claim"
+            )
+        action_authorities[corpus_id] = authority
+
+    last_job_observation = _timestamp(
+        "initial label live-job verification",
+        phase_claim.live_execute_job_receipt.verified_at_utc,
+    )
+    initial_beacon = phase_claim.phase_beacon_receipt
+    if initial_beacon is None:
+        raise SuiteAttemptError("label-release authority lacks its beacon receipt")
+    last_beacon_observation = _timestamp(
+        "initial label beacon verification",
+        initial_beacon.verified_at_utc,
+    )
 
     def current_phase_claim() -> VerifiedPhaseClaimCapability:
+        nonlocal last_beacon_observation, last_job_observation
         current = phase_claim if phase_claim_factory is None else phase_claim_factory()
         if not isinstance(current, VerifiedPhaseClaimCapability):
             raise SuiteAttemptError(
                 "label-release authority factory returned an untyped capability"
             )
         current.assert_current()
+        current_beacon = current.phase_beacon_receipt
         if (
             current.contract.contract_sha256 != phase_claim.contract.contract_sha256
             or current.provider_identity.identity_sha256
             != phase_claim.provider_identity.identity_sha256
             or current.phase_claim_state_sha256 != phase_claim.phase_claim_state_sha256
             or current.phase_claim_ledger_commit != phase_claim.phase_claim_ledger_commit
-            or current.live_execute_job_receipt.receipt_sha256
-            != phase_claim.live_execute_job_receipt.receipt_sha256
+            or current.live_execute_job_receipt.job_identity_sha256
+            != phase_claim.live_execute_job_receipt.job_identity_sha256
+            or current_beacon is None
+            or current_beacon.beacon_identity_sha256 != initial_beacon.beacon_identity_sha256
         ):
             raise SuiteAttemptError(
                 "renewed label-release authority differs from the winning claim"
             )
+        if phase_claim_factory is not None:
+            current_job_observation = _timestamp(
+                "renewed label live-job verification",
+                current.live_execute_job_receipt.verified_at_utc,
+            )
+            current_beacon_observation = _timestamp(
+                "renewed label beacon verification",
+                current_beacon.verified_at_utc,
+            )
+            if (
+                current_job_observation <= last_job_observation
+                or current_beacon_observation <= last_beacon_observation
+            ):
+                raise SuiteAttemptError("renewed label-release observations are not newer")
+            last_job_observation = current_job_observation
+            last_beacon_observation = current_beacon_observation
         return current
 
     closures: list[LabelCorpusClosure] = []
@@ -6178,6 +6279,16 @@ def complete_label_release(
             supporting_input_uri=claim_row.supporting_input_uri,
             supporting_input_sha256=claim_row.supporting_input_sha256,
         )
+        corpus_beacon = corpus_claim.phase_beacon_receipt
+        action_authority = action_authorities[corpus_id]
+        if (
+            corpus_beacon is None
+            or action_authority.label_release_live_execute_job_receipt.job_identity_sha256
+            != corpus_claim.live_execute_job_receipt.job_identity_sha256
+            or action_authority.label_release_phase_beacon_receipt.beacon_identity_sha256
+            != corpus_beacon.beacon_identity_sha256
+        ):
+            raise SuiteAttemptError("persisted label action evidence differs from fresh authority")
         receipt = load_timelock_decryption_receipt(path)
         try:
             decryption_receipt_byte_count = path.stat().st_size
@@ -6192,6 +6303,20 @@ def complete_label_release(
             or receipt.ciphertext_sha256 != ciphertext_pins[corpus_id]
             or receipt.timelock_encryption_receipt_file_sha256 != encryption_receipt_pins[corpus_id]
             or receipt.tle_binary_sha256 != timelock_tool_pin
+            or receipt.post_online_completion_aggregate_file_sha256
+            != post_online_completion_aggregate_file_sha256
+            or receipt.label_release_claim_state_sha256
+            != action_authority.label_release_claim_state_sha256
+            or receipt.label_release_claim_ledger_commit
+            != action_authority.label_release_claim_ledger_commit
+            or receipt.label_release_phase_claim_contract_sha256
+            != action_authority.label_release_phase_claim_contract_sha256
+            or receipt.label_release_phase_beacon_receipt_sha256
+            != action_authority.label_release_phase_beacon_receipt_sha256
+            or receipt.label_release_live_execute_job_receipt_sha256
+            != action_authority.label_release_live_execute_job_receipt_sha256
+            or receipt.label_release_provider_identity_sha256
+            != action_authority.label_release_provider_identity_sha256
         ):
             raise SuiteAttemptError(
                 "decryption receipt differs from ONLINE_COMPLETE or frozen custody pins"
@@ -6281,6 +6406,9 @@ def complete_confirmatory_analysis(
     *,
     phase_claim: VerifiedPhaseClaimCapability,
     confirmatory_input_artifact_sha256: str,
+    execution_receipt_path: str | Path,
+    execution_receipt_sha256: str,
+    execution_receipt_file_sha256: str,
     attempt_receipt_path: str | Path,
     result_receipt_path: str | Path,
     final_result_path: str | Path,
@@ -6313,20 +6441,36 @@ def complete_confirmatory_analysis(
         load_confirmatory_analysis_result_receipt,
         load_confirmatory_result_artifact_bytes,
     )
+    from .offline_analysis_contract import (
+        OfflineAnalysisContractError,
+        load_offline_analysis_execution_receipt,
+    )
 
+    execution_path = Path(execution_receipt_path)
     attempt_path = Path(attempt_receipt_path)
     receipt_path = Path(result_receipt_path)
     result_path = Path(final_result_path)
-    if not all(path.is_absolute() for path in (attempt_path, receipt_path, result_path)):
+    if not all(
+        path.is_absolute() for path in (execution_path, attempt_path, receipt_path, result_path)
+    ):
         raise SuiteAttemptError("confirmatory analysis paths must be absolute")
     _assert_distinct_regular_files(
         (
+            ("offline analysis execution receipt", execution_path),
             ("confirmatory analysis attempt receipt", attempt_path),
             ("confirmatory analysis result receipt", receipt_path),
             ("confirmatory final result", result_path),
         ),
         label="ANALYSIS_COMPLETE evidence",
     )
+    try:
+        execution = load_offline_analysis_execution_receipt(
+            execution_path,
+            expected_receipt_sha256=execution_receipt_sha256,
+            expected_file_sha256=execution_receipt_file_sha256,
+        )
+    except OfflineAnalysisContractError as exc:
+        raise SuiteAttemptError(f"offline analysis execution receipt is invalid: {exc}") from exc
     attempt = load_confirmatory_analysis_attempt_receipt(attempt_path)
     receipt = load_confirmatory_analysis_result_receipt(receipt_path)
     canonical_result = load_confirmatory_result_artifact_bytes(
@@ -6335,6 +6479,7 @@ def complete_confirmatory_analysis(
         attempt_receipt_path=attempt_path,
     )
     try:
+        execution_byte_count = execution_path.stat().st_size
         attempt_byte_count = attempt_path.stat().st_size
         receipt_byte_count = receipt_path.stat().st_size
         result_byte_count = result_path.stat().st_size
@@ -6345,7 +6490,37 @@ def complete_confirmatory_analysis(
         confirmatory_input_artifact_sha256,
     )
     if (
-        attempt.manifest_sha256 != verified_claimed.state.manifest_sha256
+        execution.suite_attempt_id != verified_claimed.state.suite_attempt_id
+        or execution.manifest_sha256 != verified_claimed.state.manifest_sha256
+        or execution.run_receipt_sha256 != verified_claimed.state.run_receipt_sha256
+        or execution.provider_state_record_sha256 != verified_claimed.state.record_sha256
+        or execution.provider_ledger_commit != verified_claimed.ledger_commit
+        or execution.phase_claim_contract_sha256 != phase_claim.contract.contract_sha256
+        or execution.phase_claim_state_sha256 != phase_claim.phase_claim_state_sha256
+        or execution.phase_claim_ledger_commit != phase_claim.phase_claim_ledger_commit
+        or execution.provider_identity_sha256 != phase_claim.provider_identity.identity_sha256
+        or execution.attempt_uri != attempt_path.as_uri()
+        or execution.attempt_receipt_sha256 != attempt.receipt_sha256
+        or execution.attempt_file_sha256
+        != digest_regular_file(
+            attempt_path,
+            label="confirmatory analysis attempt receipt",
+        )
+        or execution.result_receipt_uri != receipt_path.as_uri()
+        or execution.result_receipt_sha256 != receipt.receipt_sha256
+        or execution.result_receipt_file_sha256
+        != digest_regular_file(
+            receipt_path,
+            label="confirmatory analysis result receipt",
+        )
+        or execution.result_uri != result_path.as_uri()
+        or execution.result_artifact_sha256 != receipt.result_artifact_sha256
+        or execution.result_file_sha256
+        != digest_regular_file(
+            result_path,
+            label="confirmatory final result",
+        )
+        or attempt.manifest_sha256 != verified_claimed.state.manifest_sha256
         or attempt.run_receipt_sha256 != verified_claimed.state.run_receipt_sha256
         or attempt.confirmatory_input_artifact_sha256 != input_digest
         or receipt.attempt_receipt_sha256 != attempt.receipt_sha256
@@ -6354,6 +6529,13 @@ def complete_confirmatory_analysis(
         raise SuiteAttemptError("confirmatory analysis files differ from the admitted suite")
     closure = AnalysisClosure(
         confirmatory_input_artifact_sha256=input_digest,
+        analysis_execution_receipt_uri=execution_path.as_uri(),
+        analysis_execution_receipt_sha256=execution.receipt_sha256,
+        analysis_execution_receipt_file_sha256=digest_regular_file(
+            execution_path,
+            label="offline analysis execution receipt",
+        ),
+        analysis_execution_receipt_byte_count=execution_byte_count,
         analysis_attempt_receipt_uri=attempt_path.as_uri(),
         analysis_attempt_receipt_sha256=attempt.receipt_sha256,
         analysis_attempt_file_sha256=digest_regular_file(

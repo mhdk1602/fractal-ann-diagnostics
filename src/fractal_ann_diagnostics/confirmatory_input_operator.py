@@ -37,9 +37,6 @@ from .confirmatory_analysis import (
 )
 from .confirmatory_execution import (
     confirmatory_attempt_path,
-    confirmatory_result_path,
-    confirmatory_result_receipt_path,
-    run_confirmatory_analysis_once,
 )
 from .confirmatory_modeling import (
     FrozenModelSuite,
@@ -92,7 +89,6 @@ from .suite_attempt import (
     VerifiedPhaseClaimCapability,
     VerifiedProviderPredecessor,
     VerifiedSuiteLabelsReleased,
-    complete_confirmatory_analysis,
     require_verified_labels_released,
     verify_suite_state,
 )
@@ -1246,30 +1242,11 @@ def run_materialized_confirmatory_analysis_once(
     *,
     trusted_anchor_record_fetcher: Callable[[str, int], bytes] | None = None,
 ) -> SuiteStateRecord:
-    """Consume the sole analysis attempt and create the local ANALYSIS_COMPLETE state."""
+    """Reject host analysis that cannot retain the C1 execution receipt."""
 
-    materialized = load_materialized_confirmatory_input(
-        config,
-        verified_labels,
-        trusted_anchor_record_fetcher=trusted_anchor_record_fetcher,
-    )
-    suite = load_admitted_model_suite(config, materialized.inputs)
-    verified_labels.assert_current()
-    result = run_confirmatory_analysis_once(
-        materialized.inputs,
-        suite=suite,
-        verified_labels_released=verified_labels,
-    )
-    if result.confirmatory_input_artifact_sha256 != materialized.receipt.artifact_sha256:
-        raise ConfirmatoryInputOperatorError("analysis result binds another persisted input")
-    verified_labels.assert_current()
-    return complete_confirmatory_analysis(
-        verified_labels,
-        phase_claim=None,  # type: ignore[arg-type]
-        confirmatory_input_artifact_sha256=materialized.receipt.artifact_sha256,
-        attempt_receipt_path=confirmatory_attempt_path(materialized.inputs),
-        result_receipt_path=confirmatory_result_receipt_path(materialized.inputs),
-        final_result_path=confirmatory_result_path(materialized.inputs),
+    del config, verified_labels, trusted_anchor_record_fetcher
+    raise ConfirmatoryInputOperatorError(
+        "confirmatory analysis must use the C1-pinned offline container path"
     )
 
 
@@ -1284,62 +1261,17 @@ def run_provider_claimed_confirmatory_analysis_once(
     ]
     | None = None,
 ) -> SuiteStateRecord:
-    """Persist and analyze once under the winning ANALYSIS_CLAIMED capability."""
+    """Reject the obsolete provider path that computed on the macOS host."""
 
-    if (
-        not isinstance(verified_claimed, VerifiedProviderPredecessor)
-        or verified_claimed.state.state != "ANALYSIS_CLAIMED"
-    ):
-        raise ConfirmatoryInputOperatorError("provider analysis requires verified ANALYSIS_CLAIMED")
-    if not isinstance(phase_claim, VerifiedPhaseClaimCapability):
-        raise ConfirmatoryInputOperatorError("provider analysis lacks phase authority")
-    phase_claim.assert_current()
-    materialized = materialize_confirmatory_input(
+    del (
         config,
         verified_claimed,
-        trusted_anchor_record_fetcher=trusted_anchor_record_fetcher,
+        phase_claim,
+        trusted_anchor_record_fetcher,
+        fresh_claim_supplier,
     )
-    suite = load_admitted_model_suite(config, materialized.inputs)
-    verified_claimed.assert_current()
-    result = run_confirmatory_analysis_once(
-        materialized.inputs,
-        suite=suite,
-        verified_labels_released=verified_claimed,
-    )
-    if result.confirmatory_input_artifact_sha256 != materialized.receipt.artifact_sha256:
-        raise ConfirmatoryInputOperatorError("analysis result binds another persisted input")
-    verified_claimed.assert_current()
-    completion_claimed = verified_claimed
-    completion_phase_claim = phase_claim
-    if fresh_claim_supplier is not None:
-        try:
-            completion_claimed, completion_phase_claim = fresh_claim_supplier()
-        except Exception as exc:
-            raise ConfirmatoryInputOperatorError(
-                "cannot refresh ANALYSIS_CLAIMED completion authority"
-            ) from exc
-        if (
-            not isinstance(completion_claimed, VerifiedProviderPredecessor)
-            or completion_claimed.state.state != "ANALYSIS_CLAIMED"
-            or not isinstance(completion_phase_claim, VerifiedPhaseClaimCapability)
-            or completion_claimed.state.record_sha256 != verified_claimed.state.record_sha256
-            or completion_claimed.ledger_commit != verified_claimed.ledger_commit
-            or completion_claimed.control_inventory_sha256
-            != verified_claimed.control_inventory_sha256
-            or completion_claimed.artifact_receipt_sha256
-            != verified_claimed.artifact_receipt_sha256
-        ):
-            raise ConfirmatoryInputOperatorError(
-                "refreshed ANALYSIS_CLAIMED authority differs from the input claim"
-            )
-    completion_phase_claim.assert_current()
-    return complete_confirmatory_analysis(
-        completion_claimed,
-        phase_claim=completion_phase_claim,
-        confirmatory_input_artifact_sha256=materialized.receipt.artifact_sha256,
-        attempt_receipt_path=confirmatory_attempt_path(materialized.inputs),
-        result_receipt_path=confirmatory_result_receipt_path(materialized.inputs),
-        final_result_path=confirmatory_result_path(materialized.inputs),
+    raise ConfirmatoryInputOperatorError(
+        "provider confirmatory analysis must use the C1-pinned offline container path"
     )
 
 

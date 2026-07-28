@@ -393,8 +393,9 @@ jobs:
           test "$("$DOCKER_PATH" version --format '{{.Server.Os}}/{{.Server.Arch}}')" = \
             'linux/arm64'
 
-      - name: Bind the exact claimed analysis input closure and execute analysis once
+      - name: Bind the exact claimed analysis input closure and close analysis
         id: activate
+        shell: bash
         env:
           CLAIM_ARTIFACT_DIGEST: ${{ needs.claim.outputs.claim_artifact_digest }}
           CLAIM_ARTIFACT_ID: ${{ needs.claim.outputs.claim_artifact_id }}
@@ -403,24 +404,67 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
-        run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim
-          verify-prerequisites
-          --phase analysis
-          --suite-attempt-id "$SUITE_ATTEMPT_ID"
-          --claim-receipt "$CLAIM_RECEIPT"
-          --activate-and-execute
-          --output-dir "${RUNNER_TEMP}/analysis-activation"
-          --github-output "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          ACTIVATION_OUTPUT=''
+          run_activation() {
+            local attempt="$1"
+            local attempt_output="${RUNNER_TEMP}/analysis-activation-${attempt}.github-output"
+            local attempt_root="${RUNNER_TEMP}/analysis-activation-${attempt}"
+            if test -e "$attempt_output" || test -L "$attempt_output" \
+                || test -e "$attempt_root" || test -L "$attempt_root"; then
+              return 2
+            fi
+            "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim \
+              verify-prerequisites \
+              --phase analysis \
+              --suite-attempt-id "$SUITE_ATTEMPT_ID" \
+              --claim-receipt "$CLAIM_RECEIPT" \
+              --activate-and-execute \
+              --output-dir "$attempt_root" \
+              --github-output "$attempt_output"
+            local command_status=$?
+            if test "$command_status" -ne 0; then
+              if test -L "$attempt_output" \
+                  || { test -e "$attempt_output" && test ! -f "$attempt_output"; } \
+                  || test -s "$attempt_output"; then
+                return 2
+              fi
+              return 1
+            fi
+            if test ! -f "$attempt_output" || test -L "$attempt_output" \
+                || test ! -s "$attempt_output"; then
+              return 2
+            fi
+            ACTIVATION_OUTPUT="$attempt_output"
+          }
+
+          set +e
+          run_activation 1
+          activation_status=$?
+          set -e
+          if test "$activation_status" -eq 1; then
+            set +e
+            run_activation 2
+            activation_status=$?
+            set -e
+          fi
+          test "$activation_status" -eq 0
+          test -n "$ACTIVATION_OUTPUT"
+          cat -- "$ACTIVATION_OUTPUT" >> "$GITHUB_OUTPUT"
 
       - name: Admit only the guarded all-five analysis result
         shell: bash
         env:
+          ANALYSIS_EXECUTION_RECEIPT: ${{ steps.activate.outputs.analysis_execution_receipt_path }}
+          ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256: ${{ steps.activate.outputs.analysis_execution_receipt_file_sha256 }}
+          ANALYSIS_EXECUTION_RECEIPT_SHA256: ${{ steps.activate.outputs.analysis_execution_receipt_sha256 }}
           ANALYSIS_RESULT: ${{ steps.activate.outputs.analysis_result_path }}
           ANALYSIS_RESULT_SHA256: ${{ steps.activate.outputs.analysis_result_sha256 }}
           EXECUTE_JOB_ID: ${{ steps.activate.outputs.execute_job_id }}
           FIVE_CORPORA_ANALYZED: ${{ steps.activate.outputs.five_corpora_analyzed }}
           FIXED_CORPORA_COMPLETED: ${{ steps.activate.outputs.fixed_corpora_completed }}
+          HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           LIVE_EXECUTE_JOB_RECEIPT: ${{ steps.activate.outputs.live_execute_job_receipt_path }}
           LIVE_EXECUTE_JOB_RECEIPT_SHA256: ${{ steps.activate.outputs.live_execute_job_receipt_sha256 }}
           PHASE_EXECUTION_RECEIPT: ${{ steps.activate.outputs.phase_execution_receipt_path }}
@@ -432,6 +476,10 @@ jobs:
           [[ "$EXECUTE_JOB_ID" =~ ^[1-9][0-9]*$ ]]
           test "$FIXED_CORPORA_COMPLETED" = 'true'
           test "$FIVE_CORPORA_ANALYZED" = 'true'
+          [[ "$ANALYSIS_EXECUTION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$(shasum -a 256 "$ANALYSIS_EXECUTION_RECEIPT" | awk '{print $1}')" = \
+            "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256"
           test "$(shasum -a 256 "$ANALYSIS_RESULT" | awk '{print $1}')" = \
             "$ANALYSIS_RESULT_SHA256"
           test "$(shasum -a 256 "$LIVE_EXECUTE_JOB_RECEIPT" | awk '{print $1}')" = \
@@ -440,6 +488,21 @@ jobs:
             "$PHASE_EXECUTION_RECEIPT_SHA256"
           test "$(shasum -a 256 "$RUNTIME_CLAIM_RECEIPT" | awk '{print $1}')" = \
             "$RUNTIME_CLAIM_RECEIPT_SHA256"
+          "$HOST_PYTHON" - "$ANALYSIS_EXECUTION_RECEIPT" \
+            "$ANALYSIS_EXECUTION_RECEIPT_SHA256" \
+            "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256" <<'PY'
+          import sys
+
+          from fractal_ann_diagnostics.offline_analysis_contract import (
+              load_offline_analysis_execution_receipt,
+          )
+
+          load_offline_analysis_execution_receipt(
+              sys.argv[1],
+              expected_receipt_sha256=sys.argv[2],
+              expected_file_sha256=sys.argv[3],
+          )
+          PY
 
       - name: Build the exact confirmatory result subject
         id: prepare
@@ -474,9 +537,17 @@ jobs:
           set -euo pipefail
           evidence="${RUNNER_TEMP}/analysis-execution-evidence"
           install -d -m 0700 "$evidence"
-          if test -d "${RUNNER_TEMP}/analysis-activation"; then
-            cp -R -- "${RUNNER_TEMP}/analysis-activation/." "$evidence/"
-          else
+          activation_found=false
+          for attempt in 1 2; do
+            activation="${RUNNER_TEMP}/analysis-activation-${attempt}"
+            if test -d "$activation"; then
+              destination="$evidence/activation-attempt-${attempt}"
+              install -d -m 0700 "$destination"
+              cp -R -- "$activation/." "$destination/"
+              activation_found=true
+            fi
+          done
+          if test "$activation_found" != true; then
             printf '%s\n' 'phase activation evidence unavailable' \
               > "$evidence/phase-activation-missing.txt"
           fi

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -29,9 +28,6 @@ from .execution_claim import (
     ExecutionClaimError,
     loads_runtime_claim_receipt,
 )
-from .external_anchors import verify_prediction_completion_anchor
-from .github_state_attestation import GitHubSuiteEvidenceVerifier
-from .label_separation import load_prediction_completion_receipt
 from .pilot import PilotConfig, write_pilot_artifacts
 from .production_corpus_run import run_sealed_corpus_from_config
 from .study import (
@@ -39,11 +35,6 @@ from .study import (
     load_study_manifest,
     manifest_sha256,
     validate_study_manifest,
-)
-from .suite_attempt import verify_suite_state
-from .timelock_release import (
-    release_timelock_label,
-    write_timelock_decryption_receipt,
 )
 
 
@@ -353,41 +344,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ciphertext artifact sha256: {receipt.ciphertext_sha256}")
         return 0
     if args.command == "release-timelock-label":
-        if os.path.lexists(args.receipt):
-            raise ValueError("decryption receipt already exists; overwrite is forbidden")
-        payload = load_study_manifest(args.manifest)
-        suite_verifier = GitHubSuiteEvidenceVerifier(args.suite_namespace)
-        verified_suite = verify_suite_state(
-            args.suite_namespace,
-            verifier=suite_verifier,
-            expected_state="ONLINE_COMPLETE",
+        raise ValueError(
+            "direct label release is disabled; use the provider phase runtime so "
+            "LABEL_RELEASE_CLAIMED, the live execute job, the verified beacon, "
+            "and anonymous post-online anchors remain one authority chain"
         )
-        completion_receipt = load_prediction_completion_receipt(args.completion_receipt)
-        verified_anchor = verify_prediction_completion_anchor(
-            completion_receipt,
-            anchor_record_path=args.completion_anchor_record,
-            anchor_receipt_path=args.completion_anchor_receipt,
-        )
-        verified_release = release_timelock_label(
-            payload,
-            corpus_id=args.corpus_id,
-            custody_seal=load_custody_seal_receipt(args.custody_seal),
-            encryption_receipt=load_timelock_encryption_receipt(args.encryption_receipt),
-            verified_completion_anchor=verified_anchor,
-            verified_suite_completion=verified_suite,
-            ciphertext_path=args.ciphertext,
-            tle_binary_path=args.tle_binary,
-            plaintext_output_path=args.plaintext_output,
-            timeout_seconds=args.timeout_seconds,
-            max_ciphertext_bytes=args.max_ciphertext_bytes,
-            max_plaintext_bytes=args.max_plaintext_bytes,
-        )
-        write_timelock_decryption_receipt(verified_release.receipt, args.receipt)
-        print(f"released canonical plaintext labels: {args.plaintext_output}")
-        print(f"plaintext sha256: {verified_release.receipt.plaintext_sha256}")
-        print(f"decryption receipt sha256: {verified_release.receipt.receipt_sha256}")
-        print(f"decryption receipt: {args.receipt}")
-        return 0
     if args.command == "verify-custody-seal-receipt":
         payload = load_study_manifest(args.manifest)
         receipt = load_custody_seal_receipt(args.receipt)

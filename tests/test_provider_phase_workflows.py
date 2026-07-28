@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +129,15 @@ def _cli_invocations(phase: str) -> dict[tuple[str, str], tuple[str, ...]]:
                 continue
             step_id = step.get("id")
             assert isinstance(step_id, str)
-            words = shlex.split(run)
+            command_lines: list[str] = []
+            run_lines = run.splitlines()
+            module_line = next(index for index, line in enumerate(run_lines) if module in line)
+            command_lines.append(run_lines[module_line])
+            while command_lines[-1].rstrip().endswith("\\"):
+                module_line += 1
+                command_lines.append(run_lines[module_line])
+            command = "\n".join(command_lines).replace("\\\n", " ")
+            words = shlex.split(command)
             module_index = words.index(module)
             key = (job_id, step_id)
             assert key not in invocations
@@ -468,11 +478,15 @@ def test_shell_blocks_never_expand_untrusted_actions_expressions(phase: str) -> 
     for forbidden in (
         "github_pat",
         "personal_access_token",
-        "secrets.",
         "pull_request_target",
         "repository_dispatch",
     ):
         assert forbidden not in lowered
+    if phase == "label-release":
+        assert workflow.count("${{ secrets.ZENODO_TOKEN }}") == 1
+        assert workflow.count("secrets.") == 1
+    else:
+        assert "secrets." not in workflow
 
 
 @pytest.mark.parametrize("phase", tuple(WORKFLOWS))
@@ -614,8 +628,134 @@ def test_label_release_claim_and_provider_time_gate_precede_every_decrypt() -> N
     assert "FIVE_LABEL_PAYLOADS_DECRYPTED" in workflow
     assert "label_release_inventory_path" in workflow
     assert "label_release_inventory_sha256" in workflow
+    assert 'shasum -a 256 "$LABEL_RELEASE_INVENTORY"' in workflow
+    assert "ProviderPhaseExecutionReceipt.from_bytes" in workflow
+    assert "label_release_authority" in workflow
     assert '--claim-receipt "$CLAIM_RECEIPT"' in workflow
     assert "Publish LABELS_RELEASED" in workflow
+
+
+@pytest.mark.parametrize(
+    ("phase", "activation_prefix"),
+    (("label-release", "label-release"), ("analysis", "analysis")),
+)
+def test_restartable_phase_has_one_bounded_same_job_process_retry(
+    phase: str,
+    activation_prefix: str,
+) -> None:
+    steps = _workflow_document(phase)["jobs"]["execute"]["steps"]
+    activation = next(step for step in steps if step.get("id") == "activate")
+    run = activation["run"]
+    assert isinstance(run, str)
+    assert run.count("run_activation 1") == 1
+    assert run.count("run_activation 2") == 1
+    assert run.count("--activate-and-execute") == 1
+    assert run.count('--github-output "$attempt_output"') == 1
+    assert 'cat -- "$ACTIVATION_OUTPUT" >> "$GITHUB_OUTPUT"' in run
+    assert '|| test -s "$attempt_output"; then' in run
+    assert 'test ! -f "$attempt_output"' in run
+    assert f"{activation_prefix}-activation-${{attempt}}" in run
+    assert "GITHUB_RUN_ATTEMPT" not in run
+
+    retain = next(step for step in steps if step.get("name") == "Retain immutable phase evidence")
+    assert "for attempt in 1 2" in retain["run"]
+    assert "activation-attempt-${attempt}" in retain["run"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "expected_attempts", "expected_output"),
+    (
+        ("succeed", 0, "1", "fake_attempt=1\n"),
+        ("fail-first", 0, "2", "fake_attempt=2\n"),
+        ("partial-output", 1, "1", ""),
+    ),
+)
+@pytest.mark.parametrize("phase", ("label-release", "analysis"))
+def test_phase_retry_publishes_only_one_complete_attempt_output(
+    tmp_path: Path,
+    mode: str,
+    expected_status: int,
+    expected_attempts: str,
+    expected_output: str,
+    phase: str,
+) -> None:
+    steps = _workflow_document(phase)["jobs"]["execute"]["steps"]
+    activation = next(step for step in steps if step.get("id") == "activate")
+    fake_python = tmp_path / "host-python"
+    fake_python.write_text(
+        """#!/bin/bash
+set -euo pipefail
+if test "${EXPECT_TOKEN_FD:-false}" = true; then
+  test -z "${ZENODO_TOKEN+x}"
+  [[ "${COMPLETION_ANCHOR_TOKEN_FD:-}" =~ ^[0-9]+$ ]]
+  IFS= read -r -u "$COMPLETION_ANCHOR_TOKEN_FD" observed_token
+  test "$observed_token" = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+fi
+attempts="${RUNNER_TEMP}/fake-attempts"
+count=0
+if test -f "$attempts"; then
+  count="$(<"$attempts")"
+fi
+count="$((count + 1))"
+printf '%s\\n' "$count" > "$attempts"
+output=''
+root=''
+while test "$#" -gt 0; do
+  case "$1" in
+    --github-output)
+      output="$2"
+      shift 2
+      ;;
+    --output-dir)
+      root="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+mkdir -m 0700 "$root"
+if test "$FAKE_MODE" = fail-first && test "$count" -eq 1; then
+  exit 1
+fi
+if test "$FAKE_MODE" = partial-output; then
+  printf '%s\\n' 'partial=true' > "$output"
+  exit 1
+fi
+printf 'fake_attempt=%s\\n' "$count" > "$output"
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o700)
+    github_output = tmp_path / "github-output"
+    environment = {
+        **os.environ,
+        "CLAIM_ARTIFACT_DIGEST": "sha256:" + ("a" * 64),
+        "CLAIM_ARTIFACT_ID": "1",
+        "CLAIM_PACKAGE_INVENTORY_SHA256": "b" * 64,
+        "CLAIM_RECEIPT": str(tmp_path / "claim-receipt.json"),
+        "FAKE_MODE": mode,
+        "EXPECT_TOKEN_FD": "true" if phase == "label-release" else "false",
+        "GH_TOKEN": "test-token",
+        "GITHUB_OUTPUT": str(github_output),
+        "HOST_PYTHON": str(fake_python),
+        "RUNNER_TEMP": str(tmp_path),
+        "SUITE_ATTEMPT_ID": "c" * 64,
+        "ZENODO_TOKEN": "A" * 32,
+    }
+    completed = subprocess.run(
+        ("bash", "-c", activation["run"]),
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    assert completed.returncode == expected_status, completed.stderr
+    assert (tmp_path / "fake-attempts").read_text(encoding="utf-8").strip() == (expected_attempts)
+    assert (
+        github_output.read_text(encoding="utf-8") if github_output.exists() else ""
+    ) == expected_output
 
 
 def test_analysis_claim_precedes_input_and_result_attestation() -> None:
@@ -637,6 +777,11 @@ def test_analysis_claim_precedes_input_and_result_attestation() -> None:
     assert "FIVE_CORPORA_ANALYZED" in workflow
     assert "analysis_result_path" in workflow
     assert "analysis_result_sha256" in workflow
+    assert "analysis_execution_receipt_path" in workflow
+    assert "analysis_execution_receipt_sha256" in workflow
+    assert "analysis_execution_receipt_file_sha256" in workflow
+    assert 'shasum -a 256 "$ANALYSIS_EXECUTION_RECEIPT"' in workflow
+    assert "load_offline_analysis_execution_receipt" in workflow
     assert "verify-prerequisites" in workflow[bind:guarded_analysis]
     assert '--claim-receipt "$CLAIM_RECEIPT"' in workflow[bind:prepare]
     assert "Publish ANALYSIS_COMPLETE" in workflow

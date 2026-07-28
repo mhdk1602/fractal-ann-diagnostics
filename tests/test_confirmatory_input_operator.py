@@ -403,47 +403,12 @@ def test_github_gate_requests_exact_labels_released_state(
     del token
 
 
-def test_one_shot_operator_passes_verified_capability_and_closes_local_state(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    inputs = _inputs()
-    token = _Token()
-    receipt = SimpleNamespace(artifact_sha256=inputs.artifact_sha256)
-    materialized = SimpleNamespace(inputs=inputs, receipt=receipt)
-    result = SimpleNamespace(confirmatory_input_artifact_sha256=inputs.artifact_sha256)
-    final_state = SimpleNamespace(state="ANALYSIS_COMPLETE")
-    events = []
-    monkeypatch.setattr(
-        operator,
-        "load_materialized_confirmatory_input",
-        lambda *args, **kwargs: materialized,
-    )
-    monkeypatch.setattr(operator, "load_admitted_model_suite", lambda *args: "suite")
-
-    def run(admitted_inputs, *, suite, verified_labels_released):
-        events.append(("attempt", admitted_inputs, suite, verified_labels_released))
-        return result
-
-    def complete(verified_labels, **kwargs):
-        events.append(("complete", verified_labels, kwargs))
-        return final_state
-
-    monkeypatch.setattr(operator, "run_confirmatory_analysis_once", run)
-    monkeypatch.setattr(operator, "complete_confirmatory_analysis", complete)
-    monkeypatch.setattr(operator, "confirmatory_attempt_path", lambda value: Path("/tmp/a"))
-    monkeypatch.setattr(
-        operator,
-        "confirmatory_result_receipt_path",
-        lambda value: Path("/tmp/b"),
-    )
-    monkeypatch.setattr(operator, "confirmatory_result_path", lambda value: Path("/tmp/c"))
-
-    observed = operator.run_materialized_confirmatory_analysis_once(
-        SimpleNamespace(),
-        token,  # type: ignore[arg-type]
-    )
-    assert observed is final_state
-    assert [event[0] for event in events] == ["attempt", "complete"]
-    assert events[0][3] is token
-    assert events[1][1] is token
-    assert events[1][2]["confirmatory_input_artifact_sha256"] == inputs.artifact_sha256
+def test_one_shot_host_operator_is_fail_closed() -> None:
+    with pytest.raises(
+        operator.ConfirmatoryInputOperatorError,
+        match="C1-pinned offline container",
+    ):
+        operator.run_materialized_confirmatory_analysis_once(
+            SimpleNamespace(),
+            _Token(),  # type: ignore[arg-type]
+        )

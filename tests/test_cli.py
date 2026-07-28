@@ -505,7 +505,51 @@ def test_timelock_receipt_verification_cli_binds_optional_suite_seal(
     assert observed["verify"] == (receipt, manifest, seal, True)
 
 
-def test_timelock_release_cli_verifies_external_anchor_before_decryption(
+def test_timelock_release_cli_is_retired_before_any_custody_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    accessed: list[Path] = []
+    monkeypatch.setattr(
+        cli,
+        "load_study_manifest",
+        lambda path: accessed.append(Path(path)),
+    )
+
+    with pytest.raises(ValueError, match="provider phase runtime"):
+        cli.main(
+            [
+                "release-timelock-label",
+                "--manifest",
+                str(tmp_path / "manifest.json"),
+                "--corpus-id",
+                "scifact",
+                "--custody-seal",
+                str(tmp_path / "custody.json"),
+                "--encryption-receipt",
+                str(tmp_path / "encryption.json"),
+                "--completion-receipt",
+                str(tmp_path / "completion.json"),
+                "--completion-anchor-record",
+                str(tmp_path / "anchor.json"),
+                "--completion-anchor-receipt",
+                str(tmp_path / "anchor-receipt.json"),
+                "--suite-namespace",
+                str(tmp_path / "suite"),
+                "--ciphertext",
+                str(tmp_path / "labels.tlock"),
+                "--tle-binary",
+                str(tmp_path / "tle"),
+                "--plaintext-output",
+                str(tmp_path / "labels.json"),
+                "--receipt",
+                str(tmp_path / "decryption.json"),
+            ]
+        )
+    assert accessed == []
+
+
+def _legacy_timelock_release_cli_verifies_external_anchor_before_decryption(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -531,7 +575,7 @@ def test_timelock_release_cli_verifies_external_anchor_before_decryption(
     seal = object()
     encryption = object()
     suite_verifier = object()
-    verified_suite = object()
+    verified_suite = SimpleNamespace(assert_current=lambda: None)
     decryption_receipt = SimpleNamespace(
         plaintext_sha256="a" * 64,
         receipt_sha256="b" * 64,
@@ -658,6 +702,7 @@ def test_timelock_release_cli_verifies_external_anchor_before_decryption(
                 "ciphertext_path": paths["ciphertext"],
                 "tle_binary_path": paths["tle"],
                 "plaintext_output_path": paths["plaintext"],
+                "fresh_release_revalidator": verified_suite.assert_current,
                 "timeout_seconds": 30,
                 "max_ciphertext_bytes": 2048,
                 "max_plaintext_bytes": 1024,
@@ -670,7 +715,7 @@ def test_timelock_release_cli_verifies_external_anchor_before_decryption(
     )
 
 
-def test_timelock_release_cli_replay_stops_before_suite_or_anchor_verification(
+def _legacy_timelock_release_cli_replay_stops_before_suite_or_anchor_verification(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -721,7 +766,7 @@ def test_timelock_release_cli_replay_stops_before_suite_or_anchor_verification(
     assert calls == []
 
 
-def test_timelock_release_cli_rejects_substituted_suite_before_anchor_or_decryption(
+def _legacy_timelock_release_cli_rejects_substituted_suite_before_anchor_or_decryption(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

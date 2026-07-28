@@ -400,8 +400,9 @@ jobs:
           test "$("$DOCKER_PATH" version --format '{{.Server.Os}}/{{.Server.Arch}}')" = \
             'linux/arm64'
 
-      - name: Prove ONLINE_COMPLETE predates the label beacon and decrypt all five once
+      - name: Prove ONLINE_COMPLETE predates the label beacon and close all five releases
         id: activate
+        shell: bash
         env:
           CLAIM_ARTIFACT_DIGEST: ${{ needs.claim.outputs.claim_artifact_digest }}
           CLAIM_ARTIFACT_ID: ${{ needs.claim.outputs.claim_artifact_id }}
@@ -410,15 +411,64 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
-        run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim
-          verify-prerequisites
-          --phase label-release
-          --suite-attempt-id "$SUITE_ATTEMPT_ID"
-          --claim-receipt "$CLAIM_RECEIPT"
-          --activate-and-execute
-          --output-dir "${RUNNER_TEMP}/label-release-activation"
-          --github-output "$GITHUB_OUTPUT"
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+        run: |
+          set -euo pipefail
+          ACTIVATION_OUTPUT=''
+          ZENODO_TOKEN_VALUE="$ZENODO_TOKEN"
+          unset ZENODO_TOKEN
+          test "${#ZENODO_TOKEN_VALUE}" -ge 16
+          test "${#ZENODO_TOKEN_VALUE}" -le 4096
+          [[ "$ZENODO_TOKEN_VALUE" =~ ^[A-Za-z0-9._~+-]+$ ]]
+          run_activation() {
+            local attempt="$1"
+            local attempt_output="${RUNNER_TEMP}/label-release-activation-${attempt}.github-output"
+            local attempt_root="${RUNNER_TEMP}/label-release-activation-${attempt}"
+            if test -e "$attempt_output" || test -L "$attempt_output" \
+                || test -e "$attempt_root" || test -L "$attempt_root"; then
+              return 2
+            fi
+            exec 3<<<"$ZENODO_TOKEN_VALUE" || return 2
+            COMPLETION_ANCHOR_TOKEN_FD=3 \
+              "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim \
+              verify-prerequisites \
+              --phase label-release \
+              --suite-attempt-id "$SUITE_ATTEMPT_ID" \
+              --claim-receipt "$CLAIM_RECEIPT" \
+              --activate-and-execute \
+              --output-dir "$attempt_root" \
+              --github-output "$attempt_output"
+            local command_status=$?
+            exec 3<&- || return 2
+            if test "$command_status" -ne 0; then
+              if test -L "$attempt_output" \
+                  || { test -e "$attempt_output" && test ! -f "$attempt_output"; } \
+                  || test -s "$attempt_output"; then
+                return 2
+              fi
+              return 1
+            fi
+            if test ! -f "$attempt_output" || test -L "$attempt_output" \
+                || test ! -s "$attempt_output"; then
+              return 2
+            fi
+            ACTIVATION_OUTPUT="$attempt_output"
+          }
+
+          set +e
+          run_activation 1
+          activation_status=$?
+          set -e
+          if test "$activation_status" -eq 1; then
+            set +e
+            run_activation 2
+            activation_status=$?
+            set -e
+          fi
+          test "$activation_status" -eq 0
+          test -n "$ACTIVATION_OUTPUT"
+          cat -- "$ACTIVATION_OUTPUT" >> "$GITHUB_OUTPUT"
+          unset ZENODO_TOKEN_VALUE
 
       - name: Admit only the guarded all-five decryption
         shell: bash
@@ -426,6 +476,7 @@ jobs:
           EXECUTE_JOB_ID: ${{ steps.activate.outputs.execute_job_id }}
           FIVE_LABEL_PAYLOADS_DECRYPTED: ${{ steps.activate.outputs.five_label_payloads_decrypted }}
           FIXED_CORPORA_COMPLETED: ${{ steps.activate.outputs.fixed_corpora_completed }}
+          HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           LABEL_RELEASE_INVENTORY: ${{ steps.activate.outputs.label_release_inventory_path }}
           LABEL_RELEASE_INVENTORY_SHA256: ${{ steps.activate.outputs.label_release_inventory_sha256 }}
           LIVE_EXECUTE_JOB_RECEIPT: ${{ steps.activate.outputs.live_execute_job_receipt_path }}
@@ -434,6 +485,7 @@ jobs:
           PHASE_EXECUTION_RECEIPT_SHA256: ${{ steps.activate.outputs.phase_execution_receipt_sha256 }}
           RUNTIME_CLAIM_RECEIPT: ${{ steps.activate.outputs.runtime_claim_receipt_path }}
           RUNTIME_CLAIM_RECEIPT_SHA256: ${{ steps.activate.outputs.runtime_claim_receipt_sha256 }}
+          SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
         run: |
           set -euo pipefail
           [[ "$EXECUTE_JOB_ID" =~ ^[1-9][0-9]*$ ]]
@@ -447,6 +499,45 @@ jobs:
             "$PHASE_EXECUTION_RECEIPT_SHA256"
           test "$(shasum -a 256 "$RUNTIME_CLAIM_RECEIPT" | awk '{print $1}')" = \
             "$RUNTIME_CLAIM_RECEIPT_SHA256"
+          "$HOST_PYTHON" - "$LABEL_RELEASE_INVENTORY" \
+            "$PHASE_EXECUTION_RECEIPT" "$SUITE_ATTEMPT_ID" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          from fractal_ann_diagnostics.provider_phase_runtime import (
+              ProviderPhaseExecutionReceipt,
+          )
+          from fractal_ann_diagnostics.study import FIXED_CORPORA
+
+          inventory = json.loads(Path(sys.argv[1]).read_bytes())
+          receipt = ProviderPhaseExecutionReceipt.from_bytes(
+              Path(sys.argv[2]).read_bytes()
+          )
+          expected = tuple(
+              sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8"))
+          )
+          rows = receipt.outputs
+          if (
+              inventory
+              != {
+                  "outputs": [row.to_dict() for row in rows],
+                  "phase": receipt.phase,
+                  "schema_version": "fractal-provider-activation-inventory-v1",
+                  "suite_attempt_id": receipt.suite_attempt_id,
+              }
+              or receipt.phase != "label-release"
+              or receipt.suite_attempt_id != sys.argv[3]
+              or tuple(row.corpus_id for row in rows) != expected
+              or any(
+                  row.label_release_authority is None
+                  or row.label_release_authority_sha256
+                  != row.label_release_authority.authority_sha256
+                  for row in rows
+              )
+          ):
+              raise SystemExit("label release inventory authority admission failed")
+          PY
 
       - name: Build the exact five-label release aggregate
         id: prepare
@@ -481,9 +572,17 @@ jobs:
           set -euo pipefail
           evidence="${RUNNER_TEMP}/label-release-execution-evidence"
           install -d -m 0700 "$evidence"
-          if test -d "${RUNNER_TEMP}/label-release-activation"; then
-            cp -R -- "${RUNNER_TEMP}/label-release-activation/." "$evidence/"
-          else
+          activation_found=false
+          for attempt in 1 2; do
+            activation="${RUNNER_TEMP}/label-release-activation-${attempt}"
+            if test -d "$activation"; then
+              destination="$evidence/activation-attempt-${attempt}"
+              install -d -m 0700 "$destination"
+              cp -R -- "$activation/." "$destination/"
+              activation_found=true
+            fi
+          done
+          if test "$activation_found" != true; then
             printf '%s\n' 'phase activation evidence unavailable' \
               > "$evidence/phase-activation-missing.txt"
           fi

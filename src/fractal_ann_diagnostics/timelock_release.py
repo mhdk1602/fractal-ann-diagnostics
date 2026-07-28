@@ -57,12 +57,16 @@ from .study import (
     validate_study_manifest,
 )
 
-TIMELOCK_DECRYPTION_RECEIPT_SCHEMA = "fractal-timelock-decryption-receipt-v1"
+TIMELOCK_DECRYPTION_RECEIPT_SCHEMA = "fractal-timelock-decryption-receipt-v2"
+TIMELOCK_DECRYPTION_RECEIPT_FILENAME = "timelock-decryption-receipt.json"
+TIMELOCK_RELEASE_INTENT_SCHEMA = "fractal-timelock-release-intent-v1"
+TIMELOCK_RELEASE_INTENT_FILENAME = ".timelock-release-intent.json"
 MAX_DRAND_CHAIN_METADATA_BYTES = 64 * 1024
 MAX_DRAND_BEACON_RESPONSE_BYTES = 64 * 1024
 _DRAND_FETCH_TIMEOUT_SECONDS = 10.0
 _MAX_TLOCK_STDERR_BYTES = 16 * 1024
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _LOWER_HEX = re.compile(r"^[0-9a-f]+$")
 _RELEASE_CAPABILITY = object()
 
@@ -95,9 +99,16 @@ _RECEIPT_FIELDS = frozenset(
         "drand_network",
         "drand_round",
         "manifest_sha256",
+        "label_release_claim_ledger_commit",
+        "label_release_claim_state_sha256",
+        "label_release_live_execute_job_receipt_sha256",
+        "label_release_phase_beacon_receipt_sha256",
+        "label_release_phase_claim_contract_sha256",
+        "label_release_provider_identity_sha256",
         "online_execution_result_receipt_sha256",
         "plaintext_byte_count",
         "plaintext_sha256",
+        "post_online_completion_aggregate_file_sha256",
         "prediction_completion_anchor_receipt_sha256",
         "prediction_completion_anchor_record_sha256",
         "schema_version",
@@ -304,6 +315,13 @@ class TimelockDecryptionReceipt:
     prediction_completion_anchor_record_sha256: str
     prediction_completion_anchor_receipt_sha256: str
     online_execution_result_receipt_sha256: str
+    post_online_completion_aggregate_file_sha256: str
+    label_release_claim_state_sha256: str
+    label_release_claim_ledger_commit: str
+    label_release_phase_claim_contract_sha256: str
+    label_release_phase_beacon_receipt_sha256: str
+    label_release_live_execute_job_receipt_sha256: str
+    label_release_provider_identity_sha256: str
     schema_version: str = TIMELOCK_DECRYPTION_RECEIPT_SCHEMA
 
     def __post_init__(self) -> None:
@@ -321,8 +339,18 @@ class TimelockDecryptionReceipt:
             "prediction_completion_anchor_record_sha256",
             "prediction_completion_anchor_receipt_sha256",
             "online_execution_result_receipt_sha256",
+            "post_online_completion_aggregate_file_sha256",
+            "label_release_claim_state_sha256",
+            "label_release_phase_claim_contract_sha256",
+            "label_release_phase_beacon_receipt_sha256",
+            "label_release_live_execute_job_receipt_sha256",
+            "label_release_provider_identity_sha256",
         ):
             _require_sha256(name, getattr(self, name))
+        if _GIT_COMMIT.fullmatch(self.label_release_claim_ledger_commit) is None:
+            raise TimelockReleaseError(
+                "label_release_claim_ledger_commit must be one full Git commit"
+            )
         if self.corpus_id not in FIXED_CORPORA:
             raise TimelockReleaseError("corpus_id is not registered")
         network = _require_https_network(self.drand_network)
@@ -458,10 +486,25 @@ class TimelockDecryptionReceipt:
             "drand_chain_hash": self.drand_chain_hash,
             "drand_network": self.drand_network,
             "drand_round": self.drand_round,
+            "label_release_claim_ledger_commit": (self.label_release_claim_ledger_commit),
+            "label_release_claim_state_sha256": self.label_release_claim_state_sha256,
+            "label_release_live_execute_job_receipt_sha256": (
+                self.label_release_live_execute_job_receipt_sha256
+            ),
+            "label_release_phase_beacon_receipt_sha256": (
+                self.label_release_phase_beacon_receipt_sha256
+            ),
+            "label_release_phase_claim_contract_sha256": (
+                self.label_release_phase_claim_contract_sha256
+            ),
+            "label_release_provider_identity_sha256": (self.label_release_provider_identity_sha256),
             "manifest_sha256": self.manifest_sha256,
             "online_execution_result_receipt_sha256": (self.online_execution_result_receipt_sha256),
             "plaintext_byte_count": self.plaintext_byte_count,
             "plaintext_sha256": self.plaintext_sha256,
+            "post_online_completion_aggregate_file_sha256": (
+                self.post_online_completion_aggregate_file_sha256
+            ),
             "prediction_completion_anchor_receipt_sha256": (
                 self.prediction_completion_anchor_receipt_sha256
             ),
@@ -570,6 +613,274 @@ def load_timelock_decryption_receipt(path: str | Path) -> TimelockDecryptionRece
             "decryption receipt bytes must equal canonical JSON plus one newline"
         )
     return receipt
+
+
+def label_release_staging_directory_name(corpus_id: str) -> str:
+    """Return the sole transaction directory allowed beside a corpus output."""
+
+    if corpus_id not in FIXED_CORPORA:
+        raise TimelockReleaseError("label release stage names an unregistered corpus")
+    return f".{corpus_id}.timelock-release-stage"
+
+
+def _release_directory_entries(root: Path, *, label: str) -> frozenset[str]:
+    try:
+        opened = root.lstat()
+    except OSError as exc:
+        raise TimelockReleaseError(f"cannot inspect {label}") from exc
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or stat.S_ISLNK(opened.st_mode)
+        or opened.st_uid != os.getuid()
+        or stat.S_IMODE(opened.st_mode) & 0o077
+    ):
+        raise TimelockReleaseError(f"{label} is not a private owned directory")
+    try:
+        return frozenset(path.name for path in root.iterdir())
+    except OSError as exc:
+        raise TimelockReleaseError(f"cannot enumerate {label}") from exc
+
+
+def _release_intent_bytes(
+    *,
+    corpus_id: str,
+    manifest_digest: str,
+    claim_state_sha256: str,
+    claim_ledger_commit: str,
+    claim_contract_sha256: str,
+    phase_beacon_identity_sha256: str,
+    live_execute_job_identity_sha256: str,
+    phase_beacon_receipt: object,
+    live_execute_job_receipt: object,
+    provider_identity_sha256: str,
+    post_online_aggregate_file_sha256: str,
+    tle_binary_sha256: str,
+    ciphertext_sha256: str,
+    drand_round: int,
+    plaintext_output_uri: str,
+    receipt_output_uri: str,
+) -> bytes:
+    return (
+        _canonical_bytes(
+            {
+                "ciphertext_sha256": ciphertext_sha256,
+                "corpus_id": corpus_id,
+                "drand_round": drand_round,
+                "label_release_claim_ledger_commit": claim_ledger_commit,
+                "label_release_claim_state_sha256": claim_state_sha256,
+                "label_release_live_execute_job_identity_sha256": (
+                    live_execute_job_identity_sha256
+                ),
+                "label_release_live_execute_job_receipt": (live_execute_job_receipt.to_dict()),
+                "label_release_phase_beacon_identity_sha256": (phase_beacon_identity_sha256),
+                "label_release_phase_beacon_receipt": (phase_beacon_receipt.to_dict()),
+                "label_release_phase_claim_contract_sha256": (claim_contract_sha256),
+                "label_release_provider_identity_sha256": provider_identity_sha256,
+                "manifest_sha256": manifest_digest,
+                "plaintext_output_uri": plaintext_output_uri,
+                "post_online_completion_aggregate_file_sha256": (post_online_aggregate_file_sha256),
+                "receipt_output_uri": receipt_output_uri,
+                "schema_version": TIMELOCK_RELEASE_INTENT_SCHEMA,
+                "tle_binary_sha256": tle_binary_sha256,
+            }
+        )
+        + b"\n"
+    )
+
+
+def _release_intent_stable_identity(encoded: bytes) -> bytes:
+    try:
+        from .execution_claim import LiveExecuteJobReceipt, PhaseBeaconReceipt
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise TimelockReleaseError("release intent action verifier is unavailable") from exc
+    row = _decode_object(encoded, label="timelock release intent")
+    expected_fields = frozenset(
+        {
+            "ciphertext_sha256",
+            "corpus_id",
+            "drand_round",
+            "label_release_claim_ledger_commit",
+            "label_release_claim_state_sha256",
+            "label_release_live_execute_job_identity_sha256",
+            "label_release_live_execute_job_receipt",
+            "label_release_phase_beacon_identity_sha256",
+            "label_release_phase_beacon_receipt",
+            "label_release_phase_claim_contract_sha256",
+            "label_release_provider_identity_sha256",
+            "manifest_sha256",
+            "plaintext_output_uri",
+            "post_online_completion_aggregate_file_sha256",
+            "receipt_output_uri",
+            "schema_version",
+            "tle_binary_sha256",
+        }
+    )
+    closed = _closed_mapping(
+        row,
+        fields=expected_fields,
+        label="timelock release intent",
+    )
+    try:
+        live = LiveExecuteJobReceipt(
+            **_closed_mapping(
+                closed["label_release_live_execute_job_receipt"],
+                fields=frozenset(LiveExecuteJobReceipt.__dataclass_fields__),
+                label="timelock release live execute-job receipt",
+            )
+        )
+        beacon = PhaseBeaconReceipt.from_dict(closed["label_release_phase_beacon_receipt"])
+    except Exception as exc:
+        raise TimelockReleaseError(
+            "timelock release intent contains invalid action evidence"
+        ) from exc
+    if (
+        live.job_identity_sha256 != closed["label_release_live_execute_job_identity_sha256"]
+        or beacon.beacon_identity_sha256 != closed["label_release_phase_beacon_identity_sha256"]
+    ):
+        raise TimelockReleaseError(
+            "timelock release intent action identity differs from its evidence"
+        )
+    normalized = {
+        key: value
+        for key, value in closed.items()
+        if key
+        not in {
+            "label_release_live_execute_job_receipt",
+            "label_release_phase_beacon_receipt",
+        }
+    }
+    return _canonical_bytes(normalized) + b"\n"
+
+
+def _prepare_release_transaction(
+    release_root: Path,
+    *,
+    intent_bytes: bytes,
+) -> Path:
+    """Durably record the exact action before the TLE process may start."""
+
+    stage = release_root.parent / label_release_staging_directory_name(release_root.name)
+    if os.path.lexists(release_root) or os.path.lexists(stage):
+        raise TimelockReleaseError("label release target changed before decryption intent")
+    try:
+        stage.mkdir(mode=0o700, parents=False, exist_ok=False)
+        write_exclusive_receipt_bytes(
+            intent_bytes,
+            stage / TIMELOCK_RELEASE_INTENT_FILENAME,
+        )
+        descriptor = os.open(
+            stage,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        parent_descriptor = os.open(
+            release_root.parent,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+    except (ArtifactIntegrityError, OSError) as exc:
+        raise TimelockReleaseError("cannot durably record pre-decryption intent") from exc
+    return stage
+
+
+def _rename_release_stage(stage: Path, release_root: Path) -> None:
+    parent = release_root.parent
+    try:
+        parent_descriptor = os.open(
+            parent,
+            os.O_RDONLY
+            | os.O_CLOEXEC
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.rename(
+                stage.name,
+                release_root.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+            )
+            os.fsync(parent_descriptor)
+        finally:
+            os.close(parent_descriptor)
+    except OSError as exc:
+        raise TimelockReleaseError("cannot atomically commit label release transaction") from exc
+
+
+def _publish_release_pair(
+    *,
+    plaintext: bytes,
+    receipt: TimelockDecryptionReceipt,
+    plaintext_path: Path,
+    receipt_path: Path,
+    intent_bytes: bytes,
+) -> None:
+    """Publish plaintext and its receipt through one atomic directory rename."""
+
+    if (
+        not plaintext_path.is_absolute()
+        or not receipt_path.is_absolute()
+        or plaintext_path.parent != receipt_path.parent
+        or plaintext_path.name == receipt_path.name
+    ):
+        raise TimelockReleaseError(
+            "plaintext and decryption receipt must be distinct files in one release directory"
+        )
+    release_root = plaintext_path.parent
+    parent = release_root.parent
+    stage = parent / label_release_staging_directory_name(release_root.name)
+    if os.path.lexists(release_root) or not os.path.lexists(stage):
+        raise TimelockReleaseError("label release target changed after transaction admission")
+    try:
+        if (
+            _release_directory_entries(stage, label="label release stage")
+            != frozenset({TIMELOCK_RELEASE_INTENT_FILENAME})
+            or read_secure_control_file(
+                stage / TIMELOCK_RELEASE_INTENT_FILENAME,
+                label="timelock release intent",
+            )
+            != intent_bytes
+        ):
+            raise TimelockReleaseError("pre-decryption intent changed before publication")
+        staged_plaintext = stage / plaintext_path.name
+        staged_receipt = stage / receipt_path.name
+        write_exclusive_receipt_bytes(plaintext, staged_plaintext)
+        write_timelock_decryption_receipt(receipt, staged_receipt)
+        if (
+            read_secure_regular_file(
+                staged_plaintext,
+                max_bytes=receipt.plaintext_byte_count,
+                label="staged released plaintext",
+            )
+            != plaintext
+            or load_timelock_decryption_receipt(staged_receipt) != receipt
+            or {path.name for path in stage.iterdir()}
+            != {
+                plaintext_path.name,
+                receipt_path.name,
+                TIMELOCK_RELEASE_INTENT_FILENAME,
+            }
+        ):
+            raise TimelockReleaseError("staged label release pair failed exact readback")
+        _rename_release_stage(stage, release_root)
+    except TimelockReleaseError:
+        raise
+    except (ArtifactIntegrityError, OSError) as exc:
+        raise TimelockReleaseError(
+            "cannot atomically publish plaintext and decryption receipt"
+        ) from exc
 
 
 class _NoRedirects(urllib_request.HTTPRedirectHandler):
@@ -815,8 +1126,7 @@ def _run_pinned_tle_decrypt(
 
     selector = selectors.DefaultSelector()
     plaintext = bytearray()
-    stderr = bytearray()
-    stderr_truncated = False
+    stderr_byte_count = 0
     input_offset = 0
     deadline = time.monotonic() + timeout_seconds
     streams = (process.stdin, process.stdout, process.stderr)
@@ -862,12 +1172,11 @@ def _run_pinned_tle_decrypt(
                             "pinned tle plaintext exceeds max_plaintext_bytes"
                         )
                     plaintext.extend(chunk)
-                elif len(stderr) < _MAX_TLOCK_STDERR_BYTES:
-                    remaining_stderr = _MAX_TLOCK_STDERR_BYTES - len(stderr)
-                    stderr.extend(chunk[:remaining_stderr])
-                    stderr_truncated = stderr_truncated or len(chunk) > remaining_stderr
                 else:
-                    stderr_truncated = True
+                    stderr_byte_count = min(
+                        stderr_byte_count + len(chunk),
+                        _MAX_TLOCK_STDERR_BYTES + 1,
+                    )
         try:
             return_code = process.wait(timeout=max(deadline - time.monotonic(), 0.01))
         except subprocess.TimeoutExpired as exc:
@@ -884,11 +1193,9 @@ def _run_pinned_tle_decrypt(
                 _close_stream(selector, stream)
         selector.close()
     if return_code != 0:
-        message = stderr.decode("utf-8", errors="replace").strip()
-        if stderr_truncated:
-            message += " [stderr truncated]"
+        stderr_state = "no stderr" if stderr_byte_count == 0 else "stderr suppressed"
         raise TimelockReleaseError(
-            f"pinned tle decryption failed with exit {return_code}: {message or 'no stderr'}"
+            f"pinned tle decryption failed with exit {return_code}: {stderr_state}"
         )
     if input_offset != len(ciphertext):
         raise TimelockReleaseError("tle process closed stdin before reading the ciphertext")
@@ -925,7 +1232,7 @@ def _require_suite_online_completion(
     corpus_id: str,
     online_result_receipt_sha256: str,
 ) -> None:
-    """Admit release only from the file-backed all-five suite capability."""
+    """Admit release only from freshly verified all-five suite authority."""
 
     try:
         from .suite_attempt import SuiteAttemptError, require_verified_online_completion
@@ -942,17 +1249,394 @@ def _require_suite_online_completion(
         raise TimelockReleaseError(f"suite completion gate failed: {exc}") from exc
 
 
+def _require_post_online_completion(
+    token: object,
+    *,
+    corpus_id: str,
+    manifest_digest: str,
+    verified_phase_claim: object,
+    verified_suite_completion: object,
+) -> tuple[VerifiedPredictionCompletionAnchor, object]:
+    """Admit one anchor only from the unforgeable all-five public token."""
+
+    try:
+        from .execution_claim import VerifiedPhaseClaimCapability
+        from .post_online_completion import VerifiedPostOnlineCompletionAuthority
+        from .suite_attempt import VerifiedProviderPredecessor
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise TimelockReleaseError("post-online completion verifier is unavailable") from exc
+    if not isinstance(token, VerifiedPostOnlineCompletionAuthority):
+        raise TimelockReleaseError(
+            "label release requires provider-bound post-online completion authority"
+        )
+    if not isinstance(verified_phase_claim, VerifiedPhaseClaimCapability):
+        raise TimelockReleaseError(
+            "post-online completion lacks a verified provider phase capability"
+        )
+    if (
+        not isinstance(verified_suite_completion, VerifiedProviderPredecessor)
+        or token.provider_namespace != verified_suite_completion.namespace
+    ):
+        raise TimelockReleaseError("post-online completion belongs to another provider namespace")
+    aggregate = token.aggregate
+    if (
+        aggregate.manifest_sha256 != manifest_digest
+        or aggregate.run_receipt_sha256 != verified_phase_claim.contract.run_receipt_sha256
+        or aggregate.label_release_claim_state_sha256
+        != verified_phase_claim.phase_claim_state_sha256
+        or aggregate.label_release_claim_ledger_commit
+        != verified_phase_claim.phase_claim_ledger_commit
+    ):
+        raise TimelockReleaseError(
+            "post-online completion belongs to another label-release authority"
+        )
+    try:
+        anchor = token.anchor_for(corpus_id)
+    except Exception as exc:
+        raise TimelockReleaseError(
+            "post-online completion lacks the requested corpus anchor"
+        ) from exc
+    return anchor, aggregate
+
+
+def _require_phase_release_authority(
+    token: object,
+    *,
+    manifest_digest: str,
+    run_receipt_sha256: str,
+) -> object:
+    """Revalidate the unforgeable provider phase capability in place."""
+
+    try:
+        from .execution_claim import (
+            LABEL_RELEASE_PHASE,
+            ExecutionClaimError,
+            PhaseBeaconReceipt,
+            VerifiedPhaseClaimCapability,
+        )
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise TimelockReleaseError("provider phase authority verifier is unavailable") from exc
+    if not isinstance(token, VerifiedPhaseClaimCapability):
+        raise TimelockReleaseError("label release requires a verified provider phase capability")
+    if (
+        token.contract.phase != LABEL_RELEASE_PHASE
+        or token.contract.manifest_sha256 != manifest_digest
+        or token.contract.run_receipt_sha256 != run_receipt_sha256
+    ):
+        raise TimelockReleaseError("provider phase capability belongs to another release")
+    try:
+        token.assert_current()
+    except ExecutionClaimError as exc:
+        raise TimelockReleaseError("provider phase capability is no longer current") from exc
+    beacon = token.phase_beacon_receipt
+    contract = token.contract.label_release_beacon
+    if not isinstance(beacon, PhaseBeaconReceipt) or contract is None:
+        raise TimelockReleaseError(
+            "provider phase capability lacks its verified label-release beacon"
+        )
+    if (
+        beacon.phase != LABEL_RELEASE_PHASE
+        or beacon.phase_claim_state_sha256 != token.phase_claim_state_sha256
+        or beacon.phase_claim_ledger_commit != token.phase_claim_ledger_commit
+        or beacon.phase_claim_contract_sha256 != token.contract.contract_sha256
+        or beacon.beacon_contract_sha256 != contract.contract_sha256
+        or beacon.chain_hash != contract.chain_hash
+        or beacon.round != contract.label_release_round
+        or beacon.published_at_utc != contract.label_release_publication_time.isoformat()
+    ):
+        raise TimelockReleaseError(
+            "provider phase capability carries a mismatched label-release beacon"
+        )
+    return beacon
+
+
+def _require_beacon_evidence_matches_phase_authority(
+    evidence: _DrandEvidence,
+    phase_beacon: object,
+) -> None:
+    """Bind the fetched release bytes to the BLS-verified provider receipt."""
+
+    try:
+        from .execution_claim import PhaseBeaconReceipt
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise TimelockReleaseError("provider phase beacon verifier is unavailable") from exc
+    if not isinstance(phase_beacon, PhaseBeaconReceipt):
+        raise TimelockReleaseError("label release lacks a verified provider beacon receipt")
+    if (
+        hashlib.sha256(evidence.beacon_response).hexdigest() != phase_beacon.beacon_bytes_sha256
+        or evidence.signature != phase_beacon.signature
+        or evidence.randomness != phase_beacon.randomness
+        or evidence.publication_time.isoformat() != phase_beacon.published_at_utc
+    ):
+        raise TimelockReleaseError(
+            "fresh drand evidence differs from the BLS-verified provider beacon"
+        )
+
+
+def _require_existing_release_authority(
+    receipt: TimelockDecryptionReceipt,
+    *,
+    manifest_digest: str,
+    corpus_id: str,
+    custody_seal: CustodySealReceipt,
+    encryption_receipt: TimelockEncryptionReceipt,
+    completion_aggregate: object,
+    anchor_record: object,
+    anchor_receipt: object,
+    verified_phase_claim: object,
+    phase_beacon: object,
+    network: str,
+    chain_hash: str,
+    round_number: int,
+    tool_pin: str,
+    ciphertext_digest: str,
+    ciphertext_byte_count: int,
+    plaintext_pin: str,
+) -> None:
+    """Admit a prior committed pair against current stable release authority.
+
+    The live-job and phase-beacon receipt hashes include their action timestamp.
+    A retry therefore preserves those two original action identities while
+    revalidating every stable provider, claim, beacon, and post-online binding.
+    """
+
+    try:
+        from .execution_claim import PhaseBeaconReceipt, VerifiedPhaseClaimCapability
+        from .post_online_completion import PostOnlineCompletionAggregateReceipt
+    except ImportError as exc:  # pragma: no cover - packaging failure
+        raise TimelockReleaseError("label release authority verifier is unavailable") from exc
+    if (
+        not isinstance(verified_phase_claim, VerifiedPhaseClaimCapability)
+        or not isinstance(phase_beacon, PhaseBeaconReceipt)
+        or not isinstance(completion_aggregate, PostOnlineCompletionAggregateReceipt)
+    ):
+        raise TimelockReleaseError("existing label release lacks typed current authority")
+    stable_bindings = (
+        ("manifest", receipt.manifest_sha256, manifest_digest),
+        ("corpus", receipt.corpus_id, corpus_id),
+        (
+            "custody seal",
+            receipt.custody_seal_receipt_sha256,
+            custody_seal.receipt_sha256,
+        ),
+        (
+            "encryption receipt",
+            receipt.timelock_encryption_receipt_sha256,
+            encryption_receipt.receipt_sha256,
+        ),
+        (
+            "encryption receipt file",
+            receipt.timelock_encryption_receipt_file_sha256,
+            encryption_receipt.file_sha256,
+        ),
+        ("tle binary", receipt.tle_binary_sha256, tool_pin),
+        ("drand network", receipt.drand_network, network),
+        ("drand chain", receipt.drand_chain_hash, chain_hash),
+        ("drand round", receipt.drand_round, round_number),
+        ("verified drand round", receipt.verified_beacon_round, round_number),
+        ("ciphertext digest", receipt.ciphertext_sha256, ciphertext_digest),
+        (
+            "ciphertext byte count",
+            receipt.ciphertext_byte_count,
+            ciphertext_byte_count,
+        ),
+        ("plaintext digest", receipt.plaintext_sha256, plaintext_pin),
+        (
+            "plaintext byte count",
+            receipt.plaintext_byte_count,
+            encryption_receipt.plaintext_byte_count,
+        ),
+        (
+            "completion anchor record",
+            receipt.prediction_completion_anchor_record_sha256,
+            anchor_record.record_sha256,
+        ),
+        (
+            "completion anchor receipt",
+            receipt.prediction_completion_anchor_receipt_sha256,
+            anchor_receipt.receipt_sha256,
+        ),
+        (
+            "online result",
+            receipt.online_execution_result_receipt_sha256,
+            anchor_record.online_execution_result_receipt_sha256,
+        ),
+        (
+            "post-online aggregate file",
+            receipt.post_online_completion_aggregate_file_sha256,
+            completion_aggregate.file_sha256,
+        ),
+        (
+            "label claim state",
+            receipt.label_release_claim_state_sha256,
+            verified_phase_claim.phase_claim_state_sha256,
+        ),
+        (
+            "label claim ledger commit",
+            receipt.label_release_claim_ledger_commit,
+            verified_phase_claim.phase_claim_ledger_commit,
+        ),
+        (
+            "label claim contract",
+            receipt.label_release_phase_claim_contract_sha256,
+            verified_phase_claim.contract.contract_sha256,
+        ),
+        (
+            "label provider identity",
+            receipt.label_release_provider_identity_sha256,
+            verified_phase_claim.provider_identity.identity_sha256,
+        ),
+        (
+            "beacon response",
+            receipt.beacon_response_sha256,
+            phase_beacon.beacon_bytes_sha256,
+        ),
+        ("beacon signature", receipt.beacon_signature, phase_beacon.signature),
+        (
+            "beacon randomness",
+            receipt.verified_beacon_randomness,
+            phase_beacon.randomness,
+        ),
+        (
+            "beacon publication",
+            receipt.beacon_publication_time_utc,
+            phase_beacon.published_at_utc,
+        ),
+    )
+    for label, observed, expected in stable_bindings:
+        if observed != expected:
+            raise TimelockReleaseError(
+                f"existing label release differs from current {label} authority"
+            )
+
+
+def _admit_release_pair(
+    *,
+    root: Path,
+    plaintext_name: str,
+    receipt_name: str,
+    authority_validator: Callable[[TimelockDecryptionReceipt], None],
+    allowed_extra_names: frozenset[str] = frozenset(),
+) -> TimelockDecryptionReceipt:
+    expected_names = frozenset({plaintext_name, receipt_name}) | allowed_extra_names
+    if _release_directory_entries(root, label="label release directory") != expected_names:
+        raise TimelockReleaseError(
+            "label release directory differs from the exact plaintext-receipt pair"
+        )
+    receipt = load_timelock_decryption_receipt(root / receipt_name)
+    authority_validator(receipt)
+    try:
+        plaintext = read_secure_regular_file(
+            root / plaintext_name,
+            max_bytes=receipt.plaintext_byte_count,
+            label="existing released plaintext",
+        )
+    except ArtifactIntegrityError as exc:
+        raise TimelockReleaseError("cannot admit existing released plaintext") from exc
+    if (
+        len(plaintext) != receipt.plaintext_byte_count
+        or hashlib.sha256(plaintext).hexdigest() != receipt.plaintext_sha256
+    ):
+        raise TimelockReleaseError("existing released plaintext differs from its receipt")
+    return receipt
+
+
+def _recover_existing_release(
+    *,
+    release_root: Path,
+    plaintext_name: str,
+    receipt_name: str,
+    intent_bytes: bytes,
+    authority_validator: Callable[[TimelockDecryptionReceipt], None],
+) -> TimelockDecryptionReceipt | None:
+    stage = release_root.parent / label_release_staging_directory_name(release_root.name)
+    final_exists = os.path.lexists(release_root)
+    stage_exists = os.path.lexists(stage)
+    if final_exists and stage_exists:
+        raise TimelockReleaseError("label release has simultaneous staged and final transactions")
+    if final_exists:
+        entries = _release_directory_entries(
+            release_root,
+            label="label release directory",
+        )
+        expected_names = frozenset({plaintext_name, receipt_name})
+        committed_names = expected_names | {TIMELOCK_RELEASE_INTENT_FILENAME}
+        if entries not in {expected_names, committed_names}:
+            raise TimelockReleaseError(
+                "label release directory differs from a recoverable transaction"
+            )
+        receipt = _admit_release_pair(
+            root=release_root,
+            plaintext_name=plaintext_name,
+            receipt_name=receipt_name,
+            authority_validator=authority_validator,
+            allowed_extra_names=(
+                frozenset({TIMELOCK_RELEASE_INTENT_FILENAME})
+                if entries == committed_names
+                else frozenset()
+            ),
+        )
+        if entries == committed_names:
+            try:
+                observed_intent = read_secure_control_file(
+                    release_root / TIMELOCK_RELEASE_INTENT_FILENAME,
+                    label="committed timelock release intent",
+                )
+            except ArtifactIntegrityError as exc:
+                raise TimelockReleaseError(
+                    "cannot admit committed timelock release intent"
+                ) from exc
+            if _release_intent_stable_identity(observed_intent) != _release_intent_stable_identity(
+                intent_bytes
+            ):
+                raise TimelockReleaseError(
+                    "committed timelock release intent differs from current authority"
+                )
+        return receipt
+    if not stage_exists:
+        return None
+    expected_names = frozenset({plaintext_name, receipt_name})
+    entries = _release_directory_entries(stage, label="label release stage")
+    recoverable_names = expected_names | {TIMELOCK_RELEASE_INTENT_FILENAME}
+    if entries == recoverable_names:
+        try:
+            observed_intent = read_secure_control_file(
+                stage / TIMELOCK_RELEASE_INTENT_FILENAME,
+                label="timelock release intent",
+            )
+        except ArtifactIntegrityError as exc:
+            raise TimelockReleaseError("cannot admit staged timelock release intent") from exc
+        if _release_intent_stable_identity(observed_intent) != _release_intent_stable_identity(
+            intent_bytes
+        ):
+            raise TimelockReleaseError(
+                "staged timelock release intent differs from current authority"
+            )
+        receipt = _admit_release_pair(
+            root=stage,
+            plaintext_name=plaintext_name,
+            receipt_name=receipt_name,
+            authority_validator=authority_validator,
+            allowed_extra_names=frozenset({TIMELOCK_RELEASE_INTENT_FILENAME}),
+        )
+        _rename_release_stage(stage, release_root)
+        return receipt
+    raise TimelockReleaseError("label release has an ambiguous incomplete decryption transaction")
+
+
 def release_timelock_label(
     manifest: Mapping[str, Any],
     *,
     corpus_id: str,
     custody_seal: CustodySealReceipt,
     encryption_receipt: TimelockEncryptionReceipt,
-    verified_completion_anchor: VerifiedPredictionCompletionAnchor,
+    verified_post_online_completion: object,
     verified_suite_completion: object | None = None,
+    verified_phase_claim: object,
     ciphertext_path: str | Path,
     tle_binary_path: str | Path,
     plaintext_output_path: str | Path,
+    decryption_receipt_output_path: str | Path,
     trusted_drand_fetcher: DrandFetcher | None = None,
     trusted_tle_runner: TleDecryptRunner | None = None,
     utc_now_factory: UtcNowFactory | None = None,
@@ -976,10 +1660,6 @@ def release_timelock_label(
         raise TimelockReleaseError("custody_seal must be a CustodySealReceipt")
     if not isinstance(encryption_receipt, TimelockEncryptionReceipt):
         raise TimelockReleaseError("encryption_receipt must be a TimelockEncryptionReceipt")
-    if not isinstance(verified_completion_anchor, VerifiedPredictionCompletionAnchor):
-        raise TimelockReleaseError(
-            "verified_completion_anchor must come from external byte verification"
-        )
     if encryption_receipt.corpus_id != corpus_id:
         raise TimelockReleaseError("encryption receipt belongs to another corpus")
     try:
@@ -993,6 +1673,13 @@ def release_timelock_label(
         raise TimelockReleaseError(f"custody evidence failed verification: {exc}") from exc
 
     manifest_digest = manifest_sha256(manifest)
+    verified_completion_anchor, completion_aggregate = _require_post_online_completion(
+        verified_post_online_completion,
+        corpus_id=corpus_id,
+        manifest_digest=manifest_digest,
+        verified_phase_claim=verified_phase_claim,
+        verified_suite_completion=verified_suite_completion,
+    )
     anchor_record = verified_completion_anchor.record
     anchor_receipt = verified_completion_anchor.receipt
     if anchor_record.record_sha256 != anchor_receipt.anchor_record_sha256:
@@ -1033,6 +1720,11 @@ def release_timelock_label(
         corpus_id=corpus_id,
         online_result_receipt_sha256=(anchor_record.online_execution_result_receipt_sha256),
     )
+    phase_beacon = _require_phase_release_authority(
+        verified_phase_claim,
+        manifest_digest=manifest_digest,
+        run_receipt_sha256=anchor_record.run_receipt_sha256,
+    )
 
     if custody_seal.drand_round != encryption_receipt.drand_round:
         raise TimelockReleaseError("custody seal and encryption receipt name different rounds")
@@ -1048,10 +1740,26 @@ def release_timelock_label(
         raise TimelockReleaseError("custody seal binds another encryption receipt file")
 
     output = Path(plaintext_output_path)
+    receipt_output = Path(decryption_receipt_output_path)
     if not output.is_absolute():
         raise TimelockReleaseError("plaintext_output_path must be absolute")
-    if os.path.lexists(output):
-        raise TimelockReleaseError("plaintext output already exists; overwrite is forbidden")
+    if not receipt_output.is_absolute():
+        raise TimelockReleaseError("decryption_receipt_output_path must be absolute")
+    if output.parent != receipt_output.parent or output.name == receipt_output.name:
+        raise TimelockReleaseError(
+            "plaintext and decryption receipt must share one release directory"
+        )
+    bindings = [
+        binding
+        for binding in verified_phase_claim.contract.corpora
+        if binding.corpus_id == corpus_id
+    ]
+    if (
+        len(bindings) != 1
+        or output.as_uri() != bindings[0].output_uri
+        or receipt_output.name != TIMELOCK_DECRYPTION_RECEIPT_FILENAME
+    ):
+        raise TimelockReleaseError("release outputs differ from the exact claimed corpus binding")
     ciphertext_limit = _require_positive_integer("max_ciphertext_bytes", max_ciphertext_bytes)
     plaintext_limit = _require_positive_integer("max_plaintext_bytes", max_plaintext_bytes)
     timeout = _require_positive_integer("timeout_seconds", timeout_seconds)
@@ -1087,6 +1795,72 @@ def release_timelock_label(
     ):
         raise TimelockReleaseError("ciphertext bytes differ from the frozen evidence")
 
+    def validate_existing(receipt: TimelockDecryptionReceipt) -> None:
+        _require_existing_release_authority(
+            receipt,
+            manifest_digest=manifest_digest,
+            corpus_id=corpus_id,
+            custody_seal=custody_seal,
+            encryption_receipt=encryption_receipt,
+            completion_aggregate=completion_aggregate,
+            anchor_record=anchor_record,
+            anchor_receipt=anchor_receipt,
+            verified_phase_claim=verified_phase_claim,
+            phase_beacon=phase_beacon,
+            network=network,
+            chain_hash=chain_hash,
+            round_number=round_number,
+            tool_pin=tool_pin,
+            ciphertext_digest=ciphertext_digest,
+            ciphertext_byte_count=len(ciphertext),
+            plaintext_pin=plaintext_pin,
+        )
+
+    intent_bytes = _release_intent_bytes(
+        corpus_id=corpus_id,
+        manifest_digest=manifest_digest,
+        claim_state_sha256=verified_phase_claim.phase_claim_state_sha256,
+        claim_ledger_commit=verified_phase_claim.phase_claim_ledger_commit,
+        claim_contract_sha256=verified_phase_claim.contract.contract_sha256,
+        phase_beacon_identity_sha256=phase_beacon.beacon_identity_sha256,
+        live_execute_job_identity_sha256=(
+            verified_phase_claim.live_execute_job_receipt.job_identity_sha256
+        ),
+        phase_beacon_receipt=phase_beacon,
+        live_execute_job_receipt=verified_phase_claim.live_execute_job_receipt,
+        provider_identity_sha256=(verified_phase_claim.provider_identity.identity_sha256),
+        post_online_aggregate_file_sha256=completion_aggregate.file_sha256,
+        tle_binary_sha256=tool_pin,
+        ciphertext_sha256=ciphertext_digest,
+        drand_round=round_number,
+        plaintext_output_uri=output.as_uri(),
+        receipt_output_uri=receipt_output.as_uri(),
+    )
+    existing = _recover_existing_release(
+        release_root=output.parent,
+        plaintext_name=output.name,
+        receipt_name=receipt_output.name,
+        intent_bytes=intent_bytes,
+        authority_validator=validate_existing,
+    )
+    if existing is not None:
+        _require_suite_online_completion(
+            verified_suite_completion,
+            manifest_digest=manifest_digest,
+            corpus_id=corpus_id,
+            online_result_receipt_sha256=(anchor_record.online_execution_result_receipt_sha256),
+        )
+        _require_phase_release_authority(
+            verified_phase_claim,
+            manifest_digest=manifest_digest,
+            run_receipt_sha256=anchor_record.run_receipt_sha256,
+        )
+        return VerifiedTimelockRelease(
+            receipt=existing,
+            plaintext_path=output.resolve(strict=True),
+            _capability=_RELEASE_CAPABILITY,
+        )
+
     fetcher = _fetch_drand_bytes if trusted_drand_fetcher is None else trusted_drand_fetcher
     if not callable(fetcher):
         raise TimelockReleaseError("trusted_drand_fetcher must be callable")
@@ -1096,6 +1870,7 @@ def release_timelock_label(
         round_number=round_number,
         fetcher=fetcher,
     )
+    _require_beacon_evidence_matches_phase_authority(evidence, phase_beacon)
     anchor_time = _require_utc_timestamp(
         "external anchor anchored_at_utc", anchor_record.anchored_at_utc
     )
@@ -1116,6 +1891,23 @@ def release_timelock_label(
     runner = _run_pinned_tle_decrypt if trusted_tle_runner is None else trusted_tle_runner
     if not callable(runner):
         raise TimelockReleaseError("trusted_tle_runner must be callable")
+    _require_suite_online_completion(
+        verified_suite_completion,
+        manifest_digest=manifest_digest,
+        corpus_id=corpus_id,
+        online_result_receipt_sha256=(anchor_record.online_execution_result_receipt_sha256),
+    )
+    current_phase_beacon = _require_phase_release_authority(
+        verified_phase_claim,
+        manifest_digest=manifest_digest,
+        run_receipt_sha256=anchor_record.run_receipt_sha256,
+    )
+    if current_phase_beacon != phase_beacon:
+        raise TimelockReleaseError("provider label-release beacon changed before decryption")
+    _prepare_release_transaction(
+        output.parent,
+        intent_bytes=intent_bytes,
+    )
     try:
         plaintext = runner(
             binary,
@@ -1146,11 +1938,19 @@ def release_timelock_label(
         raise TimelockReleaseError(f"cannot revalidate tle binary: {exc}") from exc
     if not hmac.compare_digest(final_binary_digest, tool_pin):
         raise TimelockReleaseError("tle binary changed during decryption")
-    try:
-        write_exclusive_receipt_bytes(plaintext, output)
-    except ArtifactIntegrityError as exc:
-        raise TimelockReleaseError(f"cannot create plaintext output exclusively: {exc}") from exc
-
+    _require_suite_online_completion(
+        verified_suite_completion,
+        manifest_digest=manifest_digest,
+        corpus_id=corpus_id,
+        online_result_receipt_sha256=(anchor_record.online_execution_result_receipt_sha256),
+    )
+    current_phase_beacon = _require_phase_release_authority(
+        verified_phase_claim,
+        manifest_digest=manifest_digest,
+        run_receipt_sha256=anchor_record.run_receipt_sha256,
+    )
+    if current_phase_beacon != phase_beacon:
+        raise TimelockReleaseError("provider label-release beacon changed during decryption")
     receipt = TimelockDecryptionReceipt(
         manifest_sha256=manifest_digest,
         corpus_id=corpus_id,
@@ -1189,7 +1989,27 @@ def release_timelock_label(
         online_execution_result_receipt_sha256=(
             anchor_record.online_execution_result_receipt_sha256
         ),
+        post_online_completion_aggregate_file_sha256=(completion_aggregate.file_sha256),
+        label_release_claim_state_sha256=(verified_phase_claim.phase_claim_state_sha256),
+        label_release_claim_ledger_commit=(verified_phase_claim.phase_claim_ledger_commit),
+        label_release_phase_claim_contract_sha256=(verified_phase_claim.contract.contract_sha256),
+        label_release_phase_beacon_receipt_sha256=(phase_beacon.receipt_sha256),
+        label_release_live_execute_job_receipt_sha256=(
+            verified_phase_claim.live_execute_job_receipt.receipt_sha256
+        ),
+        label_release_provider_identity_sha256=(
+            verified_phase_claim.provider_identity.identity_sha256
+        ),
     )
+    _publish_release_pair(
+        plaintext=plaintext,
+        receipt=receipt,
+        plaintext_path=output,
+        receipt_path=receipt_output,
+        intent_bytes=intent_bytes,
+    )
+    if load_timelock_decryption_receipt(receipt_output) != receipt:
+        raise TimelockReleaseError("committed decryption receipt differs after atomic publication")
     return VerifiedTimelockRelease(
         receipt=receipt,
         plaintext_path=output.resolve(strict=True),

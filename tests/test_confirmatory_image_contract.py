@@ -171,6 +171,8 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert "--network=none" in dockerfile
     assert "source=examples/opa_compiled_masks_test.rego" in dockerfile
     assert "python -m fractal_ann_diagnostics.cli --help" in dockerfile
+    assert "fractal_ann_diagnostics.provider_phase_runtime" in dockerfile
+    assert "python -m fractal_ann_diagnostics.provider_phase_runtime --help" in dockerfile
     assert "uv pip check --python /opt/venv/bin/python" in dockerfile
     runtime_inventory_match = re.search(
         r"expected = (\{[^;\n]+\}); observed = ",

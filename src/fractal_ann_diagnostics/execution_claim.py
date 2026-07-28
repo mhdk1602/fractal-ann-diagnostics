@@ -18,6 +18,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
@@ -241,6 +242,9 @@ ACTIVATION_PHASE_OUTPUT_KEYS: Mapping[ProviderPhase, frozenset[str]] = {
     ),
     ANALYSIS_PHASE: frozenset(
         {
+            "analysis_execution_receipt_file_sha256",
+            "analysis_execution_receipt_path",
+            "analysis_execution_receipt_sha256",
             "analysis_result_path",
             "analysis_result_sha256",
             "five_corpora_analyzed",
@@ -2838,6 +2842,16 @@ class LiveExecuteJobReceipt:
     def receipt_sha256(self) -> str:
         return _sha256(_canonical_bytes(self.to_dict()))
 
+    @property
+    def job_identity_sha256(self) -> str:
+        """Hash the exact execute-job identity without its observation time."""
+
+        return _sha256(
+            _canonical_bytes(
+                {name: value for name, value in self.to_dict().items() if name != "verified_at_utc"}
+            )
+        )
+
 
 def _api_object(value: object, *, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or any(type(key) is not str for key in value):
@@ -3367,6 +3381,16 @@ class PhaseBeaconReceipt:
     def receipt_sha256(self) -> str:
         return _sha256(_canonical_bytes(self.to_dict()))
 
+    @property
+    def beacon_identity_sha256(self) -> str:
+        """Hash the verified beacon identity without its observation time."""
+
+        return _sha256(
+            _canonical_bytes(
+                {name: value for name, value in self.to_dict().items() if name != "verified_at_utc"}
+            )
+        )
+
     @classmethod
     def from_dict(cls, value: object) -> PhaseBeaconReceipt:
         return cls(
@@ -3857,6 +3881,9 @@ class VerifiedPhaseClaimCapability:
             raise ExecutionClaimError("fresh phase-claim revalidation failed") from exc
         if result is not None:
             raise ExecutionClaimError("phase-claim revalidator returned unexpected data")
+        age = time.monotonic_ns() - self._minted_monotonic_ns
+        if age < 0 or age > _MAX_CAPABILITY_AGE_NS:
+            raise ExecutionClaimError("phase-claim capability became stale during revalidation")
 
     def require_input(
         self,
@@ -4258,15 +4285,80 @@ def _append_github_outputs(path: Path, outputs: Mapping[str, str]) -> None:
         type(key) is not str or type(value) is not str for key, value in outputs.items()
     ):
         raise ExecutionClaimError("command outputs must be a string mapping")
+    lines: list[str] = []
+    for key in sorted(outputs, key=lambda item: item.encode("utf-8")):
+        value = outputs[key]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
+            raise ExecutionClaimError("GitHub output key is invalid")
+        if "\n" in value or "\r" in value:
+            raise ExecutionClaimError("single-line GitHub output contains a newline")
+        lines.append(f"{key}={value}\n")
+    encoded = "".join(lines).encode("utf-8")
+    if not encoded:
+        raise ExecutionClaimError("command outputs cannot be empty")
     try:
-        with path.open("a", encoding="utf-8", errors="strict", newline="\n") as stream:
-            for key in sorted(outputs, key=lambda item: item.encode("utf-8")):
-                value = outputs[key]
-                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
-                    raise ExecutionClaimError("GitHub output key is invalid")
-                if "\n" in value or "\r" in value:
-                    raise ExecutionClaimError("single-line GitHub output contains a newline")
-                stream.write(f"{key}={value}\n")
+        if os.path.lexists(path):
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                raise ExecutionClaimError("GitHub output path is not a regular file")
+            descriptor = os.open(
+                path,
+                os.O_WRONLY | os.O_APPEND | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                offset = 0
+                while offset < len(encoded):
+                    written = os.write(descriptor, encoded[offset:])
+                    if written <= 0:
+                        raise ExecutionClaimError("GitHub output append made no progress")
+                    offset += written
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            return
+
+        temporary_descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary = Path(temporary_name)
+        linked = False
+        try:
+            offset = 0
+            while offset < len(encoded):
+                written = os.write(temporary_descriptor, encoded[offset:])
+                if written <= 0:
+                    raise ExecutionClaimError("private GitHub output write made no progress")
+                offset += written
+            os.fsync(temporary_descriptor)
+            os.close(temporary_descriptor)
+            temporary_descriptor = -1
+            os.link(temporary, path, follow_symlinks=False)
+            linked = True
+            temporary.unlink()
+            parent_descriptor = os.open(
+                path.parent,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(parent_descriptor)
+            finally:
+                os.close(parent_descriptor)
+        finally:
+            if temporary_descriptor >= 0:
+                os.close(temporary_descriptor)
+            if temporary.exists():
+                temporary.unlink()
+            if not linked and os.path.lexists(path):
+                raise ExecutionClaimError(
+                    "private GitHub output target appeared during atomic publication"
+                )
+    except ExecutionClaimError:
+        raise
     except OSError as exc:
         raise ExecutionClaimError(f"cannot append GitHub outputs: {exc}") from exc
 

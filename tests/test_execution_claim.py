@@ -882,6 +882,38 @@ def test_label_release_capability_requires_later_beacon_and_fresh_claim() -> Non
         )
 
 
+def test_live_job_and_phase_beacon_identities_exclude_only_observation_time() -> None:
+    contract = _phase_contract("label-release")
+    provider = _phase_provider(contract)
+    live = _live_job(contract, provider)
+    later_live = replace(live, verified_at_utc="2023-11-14T22:18:20+00:00")
+    assert later_live.receipt_sha256 != live.receipt_sha256
+    assert later_live.job_identity_sha256 == live.job_identity_sha256
+    assert (
+        replace(later_live, execute_job_id=later_live.execute_job_id + 1).job_identity_sha256
+        != live.job_identity_sha256
+    )
+
+    beacon = verify_label_release_beacon(
+        contract,
+        beacon_bytes=b'{"round":101,"randomness":"synthetic"}',
+        phase_claim_state_sha256=_digest("label-claim-state"),
+        phase_claim_ledger_commit="6" * 40,
+        provider_identity=provider,
+        claim_attested_at_utc="2023-11-14T22:18:19+00:00",
+        live_execute_job_receipt=live,
+        verifier=_Verifier(),
+        verified_at_utc="2023-11-14T22:18:21+00:00",
+    )
+    later_beacon = replace(beacon, verified_at_utc="2023-11-14T22:18:22+00:00")
+    assert later_beacon.receipt_sha256 != beacon.receipt_sha256
+    assert later_beacon.beacon_identity_sha256 == beacon.beacon_identity_sha256
+    assert (
+        replace(later_beacon, signature=later_beacon.signature + "00").beacon_identity_sha256
+        != beacon.beacon_identity_sha256
+    )
+
+
 def test_analysis_capability_has_no_beacon_or_tle_rescue_path() -> None:
     contract = _phase_contract("analysis")
     provider = _phase_provider(contract)
@@ -1085,6 +1117,43 @@ def test_module_rejects_activation_without_claim_receipt(tmp_path: Path) -> None
     )
     assert result.returncode == 2
     assert "requires --claim-receipt" in result.stderr
+
+
+def test_private_github_output_is_atomically_published_and_existing_file_appends(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "attempt.github-output"
+
+    claim_module._append_github_outputs(target, {"zeta": "2", "alpha": "1"})
+    assert target.read_bytes() == b"alpha=1\nzeta=2\n"
+    assert not tuple(tmp_path.glob(".attempt.github-output.*.tmp"))
+
+    claim_module._append_github_outputs(target, {"omega": "3"})
+    assert target.read_bytes() == b"alpha=1\nzeta=2\nomega=3\n"
+
+
+def test_private_github_output_write_failure_never_exposes_a_partial_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "attempt.github-output"
+    real_write = claim_module.os.write
+    writes = 0
+
+    def interrupted_write(descriptor: int, encoded: bytes) -> int:
+        nonlocal writes
+        writes += 1
+        if writes == 1:
+            real_write(descriptor, encoded[:1])
+            raise OSError("simulated process interruption")
+        return real_write(descriptor, encoded)
+
+    monkeypatch.setattr(claim_module.os, "write", interrupted_write)
+    with pytest.raises(ExecutionClaimError, match="cannot append GitHub outputs"):
+        claim_module._append_github_outputs(target, {"alpha": "1", "omega": "3"})
+
+    assert not target.exists()
+    assert not tuple(tmp_path.glob(".attempt.github-output.*.tmp"))
 
 
 @pytest.mark.parametrize(

@@ -1643,6 +1643,23 @@ def _production_verify_prerequisites_command(
             raise ProviderWorkflowOrchestrationError(
                 "provider activation claim inventory digest is malformed"
             )
+        completion_anchor_token_fd: int | None = None
+        raw_completion_anchor_token_fd = os.environ.get("COMPLETION_ANCHOR_TOKEN_FD")
+        if phase == "label-release":
+            try:
+                completion_anchor_token_fd = int(raw_completion_anchor_token_fd or "")
+            except ValueError as exc:
+                raise ProviderWorkflowOrchestrationError(
+                    "label-release activation requires a Zenodo token file descriptor"
+                ) from exc
+            if completion_anchor_token_fd < 0:
+                raise ProviderWorkflowOrchestrationError(
+                    "label-release activation requires a Zenodo token file descriptor"
+                )
+        elif raw_completion_anchor_token_fd is not None:
+            raise ProviderWorkflowOrchestrationError(
+                "only label-release activation accepts a Zenodo token file descriptor"
+            )
         try:
             from .github_artifact_transport import UrllibGitHubArtifactReadApi
             from .github_state_attestation import GhApiClient
@@ -1663,6 +1680,7 @@ def _production_verify_prerequisites_command(
                 output_dir=output_dir,
                 github_api=api,
                 artifact_api=UrllibGitHubArtifactReadApi(github_token),
+                completion_anchor_token_fd=completion_anchor_token_fd,
             )
             return activated.output_fields()
         except ProviderWorkflowOrchestrationError:
@@ -2393,6 +2411,7 @@ def _load_phase_execution_receipt(
     from .artifact_integrity import digest_directory_tree
     from .provider_phase_runtime import (
         PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME,
+        LabelReleaseOutputAuthority,
         ProviderDriverOutput,
         ProviderPhaseExecutionReceipt,
     )
@@ -2425,10 +2444,27 @@ def _load_phase_execution_receipt(
             raise ProviderWorkflowOrchestrationError(
                 "provider driver output entries must be an array"
             )
+        raw_label_authority = output_row["label_release_authority"]
+        if raw_label_authority is not None and not isinstance(
+            raw_label_authority,
+            Mapping,
+        ):
+            raise ProviderWorkflowOrchestrationError(
+                "label-release output authority must be an object or null"
+            )
         outputs.append(
             ProviderDriverOutput(
-                **{key: value for key, value in output_row.items() if key != "output_entries"},
+                **{
+                    key: value
+                    for key, value in output_row.items()
+                    if key not in {"label_release_authority", "output_entries"}
+                },
                 output_entries=tuple(entries),
+                label_release_authority=(
+                    None
+                    if raw_label_authority is None
+                    else LabelReleaseOutputAuthority.from_dict(raw_label_authority)
+                ),
             )
         )
     receipt = ProviderPhaseExecutionReceipt(
@@ -2470,6 +2506,11 @@ def _load_phase_execution_receipt(
             )
         try:
             if phase == "analysis":
+                from .offline_analysis_contract import (
+                    OfflineAnalysisContractError,
+                    load_offline_analysis_execution_receipt,
+                )
+
                 expected_entries = _analysis_store_entries(
                     recovered.predecessor.state.manifest_sha256
                 )
@@ -2485,6 +2526,55 @@ def _load_phase_execution_receipt(
                 ):
                     raise ProviderWorkflowOrchestrationError(
                         "analysis results store contains pre-existing or extraneous evidence"
+                    )
+                assert output.analysis_execution_receipt_uri is not None
+                assert output.analysis_execution_receipt_sha256 is not None
+                assert output.analysis_execution_receipt_file_sha256 is not None
+                execution_path = _canonical_file_uri(
+                    output.analysis_execution_receipt_uri,
+                    label="offline analysis execution receipt URI",
+                )[1]
+                try:
+                    offline_execution = load_offline_analysis_execution_receipt(
+                        execution_path,
+                        expected_receipt_sha256=(output.analysis_execution_receipt_sha256),
+                        expected_file_sha256=(output.analysis_execution_receipt_file_sha256),
+                    )
+                except OfflineAnalysisContractError as exc:
+                    raise ProviderWorkflowOrchestrationError(
+                        f"offline analysis execution receipt is invalid: {exc}"
+                    ) from exc
+                contract = recovered.contract
+                if (
+                    not isinstance(contract, PhaseClaimContract)
+                    or offline_execution.suite_attempt_id
+                    != recovered.predecessor.state.suite_attempt_id
+                    or offline_execution.manifest_sha256
+                    != recovered.predecessor.state.manifest_sha256
+                    or offline_execution.run_receipt_sha256
+                    != recovered.predecessor.state.run_receipt_sha256
+                    or offline_execution.provider_state_record_sha256
+                    != recovered.predecessor.state.record_sha256
+                    or offline_execution.provider_ledger_commit
+                    != recovered.predecessor.ledger_commit
+                    or offline_execution.phase_claim_contract_sha256 != contract.contract_sha256
+                    or offline_execution.phase_claim_state_sha256
+                    != recovered.predecessor.state.record_sha256
+                    or offline_execution.phase_claim_ledger_commit
+                    != recovered.predecessor.ledger_commit
+                    or offline_execution.provider_identity_sha256
+                    != recovered.provider_identity.identity_sha256
+                    or offline_execution.c1_commit != contract.c1_commit
+                    or Path(
+                        _canonical_file_uri(
+                            offline_execution.result_uri,
+                            label="offline execution result URI",
+                        )[1]
+                    ).parent
+                    != expected_root
+                ):
+                    raise ProviderWorkflowOrchestrationError(
+                        "offline execution receipt differs from fresh analysis authority"
                     )
             elif phase == "label-release":
                 contract = recovered.contract
@@ -2761,8 +2851,18 @@ def _label_completion_candidate(
     recovered: _RecoveredProviderClaim,
     evidence_root: Path,
     live_execute_job_receipt: Any,
+    phase_execution_receipt: Any,
 ) -> _CompletionCandidate:
     from .drand_beacon import QuicknetExecutionBeaconVerifier
+    from .execution_claim import verify_live_execute_job
+    from .post_online_completion import (
+        POST_ONLINE_COMPLETION_AGGREGATE_FILENAME,
+        revalidate_post_online_completion_authority,
+    )
+    from .provider_phase_runtime import (
+        LabelReleaseOutputAuthority,
+        ProviderPhaseExecutionReceipt,
+    )
     from .suite_attempt import admit_label_release_claim_beacon, complete_label_release
 
     contract = recovered.contract
@@ -2770,22 +2870,64 @@ def _label_completion_candidate(
         raise ProviderWorkflowOrchestrationError(
             "label completion requires the typed beacon-bound phase claim"
         )
+    if not isinstance(phase_execution_receipt, ProviderPhaseExecutionReceipt):
+        raise ProviderWorkflowOrchestrationError(
+            "label completion lacks its typed phase execution receipt"
+        )
+    authorities = {
+        output.corpus_id: output.label_release_authority
+        for output in phase_execution_receipt.outputs
+        if isinstance(output.label_release_authority, LabelReleaseOutputAuthority)
+    }
+    if set(authorities) != set(FIXED_CORPORA):
+        raise ProviderWorkflowOrchestrationError(
+            "label phase receipt lacks five action authorities"
+        )
     verifier = QuicknetExecutionBeaconVerifier()
-    beacon_bytes = verifier.fetch(contract.label_release_beacon)
+    last_observation = datetime.fromisoformat(live_execute_job_receipt.verified_at_utc)
+    aggregate_file_sha256: str | None = None
+    aggregate_path: Path | None = None
 
     def fresh_capability() -> Any:
-        admitted_at_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        fresh_predecessor = authority.recover().predecessor
-        return admit_label_release_claim_beacon(
-            recovered.predecessor,
+        nonlocal aggregate_file_sha256, aggregate_path, last_observation
+        observed_at = datetime.now(timezone.utc)
+        while observed_at <= last_observation:
+            observed_at = datetime.now(timezone.utc)
+        admitted_at_utc = observed_at.isoformat()
+        last_observation = observed_at
+        fresh_recovered = authority.recover()
+        fresh_live = verify_live_execute_job(
+            api=authority.api,
+            contract=fresh_recovered.contract,
+            provider_identity=fresh_recovered.provider_identity,
+            verified_at_utc=admitted_at_utc,
+        )
+        beacon_bytes = verifier.fetch(contract.label_release_beacon)
+        capability = admit_label_release_claim_beacon(
+            fresh_recovered.predecessor,
             beacon_bytes=beacon_bytes,
             beacon_verifier=verifier,
-            live_execute_job_receipt=live_execute_job_receipt,
+            live_execute_job_receipt=fresh_live,
             verified_at_utc=admitted_at_utc,
-            fresh_state_revalidator=lambda: fresh_predecessor,
+            fresh_state_revalidator=lambda: authority.recover().predecessor,
         )
+        completion = revalidate_post_online_completion_authority(
+            fresh_recovered.predecessor,
+            capability,
+        )
+        if (
+            aggregate_file_sha256 is not None
+            and completion.aggregate.file_sha256 != aggregate_file_sha256
+        ):
+            raise ProviderWorkflowOrchestrationError(
+                "post-online completion aggregate changed during label closure"
+            )
+        aggregate_file_sha256 = completion.aggregate.file_sha256
+        aggregate_path = completion.completion_root / POST_ONLINE_COMPLETION_AGGREGATE_FILENAME
+        return capability
 
     capability = fresh_capability()
+    assert aggregate_file_sha256 is not None
     receipts: dict[str, Path] = {}
     plaintexts: dict[str, Path] = {}
     for binding in contract.corpora:
@@ -2808,10 +2950,16 @@ def _label_completion_candidate(
         manifest=recovered.manifest,
         decryption_receipt_paths=receipts,
         plaintext_paths=plaintexts,
+        post_online_completion_aggregate_file_sha256=aggregate_file_sha256,
+        label_release_authorities=authorities,
     )
+    assert aggregate_path is not None
     return _CompletionCandidate(
         state=candidate,
-        supporting_files=(("frozen-study-manifest", recovered.manifest_path),),
+        supporting_files=(
+            ("frozen-study-manifest", recovered.manifest_path),
+            ("post-online-completion-aggregate", aggregate_path),
+        ),
     )
 
 
@@ -2820,6 +2968,7 @@ def _analysis_completion_candidate(
     authority: _ProviderClaimAuthority,
     recovered: _RecoveredProviderClaim,
     live_execute_job_receipt: Any,
+    phase_execution_receipt: Any,
 ) -> _CompletionCandidate:
     from .confirmatory_execution import load_confirmatory_analysis_attempt_receipt
     from .suite_attempt import admit_analysis_claim, complete_confirmatory_analysis
@@ -2840,16 +2989,40 @@ def _analysis_completion_candidate(
     receipt_path = results_store / f"{manifest_digest}.confirmatory-result-receipt.json"
     result_path = results_store / f"{manifest_digest}.confirmatory-result.json"
     attempt = load_confirmatory_analysis_attempt_receipt(attempt_path)
+    if (
+        len(phase_execution_receipt.outputs) != 1
+        or phase_execution_receipt.outputs[0].corpus_id != "all-five"
+    ):
+        raise ProviderWorkflowOrchestrationError(
+            "analysis phase receipt lacks its sole execution output"
+        )
+    execution_output = phase_execution_receipt.outputs[0]
+    if (
+        execution_output.analysis_execution_receipt_uri is None
+        or execution_output.analysis_execution_receipt_sha256 is None
+        or execution_output.analysis_execution_receipt_file_sha256 is None
+    ):
+        raise ProviderWorkflowOrchestrationError(
+            "analysis phase receipt discarded offline execution evidence"
+        )
+    execution_path = _canonical_file_uri(
+        execution_output.analysis_execution_receipt_uri,
+        label="offline analysis execution receipt URI",
+    )[1]
     candidate = complete_confirmatory_analysis(
         recovered.predecessor,
         phase_claim=capability,
         confirmatory_input_artifact_sha256=attempt.confirmatory_input_artifact_sha256,
+        execution_receipt_path=execution_path,
+        execution_receipt_sha256=(execution_output.analysis_execution_receipt_sha256),
+        execution_receipt_file_sha256=(execution_output.analysis_execution_receipt_file_sha256),
         attempt_receipt_path=attempt_path,
         result_receipt_path=receipt_path,
         final_result_path=result_path,
     )
     supporting: list[tuple[str, Path]] = [
         ("frozen-study-manifest", recovered.manifest_path),
+        ("offline-analysis-execution-receipt", execution_path),
         ("confirmatory-analysis-attempt", attempt_path),
         ("confirmatory-analysis-result-receipt", receipt_path),
         ("confirmatory-analysis-result", result_path),
@@ -2873,7 +3046,7 @@ def _derive_provider_completion_candidate(
     live_execute_job_receipt: Any,
     verified_at_utc: str,
 ) -> _CompletionCandidate:
-    _load_phase_execution_receipt(
+    phase_execution_receipt = _load_phase_execution_receipt(
         phase=authority.phase,
         suite_attempt_id=authority.suite_attempt_id,
         evidence_root=evidence_root,
@@ -2893,12 +3066,14 @@ def _derive_provider_completion_candidate(
             recovered=recovered,
             evidence_root=evidence_root,
             live_execute_job_receipt=live_execute_job_receipt,
+            phase_execution_receipt=phase_execution_receipt,
         )
     else:
         result = _analysis_completion_candidate(
             authority=authority,
             recovered=recovered,
             live_execute_job_receipt=live_execute_job_receipt,
+            phase_execution_receipt=phase_execution_receipt,
         )
     expected_state, expected_sequence = _COMPLETED[authority.phase]
     if (

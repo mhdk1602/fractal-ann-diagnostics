@@ -312,6 +312,9 @@ def _analysis_execution_fixture(
     import fractal_ann_diagnostics.provider_workflow_orchestration as orchestration
     from fractal_ann_diagnostics.artifact_integrity import digest_directory_tree
     from fractal_ann_diagnostics.execution_claim import PhaseClaimContract
+    from fractal_ann_diagnostics.offline_analysis_contract import (
+        OfflineAnalysisExecutionReceipt,
+    )
     from fractal_ann_diagnostics.provider_phase_runtime import (
         PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME,
         ProviderDriverOutput,
@@ -339,12 +342,86 @@ def _analysis_execution_fixture(
     plan_sha256 = _digest("analysis-provider-plan")
     plan_file_sha256 = _digest("analysis-provider-plan-file")
     claim_file_sha256 = _digest("analysis-claim-file")
+    provider_state_sha256 = _digest("analysis-provider-state")
+    provider_ledger_commit = "e" * 40
+    phase_contract_sha256 = _digest("analysis-phase-contract")
+    provider_identity_sha256 = _digest("analysis-provider-identity")
+    run_receipt_sha256 = _digest("analysis-run-receipt")
+    package_root = root / "analysis-package"
+    package_root.mkdir(mode=0o700)
+    admission_name = f"{manifest_digest}.offline-analysis-admission.json"
+    package_entries = tuple(
+        sorted(
+            (
+                admission_name,
+                "confirmatory-input.json",
+                "confirmatory-input-receipt.json",
+                "h1-model.json",
+                "h2-model.json",
+                "offline-input-bundle.json",
+            ),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    oci_index_digest = f"sha256:{_digest('analysis-oci-index')}"
+    execution = OfflineAnalysisExecutionReceipt(
+        suite_attempt_id=suite,
+        manifest_sha256=manifest_digest,
+        run_receipt_sha256=run_receipt_sha256,
+        provider_state_record_sha256=provider_state_sha256,
+        provider_ledger_commit=provider_ledger_commit,
+        phase_claim_contract_sha256=phase_contract_sha256,
+        phase_claim_state_sha256=provider_state_sha256,
+        phase_claim_ledger_commit=provider_ledger_commit,
+        provider_identity_sha256=provider_identity_sha256,
+        c1_commit="b" * 40,
+        admission_uri=(package_root / admission_name).as_uri(),
+        admission_sha256=_digest("analysis-admission"),
+        admission_file_sha256=_digest("analysis-admission-file"),
+        package_root_uri=package_root.as_uri(),
+        package_tree_before_sha256=_digest("analysis-package-tree"),
+        package_tree_after_sha256=_digest("analysis-package-tree"),
+        package_entries=package_entries,
+        docker_executable_sha256=_digest("docker-executable"),
+        docker_pull_argv_sha256=_digest("docker-pull"),
+        docker_create_argv_sha256=_digest("docker-create"),
+        docker_start_argv_sha256=_digest("docker-start"),
+        docker_remove_argv_sha256=_digest("docker-remove"),
+        container_name=f"fractal-analysis-{suite}",
+        runtime_image=f"ghcr.io/example/analysis@{oci_index_digest}",
+        runtime_platform="linux/amd64",
+        oci_index_digest=oci_index_digest,
+        oci_platform_manifest_digest=f"sha256:{_digest('analysis-oci-platform')}",
+        attempt_uri=(bound_root / included_entries[0]).as_uri(),
+        attempt_receipt_sha256=_digest("analysis-attempt"),
+        attempt_file_sha256=_digest("analysis-attempt-file"),
+        result_receipt_uri=(bound_root / included_entries[3]).as_uri(),
+        result_receipt_sha256=_digest("analysis-result-receipt"),
+        result_receipt_file_sha256=_digest("analysis-result-receipt-file"),
+        result_uri=(bound_root / included_entries[4]).as_uri(),
+        result_artifact_sha256=_digest("analysis-result"),
+        result_file_sha256=_digest("analysis-result-file"),
+        results_tree_sha256=tree.sha256,
+        results_entries=included_entries,
+        completion_state_record_sha256=provider_state_sha256,
+        completion_ledger_commit=provider_ledger_commit,
+        container_absent_after_execution=True,
+    )
+    execution_path = (
+        package_root.parent / f"{manifest_digest}.offline-analysis-execution-receipt.json"
+    )
+    execution_path.write_bytes(execution.canonical_bytes() + b"\n")
     output = ProviderDriverOutput(
         corpus_id="all-five",
         driver_id="confirmatory-analysis-v1",
         output_root=str(bound_root),
         output_tree_sha256=tree.sha256,
         output_entries=tree.entries,
+        analysis_execution_receipt_uri=execution_path.as_uri(),
+        analysis_execution_receipt_sha256=execution.receipt_sha256,
+        analysis_execution_receipt_file_sha256=_digest(
+            (execution.canonical_bytes() + b"\n").decode("ascii")
+        ),
     )
     receipt = ProviderPhaseExecutionReceipt(
         phase="analysis",
@@ -360,8 +437,14 @@ def _analysis_execution_fixture(
         receipt.canonical_file_bytes()
     )
 
-    contract = object.__new__(PhaseClaimContract)
+    class _AnalysisPhaseClaimContract(PhaseClaimContract):
+        @property
+        def contract_sha256(self) -> str:
+            return phase_contract_sha256
+
+    contract = object.__new__(_AnalysisPhaseClaimContract)
     object.__setattr__(contract, "phase", "analysis")
+    object.__setattr__(contract, "c1_commit", "b" * 40)
     object.__setattr__(
         contract,
         "corpora",
@@ -379,8 +462,15 @@ def _analysis_execution_fixture(
         ),
         provider_plan=SimpleNamespace(file_sha256=plan_file_sha256),
         predecessor=SimpleNamespace(
-            state=SimpleNamespace(manifest_sha256=manifest_digest),
+            state=SimpleNamespace(
+                suite_attempt_id=suite,
+                manifest_sha256=manifest_digest,
+                run_receipt_sha256=run_receipt_sha256,
+                record_sha256=provider_state_sha256,
+            ),
+            ledger_commit=provider_ledger_commit,
         ),
+        provider_identity=SimpleNamespace(identity_sha256=provider_identity_sha256),
     )
     return recovered, evidence_root, suite
 
@@ -935,6 +1025,7 @@ def test_activation_command_uses_only_fixed_claim_artifact_environment(
         "output_dir": root / "activation",
         "github_api": api,
         "artifact_api": artifact_api,
+        "completion_anchor_token_fd": None,
     }
 
 
@@ -976,6 +1067,49 @@ def test_activation_command_rejects_missing_or_malformed_fixed_environment(
     with pytest.raises(ProviderWorkflowOrchestrationError, match=error):
         execute_verify_prerequisites_command(
             phase="online",
+            suite_attempt_id=suite_attempt_id(_digest("manifest")),
+            output_dir=root / "activation",
+            claim_receipt_path=claim,
+            activate_and_execute=True,
+        )
+
+
+def test_label_activation_requires_the_inherited_completion_anchor_fd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fractal_ann_diagnostics.provider_workflow_orchestration as orchestration
+
+    root = tmp_path.resolve()
+    context = ProviderWorkflowContext.from_environment(
+        "label-release",
+        _environment(phase="label-release", job="execute"),
+    )
+    claim = root / "claim-receipt.json"
+    claim.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        orchestration.ProviderWorkflowContext,
+        "from_environment",
+        lambda phase: context,
+    )
+    monkeypatch.setenv("GH_TOKEN", "ephemeral-test-token")
+    monkeypatch.setenv("CLAIM_ARTIFACT_ID", "731")
+    monkeypatch.setenv(
+        "CLAIM_ARTIFACT_DIGEST",
+        f"sha256:{_digest('claim-archive')}",
+    )
+    monkeypatch.setenv(
+        "CLAIM_PACKAGE_INVENTORY_SHA256",
+        _digest("claim-inventory"),
+    )
+    monkeypatch.delenv("COMPLETION_ANCHOR_TOKEN_FD", raising=False)
+
+    with pytest.raises(
+        ProviderWorkflowOrchestrationError,
+        match="Zenodo token file descriptor",
+    ):
+        execute_verify_prerequisites_command(
+            phase="label-release",
             suite_attempt_id=suite_attempt_id(_digest("manifest")),
             output_dir=root / "activation",
             claim_receipt_path=claim,

@@ -6,6 +6,7 @@ import io
 import json
 import re
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -534,6 +535,61 @@ def test_rejects_self_consistent_artifact_state_substitution(
 
     with pytest.raises(ProviderStateTransportError, match="state bytes differ"):
         _run(tmp_path, monkeypatch, rows_mutator=mutate)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("subject", "subject name"),
+        ("predicate", "ledger predicate"),
+    ),
+)
+def test_rejects_reclosed_bundle_substitution_through_real_github_verifier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    def mutate(rows: dict[str, bytes]) -> None:
+        bundle = json.loads(rows["000.sigstore.bundle.json"])
+        statement = json.loads(base64.b64decode(bundle["dsseEnvelope"]["payload"]))
+        if mutation == "subject":
+            statement["subject"][0]["name"] = "caller-selected.state.json"
+        else:
+            statement["predicate"]["ledger"]["commit_oid"] = "f" * 40
+        bundle["dsseEnvelope"]["payload"] = base64.b64encode(
+            json.dumps(statement, separators=(",", ":"), sort_keys=True).encode()
+        ).decode()
+        bundle_bytes = json.dumps(
+            bundle,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        evidence = SuiteAttestationEvidence.from_dict(json.loads(rows["000.attestation.json"]))
+        evidence = replace(
+            evidence,
+            bundle_sha256=hashlib.sha256(bundle_bytes).hexdigest(),
+            bundle_byte_count=len(bundle_bytes),
+        )
+        rows["000.sigstore.bundle.json"] = bundle_bytes
+        rows["000.attestation.json"] = evidence.canonical_bytes() + b"\n"
+
+    calls: list[int] = []
+    actual_verify = state_attestation_module.GitHubSuiteEvidenceVerifier.verify
+
+    def verify(self: object, **kwargs: object) -> object:
+        calls.append(1)
+        return actual_verify(self, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        state_attestation_module.GitHubSuiteEvidenceVerifier,
+        "verify",
+        verify,
+    )
+
+    with pytest.raises(state_attestation_module.SuiteAttemptError, match=message):
+        _run(tmp_path, monkeypatch, rows_mutator=mutate)
+    assert calls == [1]
 
 
 def test_rejects_control_substitution_even_when_sha256sums_is_reclosed(

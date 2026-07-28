@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import stat
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,7 +28,11 @@ from .confirmatory_input_operator import (
     ConfirmatoryInputOperatorConfig,
     CorpusEvidenceLocation,
 )
-from .drand_beacon import DrandReadApi, QuicknetExecutionBeaconVerifier
+from .drand_beacon import (
+    DrandBeaconError,
+    DrandReadApi,
+    QuicknetExecutionBeaconVerifier,
+)
 from .execution_claim import (
     ACTIVATION_COMMON_OUTPUT_KEYS,
     ACTIVATION_PHASE_OUTPUT_KEYS,
@@ -47,7 +52,14 @@ from .github_artifact_transport import (
     GitHubArtifactReadApi,
     derive_and_verify_fixed_claim_artifact,
 )
+from .offline_analysis_contract import (
+    OfflineAnalysisContractError,
+    OfflineAnalysisExecutionReceipt,
+    load_offline_analysis_execution_receipt,
+)
 from .production_controls import (
+    ProductionControlFinalizationReceipt,
+    ProductionControlFinalizationRequest,
     load_production_control_finalization_receipt,
     load_production_control_finalization_request,
 )
@@ -62,7 +74,10 @@ from .provider_phase_runtime import (
     OnlineSealedLaunchDriverControl,
     ProviderDriverRequest,
     ProviderPhaseExecutionReceipt,
+    ProviderPhaseRuntimeError,
     ProviderPhaseRuntimeRequest,
+    admit_analysis_results_store,
+    admit_label_release_phase_root,
     execute_provider_phase_request,
     write_provider_phase_runtime_request,
 )
@@ -127,6 +142,17 @@ class ProviderActivationResult:
         return dict(self.outputs)
 
 
+@dataclass(frozen=True)
+class _OpenedProductionControl:
+    opened: SuiteOpenBindings
+    finalization_receipt_path: Path
+    finalization_request_path: Path
+    finalization_receipt: ProductionControlFinalizationReceipt
+    finalization_request: ProductionControlFinalizationRequest
+    suite_namespace: Path
+    completion_root: Path
+
+
 def _canonical_file_bytes(value: object) -> bytes:
     return (
         json.dumps(
@@ -172,7 +198,12 @@ def _new_private_directory(path: Path, *, label: str) -> Path:
     return path
 
 
-def _admit_empty_private_directory(path: Path, *, label: str) -> Path:
+def _admit_empty_private_directory(
+    path: Path,
+    *,
+    label: str,
+    allowed_entries: frozenset[str] = frozenset(),
+) -> Path:
     if not path.is_absolute():
         raise ProviderActivationError(f"{label} must be one absolute directory")
     if path.is_symlink():
@@ -191,7 +222,7 @@ def _admit_empty_private_directory(path: Path, *, label: str) -> Path:
         or stat.S_ISLNK(metadata.st_mode)
         or stat.S_IMODE(metadata.st_mode) & 0o022
         or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
-        or entries
+        or not {entry.name for entry in entries}.issubset(allowed_entries)
     ):
         raise ProviderActivationError(f"{label} must be one controlled empty directory")
     return path
@@ -388,12 +419,13 @@ def _manifest_artifact(
     return _uri_path(rows[0]["uri"], label=f"{role} artifact")
 
 
-def _online_controls(
+def _opened_production_control(
     claimed: VerifiedProviderPredecessor,
-) -> dict[str, OnlineSealedLaunchDriverControl]:
-    opened = claimed.records[0].payload
+) -> _OpenedProductionControl:
+    opened_record = claimed.records[0]
+    opened = opened_record.payload
     if not isinstance(opened, SuiteOpenBindings):
-        raise ProviderActivationError("provider claim lacks OPENED runtime plans")
+        raise ProviderActivationError("provider claim lacks OPENED production authority")
     finalization_receipt_path = _uri_path(
         opened.production_finalization_receipt_uri,
         label="production finalization receipt",
@@ -407,8 +439,33 @@ def _online_controls(
         finalization_request_path,
         expected_sha256=finalization_receipt.finalization_request_sha256,
     )
+    suite_namespace = Path(finalization_receipt.canonical_suite_namespace)
+    if (
+        finalization_receipt.finalization_request_sha256
+        != opened.production_finalization_request_sha256
+        or finalization_receipt.suite_attempt_id != opened_record.suite_attempt_id
+        or finalization_receipt.manifest_sha256 != opened_record.manifest_sha256
+        or suite_namespace.as_uri() != opened_record.namespace_uri
+    ):
+        raise ProviderActivationError(
+            "OPENED production finalization differs from the provider state identity"
+        )
+    return _OpenedProductionControl(
+        opened=opened,
+        finalization_receipt_path=finalization_receipt_path,
+        finalization_request_path=finalization_request_path,
+        finalization_receipt=finalization_receipt,
+        finalization_request=finalization_request,
+        suite_namespace=suite_namespace,
+        completion_root=suite_namespace / "completion",
+    )
+
+
+def _online_controls(
+    production: _OpenedProductionControl,
+) -> dict[str, OnlineSealedLaunchDriverControl]:
     result: dict[str, OnlineSealedLaunchDriverControl] = {}
-    for binding in opened.runtime_attestation_plans:
+    for binding in production.opened.runtime_attestation_plans:
         contract_path = _uri_path(
             binding.sealed_launch_contract_uri, label="sealed launch contract"
         )
@@ -420,14 +477,14 @@ def _online_controls(
         ):
             raise ProviderActivationError("sealed launch contract differs from OPENED state")
         launcher_root = contract_path.parent
-        runtime_root = finalization_request.runtime_evidence_root / binding.corpus_id
+        runtime_root = production.finalization_request.runtime_evidence_root / binding.corpus_id
         result[binding.corpus_id] = OnlineSealedLaunchDriverControl(
             preflight_contract_path=str(launcher_root / "preflight-launch-contract.json"),
             preflight_receipt_path=str(runtime_root / "runtime-preflight-receipt.json"),
             transition_receipt_path=str(runtime_root / "runtime-plan-transition-receipt.json"),
             instantiation_receipt_path=str(launcher_root / "plan-instantiation-receipt.json"),
-            finalization_request_path=str(finalization_request_path),
-            finalization_receipt_path=str(finalization_receipt_path),
+            finalization_request_path=str(production.finalization_request_path),
+            finalization_receipt_path=str(production.finalization_receipt_path),
             sealed_contract_path=str(contract_path),
             volume_receipt_path=str(
                 launcher_root
@@ -445,13 +502,12 @@ def _label_control(
     *,
     corpus_id: str,
     contract: PhaseClaimContract,
-    plan: ProviderPhasePlan,
+    production: _OpenedProductionControl,
     manifest_path: Path,
     manifest: Mapping[str, Any],
     output_root: Path,
 ) -> LabelReleaseDriverControl:
     binding = next(row for row in contract.corpora if row.corpus_id == corpus_id)
-    completion_root = Path(plan.host_tools.controlled_root) / "completion"
     plaintext = _uri_path(binding.output_uri, label="label output")
     return LabelReleaseDriverControl(
         manifest_path=str(manifest_path),
@@ -459,12 +515,16 @@ def _label_control(
         encryption_receipt_path=str(
             _uri_path(binding.supporting_input_uri, label="encryption receipt")
         ),
-        completion_receipt_path=str(completion_root / f"{corpus_id}-completion.json"),
-        completion_anchor_record_path=str(completion_root / f"{corpus_id}-anchor-record.json"),
-        completion_anchor_receipt_path=str(completion_root / f"{corpus_id}-anchor-receipt.json"),
-        suite_namespace=str(
-            _uri_path(contract.corpora[0].output_uri, label="label output").parents[2]
+        completion_receipt_path=str(
+            production.completion_root / f"{corpus_id}-prediction-completion.json"
         ),
+        completion_anchor_record_path=str(
+            production.completion_root / f"{corpus_id}-prediction-completion-anchor.json"
+        ),
+        completion_anchor_receipt_path=str(
+            production.completion_root / f"{corpus_id}-prediction-completion-anchor-receipt.json"
+        ),
+        suite_namespace=str(production.suite_namespace),
         ciphertext_path=str(_uri_path(binding.input_uri, label="label ciphertext")),
         tle_binary_path=str(_manifest_artifact(manifest, role="timelock-tool")),
         plaintext_output_path=str(plaintext),
@@ -479,24 +539,12 @@ def _label_control_bytes(control: LabelReleaseDriverControl) -> bytes:
 
 
 def _analysis_control(
-    *, claimed: VerifiedProviderPredecessor, manifest_path: Path, manifest: Mapping[str, Any]
+    *,
+    claimed: VerifiedProviderPredecessor,
+    production: _OpenedProductionControl,
+    manifest_path: Path,
+    manifest: Mapping[str, Any],
 ) -> ConfirmatoryInputOperatorConfig:
-    opened = claimed.records[0].payload
-    if not isinstance(opened, SuiteOpenBindings):
-        raise ProviderActivationError("analysis claim lacks OPENED production closure")
-    finalization_path = _uri_path(
-        opened.production_finalization_receipt_uri,
-        label="production finalization receipt",
-    )
-    finalization = load_production_control_finalization_receipt(
-        finalization_path,
-        expected_sha256=opened.production_finalization_receipt_file_sha256,
-    )
-    request_path = finalization_path.with_name("finalization-request.json")
-    request = load_production_control_finalization_request(
-        request_path,
-        expected_sha256=finalization.finalization_request_sha256,
-    )
     labels = next(
         (record.payload for record in claimed.records if record.state == "LABELS_RELEASED"),
         None,
@@ -512,18 +560,18 @@ def _analysis_control(
     evidence = []
     for corpus_id in sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8")):
         online_root = _uri_path(by_online[corpus_id].output_uri, label="online output")
-        completion_root = Path(finalization.canonical_suite_namespace) / "completion"
         evidence.append(
             CorpusEvidenceLocation(
                 corpus_id=corpus_id,
                 prediction_completion_receipt_uri=(
-                    completion_root / f"{corpus_id}-completion.json"
+                    production.completion_root / f"{corpus_id}-prediction-completion.json"
                 ).as_uri(),
                 prediction_completion_anchor_record_uri=(
-                    completion_root / f"{corpus_id}-anchor-record.json"
+                    production.completion_root / f"{corpus_id}-prediction-completion-anchor.json"
                 ).as_uri(),
                 prediction_completion_anchor_receipt_uri=(
-                    completion_root / f"{corpus_id}-anchor-receipt.json"
+                    production.completion_root
+                    / f"{corpus_id}-prediction-completion-anchor-receipt.json"
                 ).as_uri(),
                 timelock_decryption_receipt_uri=_uri_path(
                     by_label[corpus_id].decryption_receipt_uri, label="decryption receipt"
@@ -532,13 +580,48 @@ def _analysis_control(
         )
         del online_root
     return ConfirmatoryInputOperatorConfig(
-        suite_namespace_uri=Path(finalization.canonical_suite_namespace).as_uri(),
+        suite_namespace_uri=production.suite_namespace.as_uri(),
         manifest_uri=manifest_path.as_uri(),
-        sealed_run_receipt_uri=request.sealed_run_receipt_path.as_uri(),
-        artifact_verification_receipt_uri=request.artifact_verification_receipt_path.as_uri(),
-        artifact_root_uri=request.artifact_root.as_uri(),
+        sealed_run_receipt_uri=production.finalization_request.sealed_run_receipt_path.as_uri(),
+        artifact_verification_receipt_uri=(
+            production.finalization_request.artifact_verification_receipt_path.as_uri()
+        ),
+        artifact_root_uri=production.finalization_request.artifact_root.as_uri(),
         corpus_evidence=tuple(evidence),
     )
+
+
+def _verify_analysis_execution_authority(
+    offline_execution: OfflineAnalysisExecutionReceipt,
+    *,
+    suite_attempt_id: str,
+    contract: PhaseClaimContract,
+    claimed: VerifiedProviderPredecessor,
+    capability: VerifiedPhaseClaimCapability,
+    provider_identity: Any,
+    result_path: Path,
+) -> str:
+    """Cross-check retained container evidence against the live analysis claim."""
+
+    result_file_sha256 = digest_regular_file(result_path, label="analysis result")
+    if (
+        offline_execution.suite_attempt_id != suite_attempt_id
+        or offline_execution.manifest_sha256 != contract.manifest_sha256
+        or offline_execution.run_receipt_sha256 != contract.run_receipt_sha256
+        or offline_execution.provider_state_record_sha256 != claimed.state.record_sha256
+        or offline_execution.provider_ledger_commit != claimed.ledger_commit
+        or offline_execution.phase_claim_contract_sha256 != contract.contract_sha256
+        or offline_execution.phase_claim_state_sha256 != capability.phase_claim_state_sha256
+        or offline_execution.phase_claim_ledger_commit != capability.phase_claim_ledger_commit
+        or offline_execution.provider_identity_sha256 != provider_identity.identity_sha256
+        or offline_execution.c1_commit != contract.c1_commit
+        or offline_execution.result_uri != result_path.as_uri()
+        or offline_execution.result_file_sha256 != result_file_sha256
+    ):
+        raise ProviderActivationError(
+            "offline analysis execution differs from activation authority"
+        )
+    return result_file_sha256
 
 
 def _inventory_file(root: Path, execution: ProviderPhaseExecutionReceipt, *, name: str) -> Path:
@@ -595,6 +678,63 @@ def _launch_inventory_file(
     )
 
 
+def _publish_then_wait_for_label_beacon(
+    claimed: VerifiedProviderPredecessor,
+    contract: PhaseClaimContract,
+    plan: ProviderPhasePlan,
+    *,
+    completion_anchor_token_fd: int,
+    verifier: QuicknetExecutionBeaconVerifier,
+    clock_now: Callable[[], str],
+    sleeper: Callable[[float], None],
+) -> bytes:
+    """Publish the outcome-blind anchors before waiting for the release round."""
+
+    assert contract.label_release_beacon is not None
+    release_time = contract.label_release_beacon.label_release_publication_time
+
+    def observed_time() -> datetime:
+        try:
+            value = datetime.fromisoformat(clock_now())
+        except ValueError as exc:
+            raise ProviderActivationError("verification clock returned malformed time") from exc
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ProviderActivationError("verification clock must be timezone-aware")
+        return value
+
+    initial_wait_seconds = max(0.0, (release_time - observed_time()).total_seconds())
+    if initial_wait_seconds > plan.maximum_runtime_seconds - 120:
+        raise ProviderActivationError(
+            "label-release round lies outside the registered activation window"
+        )
+    try:
+        from .post_online_completion import (
+            PostOnlineCompletionError,
+            publish_post_online_completion_anchors,
+        )
+
+        publish_post_online_completion_anchors(
+            claimed,
+            token_fd=completion_anchor_token_fd,
+        )
+    except PostOnlineCompletionError as exc:
+        raise ProviderActivationError(f"post-online completion publication failed: {exc}") from exc
+    wait_seconds = max(0.0, (release_time - observed_time()).total_seconds())
+    if wait_seconds:
+        sleeper(wait_seconds + 1.0)
+    last_beacon_error: DrandBeaconError | None = None
+    for attempt in range(12):
+        try:
+            return verifier.fetch(contract.label_release_beacon)
+        except DrandBeaconError as exc:
+            last_beacon_error = exc
+            if attempt + 1 < 12:
+                sleeper(5.0)
+    raise ProviderActivationError(
+        "registered label-release beacon did not become readable"
+    ) from last_beacon_error
+
+
 def activate_and_execute_provider_phase(
     *,
     context: ProviderWorkflowContext,
@@ -610,11 +750,22 @@ def activate_and_execute_provider_phase(
     verified_at_utc: str | None = None,
     drand_api: DrandReadApi | None = None,
     verification_clock: Callable[[], str] | None = None,
+    completion_anchor_token_fd: int | None = None,
+    release_sleeper: Callable[[float], None] | None = None,
 ) -> ProviderActivationResult:
     """Verify, activate, and consume exactly one C1-fixed phase request."""
 
     if context.phase != phase:
         raise ProviderActivationError("workflow context and activation phase differ")
+    if phase == LABEL_RELEASE_PHASE:
+        if type(completion_anchor_token_fd) is not int or completion_anchor_token_fd < 0:
+            raise ProviderActivationError(
+                "label-release activation requires a Zenodo token file descriptor"
+            )
+    elif completion_anchor_token_fd is not None:
+        raise ProviderActivationError(
+            "only label-release activation accepts a Zenodo token file descriptor"
+        )
     downloaded_claim_path = Path(claim_receipt_destination)
     if (
         not downloaded_claim_path.is_absolute()
@@ -678,13 +829,6 @@ def activate_and_execute_provider_phase(
         return value
 
     now = verified_at_utc or clock_now()
-    live = verify_live_execute_job(
-        api=github_api,
-        contract=contract,
-        provider_identity=provider_identity,
-        verified_at_utc=now,
-    )
-    live_path = _write_live_job(live, root)
     fresh_root = _new_private_directory(root / "fresh-claims", label="fresh claim roots")
     fresh = _FreshClaimReader(
         phase=phase,
@@ -694,8 +838,17 @@ def activate_and_execute_provider_phase(
         artifact_api=artifact_api,
     )
     verifier = QuicknetExecutionBeaconVerifier(drand_api)
+    sleep = time.sleep if release_sleeper is None else release_sleeper
+    if not callable(sleep):
+        raise ProviderActivationError("release sleeper must be callable")
     if phase == ONLINE_PHASE:
         assert isinstance(contract, ExecutionClaimContract)
+        live = verify_live_execute_job(
+            api=github_api,
+            contract=contract,
+            provider_identity=provider_identity,
+            verified_at_utc=now,
+        )
         beacon_bytes = verifier.fetch(contract.beacon)
         capability = admit_run_claim_beacon(
             claimed,
@@ -708,7 +861,23 @@ def activate_and_execute_provider_phase(
     elif phase == LABEL_RELEASE_PHASE:
         assert isinstance(contract, PhaseClaimContract)
         assert contract.label_release_beacon is not None
-        beacon_bytes = verifier.fetch(contract.label_release_beacon)
+        assert completion_anchor_token_fd is not None
+        beacon_bytes = _publish_then_wait_for_label_beacon(
+            claimed,
+            contract,
+            plan,
+            completion_anchor_token_fd=completion_anchor_token_fd,
+            verifier=verifier,
+            clock_now=clock_now,
+            sleeper=sleep,
+        )
+        now = clock_now()
+        live = verify_live_execute_job(
+            api=github_api,
+            contract=contract,
+            provider_identity=provider_identity,
+            verified_at_utc=now,
+        )
         capability = admit_label_release_claim_beacon(
             claimed,
             beacon_bytes=beacon_bytes,
@@ -718,17 +887,25 @@ def activate_and_execute_provider_phase(
             fresh_state_revalidator=fresh,
         )
     else:
+        live = verify_live_execute_job(
+            api=github_api,
+            contract=contract,
+            provider_identity=provider_identity,
+            verified_at_utc=now,
+        )
         capability = admit_analysis_claim(
             claimed,
             live_execute_job_receipt=live,
             fresh_state_revalidator=fresh,
         )
+    live_path = _write_live_job(live, root)
 
     manifest_path = _unique_suffix(artifact_root, _MANIFEST_NAME, label="C1 study manifest")
     manifest = load_study_manifest(manifest_path)
     validate_study_manifest(manifest, require_frozen=True)
     if manifest_sha256(manifest) != contract.manifest_sha256:
         raise ProviderActivationError("claim artifact manifest differs from provider claim")
+    production = _opened_production_control(claimed)
     if phase == ANALYSIS_PHASE:
         assert isinstance(contract, PhaseClaimContract)
         results_store = _uri_path(
@@ -739,10 +916,24 @@ def activate_and_execute_provider_phase(
             raise ProviderActivationError(
                 "analysis claim output differs from the frozen results store"
             )
-    phase_output = _new_private_directory(
-        Path(plan.phase_evidence_root(suite_attempt_id)),
-        label="phase evidence root",
-    )
+    phase_output_path = Path(plan.phase_evidence_root(suite_attempt_id))
+    if phase == LABEL_RELEASE_PHASE:
+        admit_label_release_phase_root(
+            phase_output_path,
+            create_if_absent=True,
+        )
+        phase_output = phase_output_path
+    elif phase == ANALYSIS_PHASE:
+        phase_output = _admit_empty_private_directory(
+            phase_output_path,
+            label="analysis phase evidence root",
+            allowed_entries=frozenset({PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME}),
+        )
+    else:
+        phase_output = _new_private_directory(
+            phase_output_path,
+            label="phase evidence root",
+        )
     driver_rows: list[ProviderDriverRequest] = []
     portable_receipts: list[dict[str, object]] = []
     action_admissions: list[dict[str, object]] = []
@@ -754,7 +945,7 @@ def activate_and_execute_provider_phase(
     action_root = _new_private_directory(root / "action-authority", label="action authority root")
     ordered = tuple(sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8")))
     if phase == ONLINE_PHASE:
-        controls = _online_controls(claimed)
+        controls = _online_controls(production)
         phase_input = _new_private_directory(root / "phase-input", label="phase input root")
         claims_root = _new_private_directory(
             phase_input / "runtime-claims", label="runtime claims root"
@@ -895,11 +1086,10 @@ def activate_and_execute_provider_phase(
         if phase == LABEL_RELEASE_PHASE:
             for corpus_id, runtime in zip(ordered, phase_receipts, strict=True):
                 output_root = phase_output / corpus_id
-                _new_private_directory(output_root, label=f"{corpus_id} label output root")
                 control = _label_control(
                     corpus_id=corpus_id,
                     contract=contract,
-                    plan=plan,
+                    production=production,
                     manifest_path=manifest_path,
                     manifest=manifest,
                     output_root=output_root,
@@ -956,13 +1146,24 @@ def activate_and_execute_provider_phase(
                     verified_at_utc=action_now,
                 )
                 action_beacon = verifier.fetch(current_contract.label_release_beacon)
+
+                def revalidate_claim_and_live_job() -> VerifiedProviderPredecessor:
+                    revalidated = fresh()
+                    verify_live_execute_job(
+                        api=github_api,
+                        contract=current_contract,
+                        provider_identity=current_identity,
+                        verified_at_utc=clock_now(),
+                    )
+                    return revalidated
+
                 action_capability = admit_label_release_claim_beacon(
                     current,
                     beacon_bytes=action_beacon,
                     beacon_verifier=verifier,
                     live_execute_job_receipt=action_live,
                     verified_at_utc=action_now,
-                    fresh_state_revalidator=fresh,
+                    fresh_state_revalidator=revalidate_claim_and_live_job,
                 )
                 binding = by_binding[row.corpus_id]
                 runtime = action_capability.require_input(
@@ -993,15 +1194,13 @@ def activate_and_execute_provider_phase(
                     _canonical_file_bytes(
                         {
                             "admitted_at_utc": action_now,
-                            "beacon_receipt_sha256": digest_regular_file(
-                                beacon_evidence, label="fresh phase beacon receipt"
+                            "beacon_receipt_sha256": (
+                                action_capability.phase_beacon_receipt.receipt_sha256
                             ),
                             "corpus_id": row.corpus_id,
                             "input_sha256": binding.input_sha256,
                             "input_uri": binding.input_uri,
-                            "live_execute_job_receipt_sha256": digest_regular_file(
-                                live_evidence, label="fresh live execute-job receipt"
-                            ),
+                            "live_execute_job_receipt_sha256": action_live.receipt_sha256,
                             "output_identity_sha256": (current_contract.phase_output_identity),
                             "output_uri": binding.output_uri,
                             "phase": LABEL_RELEASE_PHASE,
@@ -1048,6 +1247,7 @@ def activate_and_execute_provider_phase(
                 )
                 return FreshLabelClaimAuthority(
                     capability=action_capability,
+                    predecessor=current,
                     claim_bytes=runtime.canonical_file_bytes(),
                     admission_marker_path=str(marker),
                     admission_marker_sha256=digest_regular_file(
@@ -1059,15 +1259,28 @@ def activate_and_execute_provider_phase(
                 manifest["sealed_execution"]["results_store"],
                 label="analysis results store",
             )
-            _admit_empty_private_directory(results_store, label="analysis results store")
+            if not os.path.lexists(results_store):
+                _new_private_directory(
+                    results_store,
+                    label="analysis results store",
+                )
+            try:
+                restart_entries = admit_analysis_results_store(
+                    results_store,
+                    manifest_sha256=contract.manifest_sha256,
+                )
+            except ProviderPhaseRuntimeError as exc:
+                raise ProviderActivationError(
+                    f"analysis results store restart state is invalid: {exc}"
+                ) from exc
             store_admission = _write_once(
                 action_root / "analysis-results-store-admission.json",
                 _canonical_file_bytes(
                     {
-                        "entries": [],
+                        "entries": list(restart_entries),
                         "phase": ANALYSIS_PHASE,
                         "results_store": str(results_store),
-                        "schema_version": "fractal-analysis-empty-store-admission-v1",
+                        "schema_version": "fractal-analysis-restart-store-admission-v1",
                         "suite_attempt_id": suite_attempt_id,
                         "verified_at_utc": now,
                     }
@@ -1077,15 +1290,18 @@ def activate_and_execute_provider_phase(
             action_admissions.append(
                 {
                     "corpus_id": _ALL_FIVE,
-                    "empty_store_admission_path": str(store_admission),
-                    "empty_store_admission_sha256": digest_regular_file(
-                        store_admission, label="analysis empty-store admission"
+                    "results_store_admission_path": str(store_admission),
+                    "results_store_admission_sha256": digest_regular_file(
+                        store_admission, label="analysis results-store admission"
                     ),
                     "stage": "pre-execution",
                 }
             )
             control = _analysis_control(
-                claimed=claimed, manifest_path=manifest_path, manifest=manifest
+                claimed=claimed,
+                production=production,
+                manifest_path=manifest_path,
+                manifest=manifest,
             )
             control_path = _write_once(
                 controls_root / _ANALYSIS_CONTROL_NAME,
@@ -1245,9 +1461,49 @@ def activate_and_execute_provider_phase(
             manifest["sealed_execution"]["results_store"], label="analysis results store"
         )
         result_path = results_store / f"{contract.manifest_sha256}.confirmatory-result.json"
+        if len(execution.outputs) != 1:
+            raise ProviderActivationError("analysis phase execution lacks its sole driver output")
+        analysis_output = execution.outputs[0]
+        if (
+            analysis_output.output_root != str(results_store)
+            or analysis_output.analysis_execution_receipt_uri is None
+            or analysis_output.analysis_execution_receipt_sha256 is None
+            or analysis_output.analysis_execution_receipt_file_sha256 is None
+        ):
+            raise ProviderActivationError(
+                "analysis phase execution discarded offline execution evidence"
+            )
+        execution_receipt_path = _uri_path(
+            analysis_output.analysis_execution_receipt_uri,
+            label="offline analysis execution receipt",
+        )
+        try:
+            offline_execution = load_offline_analysis_execution_receipt(
+                execution_receipt_path,
+                expected_receipt_sha256=(analysis_output.analysis_execution_receipt_sha256),
+                expected_file_sha256=(analysis_output.analysis_execution_receipt_file_sha256),
+            )
+        except OfflineAnalysisContractError as exc:
+            raise ProviderActivationError(
+                f"offline analysis execution receipt is invalid: {exc}"
+            ) from exc
+        result_file_sha256 = _verify_analysis_execution_authority(
+            offline_execution,
+            suite_attempt_id=suite_attempt_id,
+            contract=contract,
+            claimed=claimed,
+            capability=capability,
+            provider_identity=provider_identity,
+            result_path=result_path,
+        )
         common.update(
+            analysis_execution_receipt_path=str(execution_receipt_path),
+            analysis_execution_receipt_sha256=(offline_execution.receipt_sha256),
+            analysis_execution_receipt_file_sha256=(
+                analysis_output.analysis_execution_receipt_file_sha256
+            ),
             analysis_result_path=str(result_path),
-            analysis_result_sha256=digest_regular_file(result_path, label="analysis result"),
+            analysis_result_sha256=result_file_sha256,
             five_corpora_analyzed="true",
         )
     return ProviderActivationResult(phase=phase, outputs=tuple(sorted(common.items())))

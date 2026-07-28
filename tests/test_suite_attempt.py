@@ -24,6 +24,7 @@ from test_execution_claim import (
 )
 
 import fractal_ann_diagnostics.confirmatory_execution as confirmatory_execution_module
+import fractal_ann_diagnostics.offline_analysis_contract as offline_contract_module
 import fractal_ann_diagnostics.suite_attempt as suite_attempt_module
 import fractal_ann_diagnostics.timelock_release as timelock_release_module
 from fractal_ann_diagnostics.artifact_integrity import (
@@ -42,6 +43,9 @@ from fractal_ann_diagnostics.production_corpus_run import (
     PRODUCTION_CORPUS_COMMAND_ATTEMPT_FILENAME,
     RUNTIME_ATTESTATION_RECEIPT_FILENAME,
     RUNTIME_INVOCATION_MARKER_FILENAME,
+)
+from fractal_ann_diagnostics.provider_phase_runtime import (
+    LabelReleaseOutputAuthority,
 )
 from fractal_ann_diagnostics.study import FIXED_CORPORA
 from fractal_ann_diagnostics.suite_attempt import (
@@ -490,13 +494,16 @@ def _online_payload(
 
 def _analysis(root: Path) -> AnalysisClosure:
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    execution_path = root / "offline-execution-receipt.json"
     attempt_path = root / "attempt.json"
     receipt_path = root / "result-receipt.json"
     result_path = root / "final-result.json"
+    execution_bytes = b'{"fixture":"offline-execution-receipt"}\n'
     attempt_bytes = b'{"fixture":"analysis-attempt"}\n'
     receipt_bytes = b'{"fixture":"analysis-result-receipt"}\n'
     result_bytes = b'{"fixture":"analysis-result"}\n'
     for path, encoded in (
+        (execution_path, execution_bytes),
         (attempt_path, attempt_bytes),
         (receipt_path, receipt_bytes),
         (result_path, result_bytes),
@@ -504,6 +511,10 @@ def _analysis(root: Path) -> AnalysisClosure:
         path.write_bytes(encoded)
     return AnalysisClosure(
         confirmatory_input_artifact_sha256=_digest("confirmatory-input"),
+        analysis_execution_receipt_uri=execution_path.as_uri(),
+        analysis_execution_receipt_sha256=_digest("offline-execution-receipt"),
+        analysis_execution_receipt_file_sha256=hashlib.sha256(execution_bytes).hexdigest(),
+        analysis_execution_receipt_byte_count=len(execution_bytes),
         analysis_attempt_receipt_uri=attempt_path.as_uri(),
         analysis_attempt_receipt_sha256=_digest("attempt"),
         analysis_attempt_file_sha256=hashlib.sha256(attempt_bytes).hexdigest(),
@@ -1287,6 +1298,67 @@ def test_synthetic_token_and_missing_canonical_files_are_rejected(tmp_path: Path
         )
 
 
+def test_provider_label_claim_admits_its_live_verified_online_predecessor(
+    tmp_path: Path,
+) -> None:
+    namespace, records = _state_chain(tmp_path, through="LABEL_RELEASE_CLAIMED")
+    _attest(namespace, records)
+    verified_claimed = verify_suite_state(
+        namespace,
+        verifier=_Verifier(),
+        expected_state="LABEL_RELEASE_CLAIMED",
+    )
+    revalidations: list[bool] = []
+    predecessor = suite_attempt_module._mint_verified_provider_predecessor(
+        records=verified_claimed.records,
+        evidences=verified_claimed.evidences,
+        control_inventory_sha256=_digest("control-inventory"),
+        artifact_receipt_sha256=_digest("artifact-receipt"),
+        fresh_revalidator=lambda: revalidations.append(True),
+    )
+    online = records[2]
+    assert isinstance(online.payload, OnlineSuiteClosure)
+    corpus = online.payload.corpora[0]
+
+    closure = require_verified_online_completion(
+        predecessor,
+        manifest_digest=online.manifest_sha256,
+        corpus_id=corpus.corpus_id,
+        online_result_receipt_sha256=corpus.result_receipt_sha256,
+    )
+
+    assert closure == corpus
+    assert revalidations
+
+
+def test_provider_online_gate_rejects_a_non_label_claim_tip(tmp_path: Path) -> None:
+    namespace, records = _state_chain(tmp_path, through="ONLINE_COMPLETE")
+    _attest(namespace, records)
+    verified_online = verify_suite_state(
+        namespace,
+        verifier=_Verifier(),
+        expected_state="ONLINE_COMPLETE",
+    )
+    predecessor = suite_attempt_module._mint_verified_provider_predecessor(
+        records=verified_online.records,
+        evidences=verified_online.evidences,
+        control_inventory_sha256=_digest("control-inventory"),
+        artifact_receipt_sha256=_digest("artifact-receipt"),
+        fresh_revalidator=lambda: None,
+    )
+    online = records[2]
+    assert isinstance(online.payload, OnlineSuiteClosure)
+    corpus = online.payload.corpora[0]
+
+    with pytest.raises(SuiteAttemptError, match="LABEL_RELEASE_CLAIMED"):
+        require_verified_online_completion(
+            predecessor,
+            manifest_digest=online.manifest_sha256,
+            corpus_id=corpus.corpus_id,
+            online_result_receipt_sha256=corpus.result_receipt_sha256,
+        )
+
+
 def test_online_complete_requires_exact_five_without_duplicates(tmp_path: Path) -> None:
     namespace, records = _state_chain(tmp_path, through="OPENED")
     common = dict(
@@ -1430,6 +1502,8 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
     plaintext_paths: dict[str, Path] = {}
     receipt_paths: dict[str, Path] = {}
     receipts: dict[Path, SimpleNamespace] = {}
+    action_authorities: dict[str, LabelReleaseOutputAuthority] = {}
+    post_online_aggregate_file_sha256 = _digest("post-online-completion-aggregate")
     artifacts: list[dict[str, str]] = []
     tool_sha256 = _digest("timelock-tool")
     artifacts.append({"role": "timelock-tool", "sha256": tool_sha256})
@@ -1476,7 +1550,34 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             ciphertext_sha256=ciphertext_sha256,
             timelock_encryption_receipt_file_sha256=encryption_file_sha256,
             tle_binary_sha256=tool_sha256,
+            post_online_completion_aggregate_file_sha256=(post_online_aggregate_file_sha256),
+            label_release_claim_state_sha256=phase_claim.phase_claim_state_sha256,
+            label_release_claim_ledger_commit=phase_claim.phase_claim_ledger_commit,
+            label_release_phase_claim_contract_sha256=(phase_claim.contract.contract_sha256),
+            label_release_phase_beacon_receipt_sha256=(
+                phase_claim.phase_beacon_receipt.receipt_sha256
+            ),
+            label_release_live_execute_job_receipt_sha256=(
+                phase_claim.live_execute_job_receipt.receipt_sha256
+            ),
+            label_release_provider_identity_sha256=(phase_claim.provider_identity.identity_sha256),
             receipt_sha256=_digest(f"decryption:{corpus_id}"),
+        )
+        action_authorities[corpus_id] = LabelReleaseOutputAuthority(
+            corpus_id=corpus_id,
+            post_online_completion_aggregate_file_sha256=(post_online_aggregate_file_sha256),
+            label_release_claim_state_sha256=phase_claim.phase_claim_state_sha256,
+            label_release_claim_ledger_commit=phase_claim.phase_claim_ledger_commit,
+            label_release_phase_claim_contract_sha256=(phase_claim.contract.contract_sha256),
+            label_release_phase_beacon_receipt_sha256=(
+                phase_claim.phase_beacon_receipt.receipt_sha256
+            ),
+            label_release_live_execute_job_receipt_sha256=(
+                phase_claim.live_execute_job_receipt.receipt_sha256
+            ),
+            label_release_provider_identity_sha256=(phase_claim.provider_identity.identity_sha256),
+            label_release_phase_beacon_receipt=phase_claim.phase_beacon_receipt,
+            label_release_live_execute_job_receipt=(phase_claim.live_execute_job_receipt),
         )
 
     manifest = {"artifacts": artifacts}
@@ -1495,8 +1596,41 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
         "load_timelock_decryption_receipt",
         lambda path: receipts[Path(path)],
     )
+    completion_authority_kwargs = {
+        "post_online_completion_aggregate_file_sha256": (post_online_aggregate_file_sha256),
+        "label_release_authorities": action_authorities,
+    }
 
     first = _ordered_corpora()[0]
+    first_receipt_path = receipt_paths[first]
+    original_receipt = receipts[first_receipt_path]
+    for field in (
+        "post_online_completion_aggregate_file_sha256",
+        "label_release_claim_state_sha256",
+        "label_release_claim_ledger_commit",
+        "label_release_phase_claim_contract_sha256",
+        "label_release_phase_beacon_receipt_sha256",
+        "label_release_live_execute_job_receipt_sha256",
+        "label_release_provider_identity_sha256",
+    ):
+        changed = dict(vars(original_receipt))
+        changed[field] = (
+            "b" * 40
+            if field == "label_release_claim_ledger_commit"
+            else _digest(f"changed:{field}")
+        )
+        receipts[first_receipt_path] = SimpleNamespace(**changed)
+        with pytest.raises(SuiteAttemptError, match="decryption receipt differs"):
+            complete_label_release(
+                verified,
+                phase_claim=phase_claim,
+                manifest=manifest,
+                decryption_receipt_paths=receipt_paths,
+                plaintext_paths=plaintext_paths,
+                **completion_authority_kwargs,
+            )
+    receipts[first_receipt_path] = original_receipt
+
     same_path_plaintexts = dict(plaintext_paths)
     same_path_plaintexts[first] = receipt_paths[first]
     with pytest.raises(SuiteAttemptError, match="pairwise-distinct real regular files"):
@@ -1506,6 +1640,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=same_path_plaintexts,
+            **completion_authority_kwargs,
         )
 
     expected_plaintext = plaintext_paths[first].read_bytes()
@@ -1518,6 +1653,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=plaintext_paths,
+            **completion_authority_kwargs,
         )
     plaintext_paths[first].unlink()
     plaintext_paths[first].write_bytes(expected_plaintext)
@@ -1531,6 +1667,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=plaintext_paths,
+            **completion_authority_kwargs,
         )
     plaintext_paths[first].unlink()
     plaintext_paths[first].write_bytes(expected_plaintext)
@@ -1543,6 +1680,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=plaintext_paths,
+            **completion_authority_kwargs,
         )
     assert not (namespace / "004.state.json").exists()
 
@@ -1569,6 +1707,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
                 manifest=manifest,
                 decryption_receipt_paths=receipt_paths,
                 plaintext_paths=plaintext_paths,
+                **completion_authority_kwargs,
             )
     plaintext_paths[first].write_bytes(expected_plaintext)
     assert not (namespace / "004.state.json").exists()
@@ -1583,16 +1722,22 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             lambda: monotonic[0],
         )
         renewal_calls = 0
+        observation_serial = 0
 
         def renew_after_boundary() -> object:
-            nonlocal renewal_calls
+            nonlocal observation_serial, renewal_calls
             renewal_calls += 1
+            observation_serial += 1
+            observed_at = f"2026-07-15T00:06:00.{observation_serial:06d}+00:00"
             return admit_label_release_claim_beacon(
                 provider_verified,
                 beacon_bytes=b'{"round":101,"randomness":"synthetic"}',
                 beacon_verifier=_BeaconVerifier(),
-                live_execute_job_receipt=(provider_phase_claim.live_execute_job_receipt),
-                verified_at_utc="2026-07-15T00:06:00+00:00",
+                live_execute_job_receipt=replace(
+                    provider_phase_claim.live_execute_job_receipt,
+                    verified_at_utc=observed_at,
+                ),
+                verified_at_utc=observed_at,
                 fresh_state_revalidator=lambda: provider_verified,
             )
 
@@ -1616,6 +1761,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=plaintext_paths,
+            **completion_authority_kwargs,
         )
         assert slow_candidate.state == "LABELS_RELEASED"
         assert renewal_calls == len(FIXED_CORPORA) + 1
@@ -1633,12 +1779,16 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
         nonlocal changing_calls
         changing_calls += 1
         fresh = changed_provider if changing_calls == 3 else provider_verified
+        observed_at = f"2026-07-15T00:06:00.{changing_calls:06d}+00:00"
         return admit_label_release_claim_beacon(
             provider_verified,
             beacon_bytes=b'{"round":101,"randomness":"synthetic"}',
             beacon_verifier=_BeaconVerifier(),
-            live_execute_job_receipt=provider_phase_claim.live_execute_job_receipt,
-            verified_at_utc="2026-07-15T00:06:00+00:00",
+            live_execute_job_receipt=replace(
+                provider_phase_claim.live_execute_job_receipt,
+                verified_at_utc=observed_at,
+            ),
+            verified_at_utc=observed_at,
             fresh_state_revalidator=lambda: fresh,
         )
 
@@ -1650,6 +1800,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
             manifest=manifest,
             decryption_receipt_paths=receipt_paths,
             plaintext_paths=plaintext_paths,
+            **completion_authority_kwargs,
         )
     assert changing_calls == 3
     assert not (namespace / "004.state.json").exists()
@@ -1660,6 +1811,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
         manifest=manifest,
         decryption_receipt_paths=receipt_paths,
         plaintext_paths=plaintext_paths,
+        **completion_authority_kwargs,
     )
     assert state.state == "LABELS_RELEASED"
     assert isinstance(state.payload, tuple)
@@ -1672,6 +1824,7 @@ def test_label_transition_rehashes_each_frozen_plaintext_before_consuming_state_
         manifest=manifest,
         decryption_receipt_paths=receipt_paths,
         plaintext_paths=plaintext_paths,
+        **completion_authority_kwargs,
     )
     assert provider_state == state
 
@@ -1739,12 +1892,15 @@ def test_provider_analysis_completion_returns_candidate_without_local_state_writ
 
     evidence_root = tmp_path / "analysis-evidence"
     evidence_root.mkdir(mode=0o700)
+    execution_path = evidence_root / "offline-execution.json"
     attempt_path = evidence_root / "attempt.json"
     receipt_path = evidence_root / "receipt.json"
     result_path = evidence_root / "result.json"
+    execution_bytes = b'{"offline-execution":true}\n'
     attempt_bytes = b'{"attempt":true}\n'
     receipt_bytes = b'{"receipt":true}\n'
     result_bytes = b'{"result":true}\n'
+    execution_path.write_bytes(execution_bytes)
     attempt_path.write_bytes(attempt_bytes)
     receipt_path.write_bytes(receipt_bytes)
     result_path.write_bytes(result_bytes)
@@ -1759,6 +1915,34 @@ def test_provider_analysis_completion_returns_candidate_without_local_state_writ
         attempt_receipt_sha256=attempt.receipt_sha256,
         result_artifact_sha256=hashlib.sha256(result_bytes).hexdigest(),
         receipt_sha256=_digest("analysis-result-receipt"),
+    )
+    execution_sha256 = _digest("offline-execution")
+    execution_file_sha256 = hashlib.sha256(execution_bytes).hexdigest()
+    execution = SimpleNamespace(
+        receipt_sha256=execution_sha256,
+        suite_attempt_id=provider.state.suite_attempt_id,
+        manifest_sha256=provider.state.manifest_sha256,
+        run_receipt_sha256=provider.state.run_receipt_sha256,
+        provider_state_record_sha256=provider.state.record_sha256,
+        provider_ledger_commit=provider.ledger_commit,
+        phase_claim_contract_sha256=phase_claim.contract.contract_sha256,
+        phase_claim_state_sha256=phase_claim.phase_claim_state_sha256,
+        phase_claim_ledger_commit=phase_claim.phase_claim_ledger_commit,
+        provider_identity_sha256=phase_claim.provider_identity.identity_sha256,
+        attempt_uri=attempt_path.as_uri(),
+        attempt_receipt_sha256=attempt.receipt_sha256,
+        attempt_file_sha256=hashlib.sha256(attempt_bytes).hexdigest(),
+        result_receipt_uri=receipt_path.as_uri(),
+        result_receipt_sha256=receipt.receipt_sha256,
+        result_receipt_file_sha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        result_uri=result_path.as_uri(),
+        result_artifact_sha256=receipt.result_artifact_sha256,
+        result_file_sha256=hashlib.sha256(result_bytes).hexdigest(),
+    )
+    monkeypatch.setattr(
+        offline_contract_module,
+        "load_offline_analysis_execution_receipt",
+        lambda path, **kwargs: execution,
     )
     monkeypatch.setattr(
         confirmatory_execution_module,
@@ -1780,6 +1964,9 @@ def test_provider_analysis_completion_returns_candidate_without_local_state_writ
         provider,
         phase_claim=phase_claim,
         confirmatory_input_artifact_sha256=input_digest,
+        execution_receipt_path=execution_path,
+        execution_receipt_sha256=execution_sha256,
+        execution_receipt_file_sha256=execution_file_sha256,
         attempt_receipt_path=attempt_path,
         result_receipt_path=receipt_path,
         final_result_path=result_path,

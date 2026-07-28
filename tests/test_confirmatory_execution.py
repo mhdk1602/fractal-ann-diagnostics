@@ -72,6 +72,11 @@ def _install_types(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(execution, "ConfirmatoryResultArtifact", _FakeResult)
     monkeypatch.setattr(
         execution,
+        "_typed_confirmatory_result",
+        lambda payload: _FakeResult(),
+    )
+    monkeypatch.setattr(
+        execution,
         "_require_suite_labels_released",
         lambda *args, **kwargs: None,
     )

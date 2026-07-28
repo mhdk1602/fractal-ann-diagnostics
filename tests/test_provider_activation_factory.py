@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,7 +28,11 @@ from fractal_ann_diagnostics.provider_phase_runtime import (
     OnlineSealedLaunchDriverControl,
     ProviderDriverRequest,
 )
-from fractal_ann_diagnostics.suite_attempt import VerifiedProviderPredecessor
+from fractal_ann_diagnostics.study import FIXED_CORPORA
+from fractal_ann_diagnostics.suite_attempt import (
+    SuiteOpenBindings,
+    VerifiedProviderPredecessor,
+)
 
 
 def _digest(character: str) -> str:
@@ -162,11 +167,114 @@ def test_claim_cross_check_rejects_artifact_state_or_runner_substitution(
         activation._cross_check_claim(**values)
 
 
-def test_label_control_derives_registered_completion_and_output_paths(tmp_path: Path) -> None:
+def _analysis_execution_authority_fixture(tmp_path: Path) -> dict[str, object]:
+    result_path = tmp_path.resolve() / "analysis-result.json"
+    result_bytes = b'{"primary_claim_passed":false}\n'
+    result_path.write_bytes(result_bytes)
+    result_file_sha256 = hashlib.sha256(result_bytes).hexdigest()
+    suite_attempt_id = _digest("1")
+    contract = SimpleNamespace(
+        manifest_sha256=_digest("2"),
+        run_receipt_sha256=_digest("3"),
+        contract_sha256=_digest("4"),
+        c1_commit=_commit("5"),
+    )
+    claimed = SimpleNamespace(
+        state=SimpleNamespace(record_sha256=_digest("6")),
+        ledger_commit=_commit("7"),
+    )
+    capability = SimpleNamespace(
+        phase_claim_state_sha256=_digest("6"),
+        phase_claim_ledger_commit=_commit("7"),
+    )
+    provider_identity = SimpleNamespace(identity_sha256=_digest("8"))
+    offline_execution = SimpleNamespace(
+        suite_attempt_id=suite_attempt_id,
+        manifest_sha256=contract.manifest_sha256,
+        run_receipt_sha256=contract.run_receipt_sha256,
+        provider_state_record_sha256=claimed.state.record_sha256,
+        provider_ledger_commit=claimed.ledger_commit,
+        phase_claim_contract_sha256=contract.contract_sha256,
+        phase_claim_state_sha256=capability.phase_claim_state_sha256,
+        phase_claim_ledger_commit=capability.phase_claim_ledger_commit,
+        provider_identity_sha256=provider_identity.identity_sha256,
+        c1_commit=contract.c1_commit,
+        result_uri=result_path.as_uri(),
+        result_file_sha256=result_file_sha256,
+    )
+    return {
+        "offline_execution": offline_execution,
+        "suite_attempt_id": suite_attempt_id,
+        "contract": contract,
+        "claimed": claimed,
+        "capability": capability,
+        "provider_identity": provider_identity,
+        "result_path": result_path,
+        "result_file_sha256": result_file_sha256,
+    }
+
+
+def test_analysis_execution_authority_accepts_the_exact_live_tuple(
+    tmp_path: Path,
+) -> None:
+    values = _analysis_execution_authority_fixture(tmp_path)
+    expected = values.pop("result_file_sha256")
+
+    assert activation._verify_analysis_execution_authority(**values) == expected
+
+
+@pytest.mark.parametrize(
+    ("field", "changed"),
+    (
+        ("suite_attempt_id", _digest("9")),
+        ("manifest_sha256", _digest("a")),
+        ("run_receipt_sha256", _digest("b")),
+        ("provider_state_record_sha256", _digest("c")),
+        ("provider_ledger_commit", _commit("d")),
+        ("phase_claim_contract_sha256", _digest("e")),
+        ("phase_claim_state_sha256", _digest("f")),
+        ("phase_claim_ledger_commit", _commit("0")),
+        ("provider_identity_sha256", _digest("1")),
+        ("c1_commit", _commit("2")),
+        ("result_file_sha256", _digest("3")),
+    ),
+)
+def test_analysis_execution_authority_rejects_lineage_substitution(
+    tmp_path: Path,
+    field: str,
+    changed: str,
+) -> None:
+    values = _analysis_execution_authority_fixture(tmp_path)
+    values.pop("result_file_sha256")
+    setattr(values["offline_execution"], field, changed)
+
+    with pytest.raises(ProviderActivationError, match="activation authority"):
+        activation._verify_analysis_execution_authority(**values)
+
+
+def test_analysis_execution_authority_rejects_result_path_or_byte_substitution(
+    tmp_path: Path,
+) -> None:
+    values = _analysis_execution_authority_fixture(tmp_path)
+    values.pop("result_file_sha256")
+    offline_execution = values["offline_execution"]
+    offline_execution.result_uri = (tmp_path.resolve() / "foreign-result.json").as_uri()
+    with pytest.raises(ProviderActivationError, match="activation authority"):
+        activation._verify_analysis_execution_authority(**values)
+
+    offline_execution.result_uri = values["result_path"].as_uri()
+    values["result_path"].write_bytes(b'{"primary_claim_passed":true}\n')
+    with pytest.raises(ProviderActivationError, match="activation authority"):
+        activation._verify_analysis_execution_authority(**values)
+
+
+def test_label_control_uses_opened_finalization_namespace_for_completion(
+    tmp_path: Path,
+) -> None:
     root = tmp_path.resolve()
-    controlled = root / "controlled"
-    completion = controlled / "completion"
-    output = root / "suite" / "label-release" / "scifact"
+    suite_namespace = root / "suite-attempt-" / "canonical"
+    completion = suite_namespace / "completion"
+    output = root / "phase-evidence" / "label-release" / "scifact"
     ciphertext = root / "custody" / "scifact.tlock"
     encryption = root / "custody" / "scifact-encryption.json"
     plaintext = output / "released-labels.json"
@@ -183,7 +291,10 @@ def test_label_control_derives_registered_completion_and_output_paths(tmp_path: 
             ),
         )
     )
-    plan = SimpleNamespace(host_tools=SimpleNamespace(controlled_root=str(controlled)))
+    production = SimpleNamespace(
+        suite_namespace=suite_namespace,
+        completion_root=completion,
+    )
     manifest = {
         "artifacts": [
             {"role": "custody-seal-receipt", "uri": custody.as_uri()},
@@ -194,15 +305,20 @@ def test_label_control_derives_registered_completion_and_output_paths(tmp_path: 
     control = activation._label_control(
         corpus_id="scifact",
         contract=contract,
-        plan=plan,
+        production=production,
         manifest_path=manifest_path,
         manifest=manifest,
         output_root=output,
     )
 
-    assert control.completion_receipt_path == str(completion / "scifact-completion.json")
-    assert control.completion_anchor_record_path == str(completion / "scifact-anchor-record.json")
-    assert control.completion_anchor_receipt_path == str(completion / "scifact-anchor-receipt.json")
+    assert control.completion_receipt_path == str(completion / "scifact-prediction-completion.json")
+    assert control.completion_anchor_record_path == str(
+        completion / "scifact-prediction-completion-anchor.json"
+    )
+    assert control.completion_anchor_receipt_path == str(
+        completion / "scifact-prediction-completion-anchor-receipt.json"
+    )
+    assert control.suite_namespace == str(suite_namespace)
     assert control.plaintext_output_path == str(plaintext)
     assert control.decryption_receipt_path == str(output / "timelock-decryption-receipt.json")
 
@@ -232,10 +348,159 @@ def test_label_control_rejects_non_file_claim_input(tmp_path: Path) -> None:
         activation._label_control(
             corpus_id="scifact",
             contract=contract,
-            plan=SimpleNamespace(host_tools=SimpleNamespace(controlled_root=str(root))),
+            production=SimpleNamespace(
+                suite_namespace=root / "suite",
+                completion_root=root / "suite" / "completion",
+            ),
             manifest_path=root / "manifest.json",
             manifest=manifest,
             output_root=root / "output",
+        )
+
+
+def test_opened_production_control_derives_one_pinned_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path.resolve()
+    suite_namespace = root / "suite-attempt-canonical"
+    finalization_path = root / "production-control-finalization-receipt.json"
+    attempt_id = _digest("1")
+    manifest_digest = _digest("2")
+    request_digest = _digest("3")
+    receipt_digest = _digest("4")
+    opened = object.__new__(SuiteOpenBindings)
+    object.__setattr__(
+        opened,
+        "production_finalization_receipt_uri",
+        finalization_path.as_uri(),
+    )
+    object.__setattr__(
+        opened,
+        "production_finalization_receipt_file_sha256",
+        receipt_digest,
+    )
+    object.__setattr__(
+        opened,
+        "production_finalization_request_sha256",
+        request_digest,
+    )
+    opened_record = SimpleNamespace(
+        payload=opened,
+        suite_attempt_id=attempt_id,
+        manifest_sha256=manifest_digest,
+        namespace_uri=suite_namespace.as_uri(),
+    )
+    finalization = SimpleNamespace(
+        finalization_request_sha256=request_digest,
+        suite_attempt_id=attempt_id,
+        manifest_sha256=manifest_digest,
+        canonical_suite_namespace=str(suite_namespace),
+    )
+    request = SimpleNamespace()
+    observed: dict[str, object] = {}
+
+    def load_receipt(path: Path, *, expected_sha256: str) -> object:
+        observed["receipt"] = (path, expected_sha256)
+        return finalization
+
+    def load_request(path: Path, *, expected_sha256: str) -> object:
+        observed["request"] = (path, expected_sha256)
+        return request
+
+    monkeypatch.setattr(
+        activation,
+        "load_production_control_finalization_receipt",
+        load_receipt,
+    )
+    monkeypatch.setattr(
+        activation,
+        "load_production_control_finalization_request",
+        load_request,
+    )
+
+    production = activation._opened_production_control(SimpleNamespace(records=(opened_record,)))
+
+    assert production.suite_namespace == suite_namespace
+    assert production.completion_root == suite_namespace / "completion"
+    assert observed["receipt"] == (finalization_path, receipt_digest)
+    assert observed["request"] == (
+        finalization_path.with_name("finalization-request.json"),
+        request_digest,
+    )
+
+
+def test_label_and_analysis_controls_share_opened_completion_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path.resolve()
+    suite_namespace = root / "suite-attempt-canonical"
+    completion_root = suite_namespace / "completion"
+    suite_namespace.mkdir()
+    manifest_path = root / "study-manifest.json"
+    manifest_path.write_bytes(b"{}\n")
+    sealed_run = root / "sealed-run.json"
+    sealed_run.write_bytes(b"{}\n")
+    verification = root / "artifact-verification.json"
+    verification.write_bytes(b"{}\n")
+    artifact_root = root / "artifacts"
+    artifact_root.mkdir()
+    request = SimpleNamespace(
+        sealed_run_receipt_path=sealed_run,
+        artifact_verification_receipt_path=verification,
+        artifact_root=artifact_root,
+    )
+    production = SimpleNamespace(
+        suite_namespace=suite_namespace,
+        completion_root=completion_root,
+        finalization_request=request,
+    )
+    online = SimpleNamespace(
+        corpora=tuple(
+            SimpleNamespace(
+                corpus_id=corpus_id,
+                output_uri=(suite_namespace / "online" / corpus_id).as_uri(),
+            )
+            for corpus_id in FIXED_CORPORA
+        )
+    )
+    labels = tuple(
+        SimpleNamespace(
+            corpus_id=corpus_id,
+            decryption_receipt_uri=(
+                suite_namespace / "label-release" / corpus_id / "decryption.json"
+            ).as_uri(),
+        )
+        for corpus_id in FIXED_CORPORA
+    )
+    claimed = SimpleNamespace(
+        records=(
+            SimpleNamespace(state="OPENED", payload=object()),
+            SimpleNamespace(state="ONLINE_COMPLETE", payload=online),
+            SimpleNamespace(state="LABELS_RELEASED", payload=labels),
+        )
+    )
+
+    control = activation._analysis_control(
+        claimed=claimed,
+        production=production,
+        manifest_path=manifest_path,
+        manifest={},
+    )
+
+    assert control.suite_namespace_uri == suite_namespace.as_uri()
+    for row in control.corpus_evidence:
+        assert (
+            Path(row.prediction_completion_receipt_uri.removeprefix("file://")).parent
+            == completion_root
+        )
+        assert (
+            Path(row.prediction_completion_anchor_record_uri.removeprefix("file://")).parent
+            == completion_root
+        )
+        assert (
+            Path(row.prediction_completion_anchor_receipt_uri.removeprefix("file://")).parent
+            == completion_root
         )
 
 
@@ -303,6 +568,45 @@ def test_phase_or_analysis_output_replay_is_rejected_before_execution(
             label="analysis results store",
         )
 
+    results_store.joinpath("prior-result.json").unlink()
+    receipt_name = runtime.PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME
+    results_store.joinpath(receipt_name).write_text("{}\n", encoding="utf-8")
+    assert (
+        activation._admit_empty_private_directory(
+            results_store,
+            label="analysis phase evidence root",
+            allowed_entries=frozenset({receipt_name}),
+        )
+        == results_store
+    )
+
+
+def test_label_phase_reactivation_admits_exact_canonical_prefix(
+    tmp_path: Path,
+) -> None:
+    phase_output = tmp_path.resolve() / "label-phase-output"
+    phase_output.mkdir(mode=0o700)
+    first = sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8"))[0]
+    corpus_root = phase_output / first
+    corpus_root.mkdir(mode=0o700)
+    (corpus_root / "released-labels.json").write_text("labels\n", encoding="utf-8")
+    (corpus_root / "timelock-decryption-receipt.json").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+    (phase_output / runtime.label_release_authority_journal_name(first)).write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    admission = activation.admit_label_release_phase_root(
+        phase_output,
+        create_if_absent=False,
+    )
+
+    assert admission.completed_corpora == (first,)
+    assert admission.staged_corpus is None
+    assert not admission.execution_receipt_present
+
 
 def test_activation_rejects_caller_selected_claim_filename_before_transport(
     tmp_path: Path,
@@ -322,6 +626,130 @@ def test_activation_rejects_caller_selected_claim_filename_before_transport(
             github_api=object(),
             artifact_api=object(),
         )
+
+    with pytest.raises(ProviderActivationError, match="only label-release"):
+        activation.activate_and_execute_provider_phase(
+            context=context,
+            phase="online",
+            suite_attempt_id=_digest("1"),
+            artifact_id=1,
+            artifact_digest="sha256:" + _digest("2"),
+            expected_inventory_sha256=_digest("3"),
+            claim_receipt_destination=tmp_path.resolve() / "claim-receipt.json",
+            output_dir=tmp_path.resolve() / "activation",
+            github_api=object(),
+            artifact_api=object(),
+            completion_anchor_token_fd=17,
+        )
+
+
+def test_label_activation_requires_completion_anchor_token_fd(tmp_path: Path) -> None:
+    with pytest.raises(ProviderActivationError, match="Zenodo token file descriptor"):
+        activation.activate_and_execute_provider_phase(
+            context=SimpleNamespace(phase="label-release"),
+            phase="label-release",
+            suite_attempt_id=_digest("1"),
+            artifact_id=1,
+            artifact_digest="sha256:" + _digest("2"),
+            expected_inventory_sha256=_digest("3"),
+            claim_receipt_destination=tmp_path.resolve() / "claim-receipt.json",
+            output_dir=tmp_path.resolve() / "activation",
+            github_api=object(),
+            artifact_api=object(),
+        )
+
+
+def test_label_activation_publishes_before_waiting_for_exact_beacon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fractal_ann_diagnostics.post_online_completion as completion
+
+    events: list[object] = []
+    claimed = object.__new__(VerifiedProviderPredecessor)
+    release_time = datetime(2026, 7, 28, 12, 0, 10, tzinfo=timezone.utc)
+    contract = SimpleNamespace(
+        label_release_beacon=SimpleNamespace(label_release_publication_time=release_time)
+    )
+    plan = SimpleNamespace(maximum_runtime_seconds=600)
+    clock_values = iter(
+        (
+            "2026-07-28T12:00:00+00:00",
+            "2026-07-28T12:00:02+00:00",
+        )
+    )
+
+    def publish(authority: object, *, token_fd: int) -> object:
+        events.append(("publish", authority, token_fd))
+        return object()
+
+    class Verifier:
+        calls = 0
+
+        def fetch(self, beacon: object) -> bytes:
+            self.calls += 1
+            events.append(("fetch", self.calls, beacon))
+            if self.calls == 1:
+                raise activation.DrandBeaconError("not published yet")
+            return b"verified-beacon\n"
+
+    monkeypatch.setattr(completion, "publish_post_online_completion_anchors", publish)
+    verifier = Verifier()
+
+    observed = activation._publish_then_wait_for_label_beacon(
+        claimed,
+        contract,
+        plan,
+        completion_anchor_token_fd=3,
+        verifier=verifier,  # type: ignore[arg-type]
+        clock_now=lambda: next(clock_values),
+        sleeper=lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    assert observed == b"verified-beacon\n"
+    assert events == [
+        ("publish", claimed, 3),
+        ("sleep", 9.0),
+        ("fetch", 1, contract.label_release_beacon),
+        ("sleep", 5.0),
+        ("fetch", 2, contract.label_release_beacon),
+    ]
+
+
+def test_label_activation_rejects_an_out_of_window_round_before_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fractal_ann_diagnostics.post_online_completion as completion
+
+    published: list[bool] = []
+    monkeypatch.setattr(
+        completion,
+        "publish_post_online_completion_anchors",
+        lambda *_args, **_kwargs: published.append(True),
+    )
+    contract = SimpleNamespace(
+        label_release_beacon=SimpleNamespace(
+            label_release_publication_time=datetime(
+                2026,
+                7,
+                28,
+                12,
+                20,
+                tzinfo=timezone.utc,
+            )
+        )
+    )
+
+    with pytest.raises(ProviderActivationError, match="outside the registered"):
+        activation._publish_then_wait_for_label_beacon(
+            object.__new__(VerifiedProviderPredecessor),
+            contract,
+            SimpleNamespace(maximum_runtime_seconds=600),
+            completion_anchor_token_fd=3,
+            verifier=SimpleNamespace(fetch=lambda _beacon: b"unexpected"),
+            clock_now=lambda: "2026-07-28T12:00:00+00:00",
+            sleeper=lambda _seconds: None,
+        )
+    assert published == []
 
 
 def test_downloaded_claim_evidence_is_installed_only_at_plan_fixed_path(
@@ -513,86 +941,13 @@ def test_online_runtime_rejects_sealed_output_namespace_swap_before_launch(
     assert launched == []
 
 
-def test_provider_analysis_adapter_reaches_candidate_closure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    labels = SimpleNamespace(
-        state="LABELS_RELEASED",
-        sequence=4,
-        suite_attempt_id=_digest("1"),
-        record_sha256=_digest("2"),
-    )
-    claimed_state = SimpleNamespace(
-        state="ANALYSIS_CLAIMED",
-        sequence=5,
-        manifest_sha256=_digest("3"),
-        record_sha256=_digest("6"),
-        run_receipt_sha256=_digest("4"),
-    )
-    claimed = object.__new__(VerifiedProviderPredecessor)
-    object.__setattr__(claimed, "records", (labels, claimed_state))
-    object.__setattr__(
-        claimed,
-        "evidences",
-        (SimpleNamespace(transition_id=_commit("a")),),
-    )
-    object.__setattr__(claimed, "control_inventory_sha256", _digest("b"))
-    object.__setattr__(claimed, "artifact_receipt_sha256", _digest("c"))
-    object.__setattr__(claimed, "_fresh_revalidator", lambda: None)
-    phase_claim = object.__new__(VerifiedPhaseClaimCapability)
-    clock = 0
-    minted = {id(phase_claim): clock}
-
-    def assert_current(self: VerifiedPhaseClaimCapability) -> None:
-        if clock - minted[id(self)] > 300 * 1_000_000_000:
-            raise RuntimeError("phase capability is stale")
-
-    monkeypatch.setattr(
-        VerifiedPhaseClaimCapability,
-        "assert_current",
-        assert_current,
-    )
-    inputs = SimpleNamespace()
-    materialized = SimpleNamespace(
-        inputs=inputs,
-        receipt=SimpleNamespace(artifact_sha256=_digest("5")),
-    )
-    monkeypatch.setattr(operator, "materialize_confirmatory_input", lambda *_, **__: materialized)
-    monkeypatch.setattr(operator, "load_admitted_model_suite", lambda *_: object())
-
-    def run_analysis(*_: object, **__: object) -> object:
-        nonlocal clock
-        clock += 361 * 1_000_000_000
-        return SimpleNamespace(confirmatory_input_artifact_sha256=_digest("5"))
-
-    monkeypatch.setattr(operator, "run_confirmatory_analysis_once", run_analysis)
-    monkeypatch.setattr(operator, "confirmatory_attempt_path", lambda _: tmp_path / "attempt.json")
-    monkeypatch.setattr(
-        operator, "confirmatory_result_receipt_path", lambda _: tmp_path / "result-receipt.json"
-    )
-    monkeypatch.setattr(operator, "confirmatory_result_path", lambda _: tmp_path / "result.json")
-    observed: dict[str, object] = {}
-
-    def complete(token: object, **kwargs: object) -> object:
-        observed.update(token=token, **kwargs)
-        return SimpleNamespace(state="ANALYSIS_COMPLETE")
-
-    monkeypatch.setattr(operator, "complete_confirmatory_analysis", complete)
-    fresh_phase_claim = object.__new__(VerifiedPhaseClaimCapability)
-
-    def refresh() -> tuple[VerifiedProviderPredecessor, VerifiedPhaseClaimCapability]:
-        minted[id(fresh_phase_claim)] = clock
-        return claimed, fresh_phase_claim
-
-    candidate = operator.run_provider_claimed_confirmatory_analysis_once(
-        SimpleNamespace(),
-        claimed,
-        phase_claim,
-        fresh_claim_supplier=refresh,
-    )
-
-    assert candidate.state == "ANALYSIS_COMPLETE"
-    assert observed["token"] is claimed
-    assert observed["phase_claim"] is fresh_phase_claim
-    assert clock == 361 * 1_000_000_000
+def test_provider_analysis_adapter_rejects_host_execution() -> None:
+    with pytest.raises(
+        operator.ConfirmatoryInputOperatorError,
+        match="C1-pinned offline container",
+    ):
+        operator.run_provider_claimed_confirmatory_analysis_once(
+            SimpleNamespace(),
+            object.__new__(VerifiedProviderPredecessor),
+            object.__new__(VerifiedPhaseClaimCapability),
+        )

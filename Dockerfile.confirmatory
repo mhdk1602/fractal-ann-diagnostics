@@ -943,9 +943,10 @@ RUN --network=none \
         > /tmp/opa-rego-test.sha256 \
     && sha256sum -c /tmp/opa-rego-test.sha256 \
     && rm /tmp/opa-rego-test.sha256 \
-    && /opt/venv/bin/python -c 'import hnswlib, narwhals, numpy, scipy, sklearn; import fractal_ann_diagnostics.cli, fractal_ann_diagnostics.drand_beacon, fractal_ann_diagnostics.provider_activation_factory' \
+    && /opt/venv/bin/python -c 'import hnswlib, narwhals, numpy, scipy, sklearn; import fractal_ann_diagnostics.cli, fractal_ann_diagnostics.drand_beacon, fractal_ann_diagnostics.offline_analysis_contract, fractal_ann_diagnostics.offline_analysis_provider, fractal_ann_diagnostics.offline_analysis_runtime, fractal_ann_diagnostics.post_online_completion, fractal_ann_diagnostics.provider_activation_factory, fractal_ann_diagnostics.provider_phase_runtime' \
     && /opt/venv/bin/python -c 'import importlib.util; assert all(importlib.util.find_spec(name) is None for name in ("torch", "transformers"))' \
     && /opt/venv/bin/python -m fractal_ann_diagnostics.cli --help >/dev/null \
+    && /opt/venv/bin/python -m fractal_ann_diagnostics.provider_phase_runtime --help >/dev/null \
     && /usr/local/bin/opa test \
         /opt/app/policy/opa_compiled_masks.rego \
         /tmp/opa_compiled_masks_test.rego

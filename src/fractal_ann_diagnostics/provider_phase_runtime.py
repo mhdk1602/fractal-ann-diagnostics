@@ -14,8 +14,14 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import selectors
+import signal
 import stat
+import subprocess
 import sys
+import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +34,7 @@ from .artifact_integrity import (
     digest_regular_file,
     write_exclusive_receipt_bytes,
 )
+from .custody import load_custody_seal_receipt, load_timelock_encryption_receipt
 from .execution_claim import (
     ANALYSIS_PHASE,
     LABEL_RELEASE_PHASE,
@@ -36,6 +43,8 @@ from .execution_claim import (
     PROVIDER_PHASE_PLAN_SCHEMA,
     RUNTIME_CLAIM_RECEIPT_SCHEMA,
     ExecutionClaimError,
+    LiveExecuteJobReceipt,
+    PhaseBeaconReceipt,
     PhaseRuntimeClaimReceipt,
     ProviderPhase,
     ProviderPhasePlan,
@@ -45,22 +54,39 @@ from .execution_claim import (
     load_provider_runner_bootstrap,
     loads_runtime_claim_receipt,
 )
-from .study import FIXED_CORPORA, PROVIDER_PHASE_COMMAND_IDS
+from .post_online_completion import (
+    PostOnlineCompletionError,
+    revalidate_post_online_completion_authority,
+)
+from .study import FIXED_CORPORA, PROVIDER_PHASE_COMMAND_IDS, load_study_manifest
 from .suite_attempt import VerifiedProviderPredecessor
+from .timelock_release import (
+    TIMELOCK_DECRYPTION_RECEIPT_FILENAME,
+    TIMELOCK_RELEASE_INTENT_FILENAME,
+    _run_pinned_tle_decrypt,
+    label_release_staging_directory_name,
+    load_timelock_decryption_receipt,
+    release_timelock_label,
+)
 
 PROVIDER_DRIVER_REQUEST_SCHEMA = "fractal-provider-driver-request-v1"
 PROVIDER_PHASE_RUNTIME_REQUEST_SCHEMA = "fractal-provider-phase-runtime-request-v1"
-PROVIDER_DRIVER_OUTPUT_SCHEMA = "fractal-provider-driver-output-v1"
-PROVIDER_PHASE_EXECUTION_RECEIPT_SCHEMA = "fractal-provider-phase-execution-v1"
+PROVIDER_DRIVER_OUTPUT_SCHEMA = "fractal-provider-driver-output-v2"
+PROVIDER_PHASE_EXECUTION_RECEIPT_SCHEMA = "fractal-provider-phase-execution-v2"
 LABEL_RELEASE_DRIVER_CONTROL_SCHEMA = "fractal-provider-label-release-driver-v1"
 ONLINE_SEALED_LAUNCH_DRIVER_CONTROL_SCHEMA = "fractal-provider-online-sealed-launch-driver-v1"
 ANALYSIS_RUNTIME_CLAIM_BUNDLE_SCHEMA = "fractal-analysis-runtime-claim-bundle-v1"
+LABEL_RELEASE_AUTHORITY_JOURNAL_SCHEMA = "fractal-label-release-authority-journal-v1"
 
 PROVIDER_RUNTIME_REQUEST_FILENAME = "provider-runtime-request.json"
 PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME = "provider-phase-execution-receipt.json"
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 _MAX_CONTROL_BYTES = 8 * 1024 * 1024
+_MAX_DOCKER_CONTROL_OUTPUT_BYTES = 64 * 1024
+_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS = 600
+_DOCKER_CONTAINER_CLEANUP_TIMEOUT_SECONDS = 30
 _ALL_FIVE = "all-five"
 _DRIVER_IDS: Mapping[ProviderPhase, str] = {
     ONLINE_PHASE: "sealed-online-corpus-v1",
@@ -89,6 +115,12 @@ def _canonical_bytes(value: object) -> bytes:
 def _digest(name: str, value: object) -> str:
     if type(value) is not str or _SHA256.fullmatch(value) is None:
         raise ProviderPhaseRuntimeError(f"{name} must be one lowercase SHA-256 digest")
+    return value
+
+
+def _git_commit(name: str, value: object) -> str:
+    if type(value) is not str or _GIT_COMMIT.fullmatch(value) is None:
+        raise ProviderPhaseRuntimeError(f"{name} must be one lowercase Git commit")
     return value
 
 
@@ -226,6 +258,177 @@ def _controlled_directory_entries(path: Path, *, label: str) -> tuple[str, ...]:
     return entries
 
 
+def admit_analysis_results_store(
+    path: Path,
+    *,
+    manifest_sha256: str,
+) -> tuple[str, ...]:
+    """Admit only registered analysis-store members across one process restart."""
+
+    from .confirmatory_input_operator import confirmatory_store_closure_filenames
+
+    entries = _controlled_directory_entries(
+        path,
+        label="analysis results store",
+    )
+    allowed = set(confirmatory_store_closure_filenames(manifest_sha256))
+    if not set(entries).issubset(allowed):
+        raise ProviderPhaseRuntimeError(
+            "analysis results store contains an unregistered restart member"
+        )
+    for name in entries:
+        target = path / name
+        try:
+            metadata = target.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ProviderPhaseRuntimeError("cannot inspect analysis restart member") from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or target.is_symlink()
+            or metadata.st_nlink != 1
+            or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
+        ):
+            raise ProviderPhaseRuntimeError(
+                "analysis restart member is not a controlled regular file"
+            )
+    return entries
+
+
+def analysis_offline_package_root(plan: ProviderPhasePlan) -> Path:
+    """Derive the restart-stable package beside the C1 phase-evidence root."""
+
+    if not isinstance(plan, ProviderPhasePlan) or plan.phase != ANALYSIS_PHASE:
+        raise ProviderPhaseRuntimeError("analysis package root requires the typed C1 analysis plan")
+    evidence_root = Path(plan.phase_evidence_root(plan.suite_attempt_id))
+    return evidence_root.with_name(f"{evidence_root.name}.offline-analysis-package")
+
+
+@dataclass(frozen=True)
+class LabelReleasePhaseRootAdmission:
+    completed_corpora: tuple[str, ...]
+    staged_corpus: str | None
+    execution_receipt_present: bool
+
+
+def label_release_authority_journal_name(corpus_id: str) -> str:
+    if corpus_id not in FIXED_CORPORA:
+        raise ProviderPhaseRuntimeError("label authority journal names another corpus")
+    return f".{corpus_id}.label-release-authority.json"
+
+
+def admit_label_release_phase_root(
+    path: Path,
+    *,
+    create_if_absent: bool,
+) -> LabelReleasePhaseRootAdmission:
+    """Admit only a canonical prefix of five release transactions."""
+
+    root = Path(path)
+    if not os.path.lexists(root):
+        if not create_if_absent:
+            raise ProviderPhaseRuntimeError("label phase output root is absent")
+        try:
+            root.mkdir(mode=0o700, parents=False, exist_ok=False)
+        except OSError as exc:
+            raise ProviderPhaseRuntimeError("cannot create label phase output root") from exc
+    entries = _controlled_directory_entries(root, label="label phase output root")
+    ordered = tuple(sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8")))
+    final = tuple(corpus_id for corpus_id in ordered if corpus_id in entries)
+    stage_names = {
+        corpus_id: label_release_staging_directory_name(corpus_id) for corpus_id in ordered
+    }
+    staged = [corpus_id for corpus_id, stage_name in stage_names.items() if stage_name in entries]
+    journal_names = {
+        corpus_id: label_release_authority_journal_name(corpus_id) for corpus_id in ordered
+    }
+    journals = [
+        corpus_id for corpus_id, journal_name in journal_names.items() if journal_name in entries
+    ]
+    receipt_present = PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME in entries
+    allowed = (
+        set(final)
+        | {stage_names[item] for item in staged}
+        | {journal_names[item] for item in journals}
+    )
+    if receipt_present:
+        allowed.add(PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME)
+    if set(entries) != allowed or len(staged) > 1 or not set(journals).issubset(final):
+        raise ProviderPhaseRuntimeError(
+            "label phase output root contains an unexpected transaction"
+        )
+    expected_prefix = ordered[: len(final)]
+    if final != expected_prefix:
+        raise ProviderPhaseRuntimeError(
+            "label phase output directories are not one canonical prefix"
+        )
+    if staged and (len(final) == len(ordered) or staged[0] != ordered[len(final)]):
+        raise ProviderPhaseRuntimeError(
+            "label release stage does not name the next canonical corpus"
+        )
+    if receipt_present and (final != ordered or staged):
+        raise ProviderPhaseRuntimeError(
+            "label phase receipt precedes the exact five-corpus closure"
+        )
+    exact_pair = tuple(
+        sorted(
+            (TIMELOCK_DECRYPTION_RECEIPT_FILENAME, "released-labels.json"),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    committed_pair = tuple(
+        sorted(
+            (*exact_pair, TIMELOCK_RELEASE_INTENT_FILENAME),
+            key=lambda value: value.encode("utf-8"),
+        )
+    )
+    for index, corpus_id in enumerate(final):
+        observed_pair = _controlled_directory_entries(
+            root / corpus_id,
+            label=f"{corpus_id} label release directory",
+        )
+        has_committed_intent = observed_pair == committed_pair
+        if observed_pair != exact_pair and not (
+            has_committed_intent and index == len(final) - 1 and not staged and not receipt_present
+        ):
+            raise ProviderPhaseRuntimeError(
+                f"{corpus_id} label release is not the exact output pair"
+            )
+        if not receipt_present and corpus_id not in journals and not has_committed_intent:
+            raise ProviderPhaseRuntimeError(
+                f"{corpus_id} label release lacks restart authority evidence"
+            )
+    for corpus_id in journals:
+        _secure_file_bytes(
+            root / journal_names[corpus_id],
+            label=f"{corpus_id} label authority journal",
+        )
+    if staged:
+        stage_entries = set(
+            _controlled_directory_entries(
+                root / stage_names[staged[0]],
+                label=f"{staged[0]} label release stage",
+            )
+        )
+        if not stage_entries.issubset(
+            {
+                TIMELOCK_DECRYPTION_RECEIPT_FILENAME,
+                TIMELOCK_RELEASE_INTENT_FILENAME,
+                "released-labels.json",
+            }
+        ):
+            raise ProviderPhaseRuntimeError("label release stage contains unexpected output")
+    if receipt_present:
+        _secure_file_bytes(
+            root / PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME,
+            label="provider phase execution receipt",
+        )
+    return LabelReleasePhaseRootAdmission(
+        completed_corpora=final,
+        staged_corpus=(None if not staged else staged[0]),
+        execution_receipt_present=receipt_present,
+    )
+
+
 @dataclass(frozen=True)
 class ProviderDriverRequest:
     corpus_id: str
@@ -285,6 +488,7 @@ class FreshOnlineClaimAuthority:
 @dataclass(frozen=True)
 class FreshLabelClaimAuthority:
     capability: VerifiedPhaseClaimCapability
+    predecessor: VerifiedProviderPredecessor
     claim_bytes: bytes
     admission_marker_path: str
     admission_marker_sha256: str
@@ -292,10 +496,425 @@ class FreshLabelClaimAuthority:
     def __post_init__(self) -> None:
         if not isinstance(self.capability, VerifiedPhaseClaimCapability):
             raise ProviderPhaseRuntimeError("fresh label authority is untyped")
+        if not isinstance(self.predecessor, VerifiedProviderPredecessor):
+            raise ProviderPhaseRuntimeError("fresh label predecessor is untyped")
+        if (
+            self.predecessor.state.state != "LABEL_RELEASE_CLAIMED"
+            or self.predecessor.state.record_sha256 != self.capability.phase_claim_state_sha256
+            or self.predecessor.ledger_commit != self.capability.phase_claim_ledger_commit
+        ):
+            raise ProviderPhaseRuntimeError(
+                "fresh label capability and predecessor name another claim"
+            )
         if type(self.claim_bytes) is not bytes:
             raise ProviderPhaseRuntimeError("fresh label claim bytes are untyped")
         _absolute_path("admission_marker_path", self.admission_marker_path)
         _digest("admission_marker_sha256", self.admission_marker_sha256)
+
+
+def _kill_control_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (AttributeError, ProcessLookupError, PermissionError):
+        process.kill()
+
+
+def _run_bounded_docker_control(
+    executable: Path,
+    arguments: tuple[str, ...],
+    *,
+    timeout_seconds: int,
+    max_output_bytes: int,
+) -> bytes:
+    if (
+        type(timeout_seconds) is not int
+        or timeout_seconds < 1
+        or timeout_seconds > _DOCKER_IMAGE_PULL_TIMEOUT_SECONDS
+        or type(max_output_bytes) is not int
+        or max_output_bytes < 1
+        or max_output_bytes > _MAX_DOCKER_CONTROL_OUTPUT_BYTES
+    ):
+        raise ProviderPhaseRuntimeError("Docker control bounds are invalid")
+    try:
+        process = subprocess.Popen(
+            [str(executable), *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            close_fds=True,
+            start_new_session=True,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        )
+    except OSError as exc:
+        raise ProviderPhaseRuntimeError("cannot start the pinned Docker client") from exc
+    if process.stdout is None or process.stderr is None:
+        _kill_control_process(process)
+        process.wait()
+        raise ProviderPhaseRuntimeError("Docker control command lacks isolated output streams")
+
+    selector = selectors.DefaultSelector()
+    stdout = bytearray()
+    stderr = bytearray()
+    deadline = time.monotonic() + timeout_seconds
+    streams = (process.stdout, process.stderr)
+    try:
+        for stream in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, stream is process.stderr)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProviderPhaseRuntimeError(
+                    f"Docker image preparation exceeded {timeout_seconds} seconds"
+                )
+            events = selector.select(min(remaining, 0.25))
+            readable = [key for key, _ in events]
+            if not readable and process.poll() is not None:
+                # kqueue can omit the final pipe event after a short-lived
+                # child exits. Drain every still-registered descriptor once
+                # so EOF or bounded tail bytes close the loop immediately.
+                readable = list(selector.get_map().values())
+            for key in readable:
+                stream = key.fileobj
+                try:
+                    chunk = os.read(stream.fileno(), 64 * 1024)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                target = stderr if key.data else stdout
+                if len(stdout) + len(stderr) + len(chunk) > max_output_bytes:
+                    raise ProviderPhaseRuntimeError(
+                        "Docker image preparation exceeded its output bound"
+                    )
+                target.extend(chunk)
+        try:
+            return_code = process.wait(timeout=max(deadline - time.monotonic(), 0.01))
+        except subprocess.TimeoutExpired as exc:
+            raise ProviderPhaseRuntimeError(
+                f"Docker image preparation exceeded {timeout_seconds} seconds"
+            ) from exc
+    except BaseException:
+        _kill_control_process(process)
+        process.wait()
+        raise
+    finally:
+        for stream in streams:
+            if not stream.closed:
+                try:
+                    selector.unregister(stream)
+                except (KeyError, ValueError):
+                    pass
+                stream.close()
+        selector.close()
+    if return_code != 0:
+        message = stderr.decode("utf-8", errors="replace").strip()
+        raise ProviderPhaseRuntimeError(
+            "pinned Docker image preparation failed"
+            f" with exit {return_code}: {message or 'no stderr'}"
+        )
+    return bytes(stdout)
+
+
+def _run_quiet_docker_status(
+    executable: Path,
+    arguments: tuple[str, ...],
+) -> int:
+    """Run one bounded Docker lifecycle command without retaining output."""
+
+    try:
+        completed = subprocess.run(
+            [str(executable), *arguments],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            shell=False,
+            close_fds=True,
+            start_new_session=True,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            timeout=_DOCKER_CONTAINER_CLEANUP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ProviderPhaseRuntimeError("cannot execute bounded Docker container cleanup") from exc
+    return completed.returncode
+
+
+def _assert_docker_container_absent(
+    executable: Path,
+    *,
+    config: Path,
+    container_name: str,
+) -> None:
+    """Prove the one-shot release container is absent from the same daemon."""
+
+    observed = _run_bounded_docker_control(
+        executable,
+        (
+            "--config",
+            str(config),
+            "container",
+            "ls",
+            "--all",
+            "--no-trunc",
+            "--filter",
+            f"name=^/{container_name}$",
+            "--format={{.Names}}",
+        ),
+        timeout_seconds=_DOCKER_CONTAINER_CLEANUP_TIMEOUT_SECONDS,
+        max_output_bytes=_MAX_DOCKER_CONTROL_OUTPUT_BYTES,
+    )
+    if observed:
+        raise ProviderPhaseRuntimeError("Docker TLE container survived its one-shot execution")
+
+
+def _force_remove_docker_container(
+    executable: Path,
+    *,
+    config: Path,
+    container_name: str,
+) -> None:
+    """Force-remove a possibly orphaned release container, then prove absence."""
+
+    _run_quiet_docker_status(
+        executable,
+        (
+            "--config",
+            str(config),
+            "container",
+            "rm",
+            "--force",
+            "--volumes",
+            container_name,
+        ),
+    )
+    _assert_docker_container_absent(
+        executable,
+        config=config,
+        container_name=container_name,
+    )
+
+
+@dataclass(frozen=True)
+class DockerTleDecryptRunner:
+    """Fixed Linux/ARM64 release-image adapter for the host-side release gate."""
+
+    docker_executable: str
+    docker_resolved_executable: str
+    docker_executable_sha256: str
+    index_image_reference: str
+    platform_image_reference: str
+    oci_index_digest: str
+    oci_platform_manifest_digest: str
+    runtime_platform: str
+    tle_binary_sha256: str
+    maximum_runtime_seconds: int
+
+    def __post_init__(self) -> None:
+        _absolute_path("docker_executable", self.docker_executable)
+        _absolute_path("docker_resolved_executable", self.docker_resolved_executable)
+        if self.docker_executable == self.docker_resolved_executable:
+            raise ProviderPhaseRuntimeError(
+                "Docker TLE client must bind its resolved symlink target"
+            )
+        _digest("docker_executable_sha256", self.docker_executable_sha256)
+        image = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+        digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+        if (
+            image.fullmatch(self.index_image_reference) is None
+            or image.fullmatch(self.platform_image_reference) is None
+            or digest.fullmatch(self.oci_index_digest) is None
+            or digest.fullmatch(self.oci_platform_manifest_digest) is None
+            or self.index_image_reference.rsplit("@", 1)[1] != self.oci_index_digest
+            or self.platform_image_reference.rsplit("@", 1)[1] != self.oci_platform_manifest_digest
+            or self.index_image_reference.rsplit("@", 1)[0]
+            != self.platform_image_reference.rsplit("@", 1)[0]
+        ):
+            raise ProviderPhaseRuntimeError("Docker TLE image differs from its C1 digest pins")
+        if self.runtime_platform != "linux/arm64":
+            raise ProviderPhaseRuntimeError(
+                "Docker TLE runner requires the C1 Linux/ARM64 platform"
+            )
+        _digest("tle_binary_sha256", self.tle_binary_sha256)
+        if type(self.maximum_runtime_seconds) is not int or self.maximum_runtime_seconds < 1:
+            raise ProviderPhaseRuntimeError("Docker TLE runtime ceiling is invalid")
+
+    @classmethod
+    def from_plan(cls, plan: ProviderPhasePlan) -> DockerTleDecryptRunner:
+        if plan.phase != LABEL_RELEASE_PHASE or plan.tle_binary_sha256 is None:
+            raise ProviderPhaseRuntimeError("Docker TLE runner requires the label-release plan")
+        repository = plan.runtime_image.rsplit("@", 1)[0]
+        return cls(
+            docker_executable=plan.host_tools.docker_executable,
+            docker_resolved_executable=plan.host_tools.docker_resolved_executable,
+            docker_executable_sha256=plan.host_tools.docker_executable_sha256,
+            index_image_reference=plan.runtime_image,
+            platform_image_reference=f"{repository}@{plan.oci_platform_manifest_digest}",
+            oci_index_digest=plan.oci_index_digest,
+            oci_platform_manifest_digest=plan.oci_platform_manifest_digest,
+            runtime_platform=plan.runtime_platform,
+            tle_binary_sha256=plan.tle_binary_sha256,
+            maximum_runtime_seconds=plan.maximum_runtime_seconds,
+        )
+
+    def _verify_docker_client(self) -> None:
+        try:
+            invocation = Path(self.docker_executable)
+            if not stat.S_ISLNK(invocation.lstat().st_mode):
+                raise ProviderPhaseRuntimeError(
+                    "Docker TLE invocation path is no longer the C1 symlink"
+                )
+            resolved = invocation.resolve(strict=True)
+            if resolved != Path(self.docker_resolved_executable):
+                raise ProviderPhaseRuntimeError(
+                    "Docker TLE invocation path resolves outside its C1 binding"
+                )
+            observed = digest_regular_file(
+                resolved,
+                label="Docker TLE client",
+            )
+        except OSError as exc:
+            raise ProviderPhaseRuntimeError("cannot resolve the Docker TLE client") from exc
+        except ArtifactIntegrityError as exc:
+            raise ProviderPhaseRuntimeError("cannot revalidate the Docker TLE client") from exc
+        if observed != self.docker_executable_sha256:
+            raise ProviderPhaseRuntimeError("Docker TLE client differs from C1")
+
+    def prepare(self) -> None:
+        """Make the exact C1 platform manifest available without host credentials."""
+
+        self._verify_docker_client()
+        with tempfile.TemporaryDirectory(prefix="fractal-anonymous-docker-") as raw_config:
+            config = Path(raw_config)
+            config.chmod(0o700)
+            _run_bounded_docker_control(
+                Path(self.docker_resolved_executable),
+                (
+                    "--config",
+                    str(config),
+                    "pull",
+                    "--quiet",
+                    f"--platform={self.runtime_platform}",
+                    self.platform_image_reference,
+                ),
+                timeout_seconds=_DOCKER_IMAGE_PULL_TIMEOUT_SECONDS,
+                max_output_bytes=_MAX_DOCKER_CONTROL_OUTPUT_BYTES,
+            )
+
+    def __call__(
+        self,
+        binary: Path,
+        arguments: tuple[str, ...],
+        ciphertext: bytes,
+        timeout_seconds: int,
+        max_plaintext_bytes: int,
+    ) -> bytes:
+        self._verify_docker_client()
+        try:
+            binary_sha256 = digest_regular_file(binary, label="Docker TLE host binary pin")
+        except ArtifactIntegrityError as exc:
+            raise ProviderPhaseRuntimeError("cannot revalidate the Docker TLE binary pin") from exc
+        if binary_sha256 != self.tle_binary_sha256:
+            raise ProviderPhaseRuntimeError("Docker TLE binary argument differs from C1")
+        if (
+            len(arguments) != 3
+            or arguments[0] != "--decrypt"
+            or not arguments[1].startswith("--network=https://")
+            or not re.fullmatch(r"--chain=[0-9a-f]{64}", arguments[2])
+        ):
+            raise ProviderPhaseRuntimeError("Docker TLE arguments differ from the release API")
+        if (
+            type(timeout_seconds) is not int
+            or timeout_seconds < 1
+            or timeout_seconds > min(60, self.maximum_runtime_seconds)
+        ):
+            raise ProviderPhaseRuntimeError("Docker TLE timeout exceeds its fixed bound")
+        if (
+            type(max_plaintext_bytes) is not int
+            or max_plaintext_bytes < 1
+            or max_plaintext_bytes > 1024 * 1024 * 1024
+        ):
+            raise ProviderPhaseRuntimeError("Docker TLE plaintext bound is invalid")
+        with tempfile.TemporaryDirectory(prefix="fractal-anonymous-docker-") as raw_config:
+            config = Path(raw_config)
+            config.chmod(0o700)
+            container_name = f"fractal-tle-{secrets.token_hex(16)}"
+            create_arguments = (
+                "--config",
+                str(config),
+                "container",
+                "create",
+                f"--name={container_name}",
+                "--interactive",
+                "--rm",
+                "--pull=never",
+                "--log-driver=none",
+                "--network=bridge",
+                f"--platform={self.runtime_platform}",
+                "--user=65532:65532",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+                "--pids-limit=64",
+                "--memory=256m",
+                "--cpus=1",
+                "--read-only",
+                "--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m",
+                "--entrypoint=/usr/local/bin/tle",
+                self.platform_image_reference,
+                *arguments,
+            )
+            executable = Path(self.docker_resolved_executable)
+            try:
+                created = _run_bounded_docker_control(
+                    executable,
+                    create_arguments,
+                    timeout_seconds=_DOCKER_CONTAINER_CLEANUP_TIMEOUT_SECONDS,
+                    max_output_bytes=_MAX_DOCKER_CONTROL_OUTPUT_BYTES,
+                )
+                if re.fullmatch(rb"[0-9a-f]{64}\n", created) is None:
+                    raise ProviderPhaseRuntimeError(
+                        "Docker TLE create returned an invalid container identity"
+                    )
+                container_id = created[:-1].decode("ascii")
+                start_arguments = (
+                    "--config",
+                    str(config),
+                    "container",
+                    "start",
+                    "--attach",
+                    "--interactive",
+                    container_id,
+                )
+                plaintext = _run_pinned_tle_decrypt(
+                    executable,
+                    start_arguments,
+                    ciphertext,
+                    timeout_seconds,
+                    max_plaintext_bytes,
+                )
+            except BaseException:
+                try:
+                    _force_remove_docker_container(
+                        executable,
+                        config=config,
+                        container_name=container_name,
+                    )
+                except Exception as cleanup_exc:
+                    raise ProviderPhaseRuntimeError(
+                        "Docker TLE failure left an unverifiable container"
+                    ) from cleanup_exc
+                raise
+            _force_remove_docker_container(
+                executable,
+                config=config,
+                container_name=container_name,
+            )
+            return plaintext
 
 
 OnlineRunClaimSupplier = Callable[[ProviderDriverRequest], FreshOnlineClaimAuthority]
@@ -616,12 +1235,302 @@ def _load_phase_runtime_claim(
 
 
 @dataclass(frozen=True)
+class LabelReleaseOutputAuthority:
+    """Action-specific authority retained for later label completion."""
+
+    corpus_id: str
+    post_online_completion_aggregate_file_sha256: str
+    label_release_claim_state_sha256: str
+    label_release_claim_ledger_commit: str
+    label_release_phase_claim_contract_sha256: str
+    label_release_phase_beacon_receipt_sha256: str
+    label_release_live_execute_job_receipt_sha256: str
+    label_release_provider_identity_sha256: str
+    label_release_phase_beacon_receipt: PhaseBeaconReceipt
+    label_release_live_execute_job_receipt: LiveExecuteJobReceipt
+
+    def __post_init__(self) -> None:
+        if self.corpus_id not in FIXED_CORPORA:
+            raise ProviderPhaseRuntimeError("label-release output authority has another corpus")
+        for name in (
+            "post_online_completion_aggregate_file_sha256",
+            "label_release_claim_state_sha256",
+            "label_release_phase_claim_contract_sha256",
+            "label_release_phase_beacon_receipt_sha256",
+            "label_release_live_execute_job_receipt_sha256",
+            "label_release_provider_identity_sha256",
+        ):
+            _digest(name, getattr(self, name))
+        _git_commit(
+            "label_release_claim_ledger_commit",
+            self.label_release_claim_ledger_commit,
+        )
+        if (
+            not isinstance(
+                self.label_release_phase_beacon_receipt,
+                PhaseBeaconReceipt,
+            )
+            or not isinstance(
+                self.label_release_live_execute_job_receipt,
+                LiveExecuteJobReceipt,
+            )
+            or self.label_release_phase_beacon_receipt.receipt_sha256
+            != self.label_release_phase_beacon_receipt_sha256
+            or self.label_release_live_execute_job_receipt.receipt_sha256
+            != self.label_release_live_execute_job_receipt_sha256
+            or self.label_release_phase_beacon_receipt.phase_claim_state_sha256
+            != self.label_release_claim_state_sha256
+            or self.label_release_phase_beacon_receipt.phase_claim_ledger_commit
+            != self.label_release_claim_ledger_commit
+            or self.label_release_phase_beacon_receipt.phase_claim_contract_sha256
+            != self.label_release_phase_claim_contract_sha256
+            or self.label_release_phase_beacon_receipt.provider_identity_sha256
+            != self.label_release_provider_identity_sha256
+            or self.label_release_live_execute_job_receipt.provider_identity_sha256
+            != self.label_release_provider_identity_sha256
+        ):
+            raise ProviderPhaseRuntimeError(
+                "label-release output authority evidence differs from its hashes"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            **{
+                name: getattr(self, name)
+                for name in self.__dataclass_fields__
+                if name
+                not in {
+                    "label_release_live_execute_job_receipt",
+                    "label_release_phase_beacon_receipt",
+                }
+            },
+            "label_release_live_execute_job_receipt": (
+                self.label_release_live_execute_job_receipt.to_dict()
+            ),
+            "label_release_phase_beacon_receipt": (
+                self.label_release_phase_beacon_receipt.to_dict()
+            ),
+        }
+
+    @property
+    def authority_sha256(self) -> str:
+        return hashlib.sha256(_canonical_bytes(self.to_dict())).hexdigest()
+
+    @classmethod
+    def from_dict(cls, value: object) -> LabelReleaseOutputAuthority:
+        row = _closed(
+            value,
+            frozenset(cls.__dataclass_fields__),
+            label="label-release output authority",
+        )
+        return cls(
+            **{
+                key: item
+                for key, item in row.items()
+                if key
+                not in {
+                    "label_release_live_execute_job_receipt",
+                    "label_release_phase_beacon_receipt",
+                }
+            },
+            label_release_live_execute_job_receipt=LiveExecuteJobReceipt(
+                **_closed(
+                    row["label_release_live_execute_job_receipt"],
+                    frozenset(LiveExecuteJobReceipt.__dataclass_fields__),
+                    label="label-release live execute-job receipt",
+                )
+            ),
+            label_release_phase_beacon_receipt=PhaseBeaconReceipt.from_dict(
+                row["label_release_phase_beacon_receipt"]
+            ),
+        )
+
+
+def _label_authority_journal_bytes(
+    authority: LabelReleaseOutputAuthority,
+) -> bytes:
+    return (
+        _canonical_bytes(
+            {
+                "authority": authority.to_dict(),
+                "authority_sha256": authority.authority_sha256,
+                "schema_version": LABEL_RELEASE_AUTHORITY_JOURNAL_SCHEMA,
+            }
+        )
+        + b"\n"
+    )
+
+
+def _load_label_authority_journal(path: Path) -> LabelReleaseOutputAuthority:
+    encoded = _secure_file_bytes(path, label="label-release authority journal")
+    if not encoded.endswith(b"\n") or encoded.endswith(b"\n\n"):
+        raise ProviderPhaseRuntimeError(
+            "label-release authority journal needs one terminal newline"
+        )
+    row = _closed(
+        _strict_object(encoded[:-1], label="label-release authority journal"),
+        frozenset({"authority", "authority_sha256", "schema_version"}),
+        label="label-release authority journal",
+    )
+    if row["schema_version"] != LABEL_RELEASE_AUTHORITY_JOURNAL_SCHEMA:
+        raise ProviderPhaseRuntimeError("label-release authority journal schema differs")
+    authority = LabelReleaseOutputAuthority.from_dict(row["authority"])
+    if row[
+        "authority_sha256"
+    ] != authority.authority_sha256 or encoded != _label_authority_journal_bytes(authority):
+        raise ProviderPhaseRuntimeError(
+            "label-release authority journal differs from its canonical evidence"
+        )
+    return authority
+
+
+def _release_intent_action_evidence(
+    path: Path,
+) -> tuple[LiveExecuteJobReceipt, PhaseBeaconReceipt]:
+    encoded = _secure_file_bytes(path, label="committed timelock release intent")
+    if not encoded.endswith(b"\n") or encoded.endswith(b"\n\n"):
+        raise ProviderPhaseRuntimeError(
+            "committed timelock release intent needs one terminal newline"
+        )
+    row = _strict_object(
+        encoded[:-1],
+        label="committed timelock release intent",
+    )
+    try:
+        live_row = row["label_release_live_execute_job_receipt"]
+        beacon_row = row["label_release_phase_beacon_receipt"]
+    except KeyError as exc:
+        raise ProviderPhaseRuntimeError(
+            "committed timelock release intent lacks action evidence"
+        ) from exc
+    live = LiveExecuteJobReceipt(
+        **_closed(
+            live_row,
+            frozenset(LiveExecuteJobReceipt.__dataclass_fields__),
+            label="committed label live execute-job receipt",
+        )
+    )
+    beacon = PhaseBeaconReceipt.from_dict(beacon_row)
+    if encoded != _canonical_bytes(row) + b"\n":
+        raise ProviderPhaseRuntimeError("committed timelock release intent bytes are not canonical")
+    return live, beacon
+
+
+def _close_label_release_action_authority(
+    *,
+    row: ProviderDriverRequest,
+    receipt: object,
+    fresh: FreshLabelClaimAuthority,
+    existing_phase_authority: LabelReleaseOutputAuthority | None,
+) -> LabelReleaseOutputAuthority:
+    phase_root = Path(row.output_root).parent
+    intent_path = Path(row.output_root) / TIMELOCK_RELEASE_INTENT_FILENAME
+    journal_path = phase_root / label_release_authority_journal_name(row.corpus_id)
+    if os.path.lexists(intent_path):
+        live, beacon = _release_intent_action_evidence(intent_path)
+    elif os.path.lexists(journal_path):
+        journal = _load_label_authority_journal(journal_path)
+        live = journal.label_release_live_execute_job_receipt
+        beacon = journal.label_release_phase_beacon_receipt
+    elif existing_phase_authority is not None:
+        live = existing_phase_authority.label_release_live_execute_job_receipt
+        beacon = existing_phase_authority.label_release_phase_beacon_receipt
+    else:
+        raise ProviderPhaseRuntimeError(
+            "committed label release lacks recoverable action authority"
+        )
+    current_beacon = fresh.capability.phase_beacon_receipt
+    if (
+        not isinstance(current_beacon, PhaseBeaconReceipt)
+        or live.job_identity_sha256 != fresh.capability.live_execute_job_receipt.job_identity_sha256
+        or beacon.beacon_identity_sha256 != current_beacon.beacon_identity_sha256
+    ):
+        raise ProviderPhaseRuntimeError(
+            "persisted label action evidence differs from fresh authority"
+        )
+    authority = LabelReleaseOutputAuthority(
+        corpus_id=row.corpus_id,
+        post_online_completion_aggregate_file_sha256=(
+            receipt.post_online_completion_aggregate_file_sha256
+        ),
+        label_release_claim_state_sha256=(receipt.label_release_claim_state_sha256),
+        label_release_claim_ledger_commit=(receipt.label_release_claim_ledger_commit),
+        label_release_phase_claim_contract_sha256=(
+            receipt.label_release_phase_claim_contract_sha256
+        ),
+        label_release_phase_beacon_receipt_sha256=(
+            receipt.label_release_phase_beacon_receipt_sha256
+        ),
+        label_release_live_execute_job_receipt_sha256=(
+            receipt.label_release_live_execute_job_receipt_sha256
+        ),
+        label_release_provider_identity_sha256=(receipt.label_release_provider_identity_sha256),
+        label_release_phase_beacon_receipt=beacon,
+        label_release_live_execute_job_receipt=live,
+    )
+    if existing_phase_authority is not None and authority != existing_phase_authority:
+        raise ProviderPhaseRuntimeError("existing phase receipt changes label action authority")
+    journal_bytes = _label_authority_journal_bytes(authority)
+    if os.path.lexists(journal_path):
+        if (
+            _secure_file_bytes(
+                journal_path,
+                label="label-release authority journal",
+            )
+            != journal_bytes
+        ):
+            raise ProviderPhaseRuntimeError(
+                "label-release authority journal changes its exact evidence"
+            )
+    elif existing_phase_authority is None:
+        try:
+            write_exclusive_receipt_bytes(journal_bytes, journal_path)
+        except ArtifactIntegrityError as exc:
+            raise ProviderPhaseRuntimeError(
+                "cannot persist label-release authority journal"
+            ) from exc
+    if os.path.lexists(intent_path):
+        try:
+            intent_path.unlink()
+            output_descriptor = os.open(
+                Path(row.output_root),
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(output_descriptor)
+            finally:
+                os.close(output_descriptor)
+            phase_descriptor = os.open(
+                phase_root,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(phase_descriptor)
+            finally:
+                os.close(phase_descriptor)
+        except OSError as exc:
+            raise ProviderPhaseRuntimeError("cannot close committed label release intent") from exc
+    return authority
+
+
+@dataclass(frozen=True)
 class ProviderDriverOutput:
     corpus_id: str
     driver_id: str
     output_root: str
     output_tree_sha256: str
     output_entries: tuple[str, ...]
+    analysis_execution_receipt_uri: str | None = None
+    analysis_execution_receipt_sha256: str | None = None
+    analysis_execution_receipt_file_sha256: str | None = None
+    label_release_authority_sha256: str | None = None
+    label_release_authority: LabelReleaseOutputAuthority | None = None
     schema_version: str = PROVIDER_DRIVER_OUTPUT_SCHEMA
 
     def __post_init__(self) -> None:
@@ -636,6 +1545,60 @@ class ProviderDriverOutput:
             or list(entries) != sorted(entries, key=lambda value: value.encode("utf-8"))
         ):
             raise ProviderPhaseRuntimeError("provider driver output inventory differs")
+        analysis_values = (
+            self.analysis_execution_receipt_uri,
+            self.analysis_execution_receipt_sha256,
+            self.analysis_execution_receipt_file_sha256,
+        )
+        if self.driver_id == _DRIVER_IDS[ANALYSIS_PHASE]:
+            if any(type(value) is not str for value in analysis_values):
+                raise ProviderPhaseRuntimeError(
+                    "analysis driver output lacks execution-receipt evidence"
+                )
+            assert self.analysis_execution_receipt_uri is not None
+            parsed = urlsplit(self.analysis_execution_receipt_uri)
+            execution_path = Path(unquote(parsed.path))
+            if (
+                parsed.scheme != "file"
+                or parsed.netloc
+                or parsed.query
+                or parsed.fragment
+                or not execution_path.is_absolute()
+                or execution_path.as_uri() != self.analysis_execution_receipt_uri
+            ):
+                raise ProviderPhaseRuntimeError(
+                    "analysis execution receipt URI is not canonical local evidence"
+                )
+            _digest(
+                "analysis_execution_receipt_sha256",
+                self.analysis_execution_receipt_sha256,
+            )
+            _digest(
+                "analysis_execution_receipt_file_sha256",
+                self.analysis_execution_receipt_file_sha256,
+            )
+        elif any(value is not None for value in analysis_values):
+            raise ProviderPhaseRuntimeError(
+                "non-analysis output introduced analysis execution evidence"
+            )
+        if self.driver_id == _DRIVER_IDS[LABEL_RELEASE_PHASE]:
+            if (
+                not isinstance(
+                    self.label_release_authority,
+                    LabelReleaseOutputAuthority,
+                )
+                or self.label_release_authority.corpus_id != self.corpus_id
+                or self.label_release_authority_sha256
+                != self.label_release_authority.authority_sha256
+            ):
+                raise ProviderPhaseRuntimeError(
+                    "label-release output lacks its exact action authority"
+                )
+        elif (
+            self.label_release_authority is not None
+            or self.label_release_authority_sha256 is not None
+        ):
+            raise ProviderPhaseRuntimeError("non-label output introduced label-release authority")
         if self.schema_version != PROVIDER_DRIVER_OUTPUT_SCHEMA:
             raise ProviderPhaseRuntimeError("provider driver output schema differs")
         object.__setattr__(self, "output_entries", entries)
@@ -645,8 +1608,13 @@ class ProviderDriverOutput:
             **{
                 name: getattr(self, name)
                 for name in self.__dataclass_fields__
-                if name != "output_entries"
+                if name not in {"label_release_authority", "output_entries"}
             },
+            "label_release_authority": (
+                None
+                if self.label_release_authority is None
+                else self.label_release_authority.to_dict()
+            ),
             "output_entries": list(self.output_entries),
         }
 
@@ -676,7 +1644,11 @@ class ProviderPhaseExecutionReceipt:
         ):
             _digest(name, getattr(self, name))
         rows = tuple(self.outputs)
-        if not rows or not all(isinstance(row, ProviderDriverOutput) for row in rows):
+        if (
+            not rows
+            or not all(isinstance(row, ProviderDriverOutput) for row in rows)
+            or any(row.driver_id != _DRIVER_IDS[self.phase] for row in rows)
+        ):
             raise ProviderPhaseRuntimeError("provider execution receipt lacks typed outputs")
         if self.schema_version != PROVIDER_PHASE_EXECUTION_RECEIPT_SCHEMA:
             raise ProviderPhaseRuntimeError("provider execution receipt schema differs")
@@ -701,20 +1673,136 @@ class ProviderPhaseExecutionReceipt:
     def file_sha256(self) -> str:
         return hashlib.sha256(self.canonical_file_bytes()).hexdigest()
 
+    @classmethod
+    def from_bytes(cls, encoded: bytes) -> ProviderPhaseExecutionReceipt:
+        if not encoded.endswith(b"\n") or encoded.endswith(b"\n\n"):
+            raise ProviderPhaseRuntimeError(
+                "provider phase execution receipt needs one terminal newline"
+            )
+        row = _closed(
+            _strict_object(
+                encoded[:-1],
+                label="provider phase execution receipt",
+            ),
+            frozenset(cls.__dataclass_fields__),
+            label="provider phase execution receipt",
+        )
+        raw_outputs = row["outputs"]
+        if not isinstance(raw_outputs, list):
+            raise ProviderPhaseRuntimeError("provider phase execution outputs must be an array")
+        outputs: list[ProviderDriverOutput] = []
+        for raw_output in raw_outputs:
+            output = _closed(
+                raw_output,
+                frozenset(ProviderDriverOutput.__dataclass_fields__),
+                label="provider driver output",
+            )
+            entries = output["output_entries"]
+            if not isinstance(entries, list):
+                raise ProviderPhaseRuntimeError("provider driver output entries must be an array")
+            raw_authority = output["label_release_authority"]
+            authority = (
+                None
+                if raw_authority is None
+                else LabelReleaseOutputAuthority.from_dict(raw_authority)
+            )
+            outputs.append(
+                ProviderDriverOutput(
+                    **{
+                        key: value
+                        for key, value in output.items()
+                        if key
+                        not in {
+                            "label_release_authority",
+                            "output_entries",
+                        }
+                    },
+                    label_release_authority=authority,
+                    output_entries=tuple(entries),
+                )
+            )
+        receipt = cls(
+            **{key: value for key, value in row.items() if key != "outputs"},
+            outputs=tuple(outputs),
+        )
+        if receipt.canonical_file_bytes() != encoded:
+            raise ProviderPhaseRuntimeError(
+                "provider phase execution receipt bytes are not canonical"
+            )
+        return receipt
 
-def _output_receipt(row: ProviderDriverRequest) -> ProviderDriverOutput:
+
+def _admit_existing_phase_execution_receipt(
+    target: Path,
+    request: ProviderPhaseRuntimeRequest,
+    fresh: ProviderPhaseExecutionReceipt,
+) -> ProviderPhaseExecutionReceipt:
+    if request.phase not in {LABEL_RELEASE_PHASE, ANALYSIS_PHASE}:
+        raise ProviderPhaseRuntimeError("provider phase execution receipt already exists")
+    existing = ProviderPhaseExecutionReceipt.from_bytes(
+        _secure_file_bytes(
+            target,
+            label="provider phase execution receipt",
+        )
+    )
+    if (
+        existing.phase != fresh.phase
+        or existing.suite_attempt_id != fresh.suite_attempt_id
+        or existing.provider_plan_sha256 != fresh.provider_plan_sha256
+        or existing.provider_plan_file_sha256 != fresh.provider_plan_file_sha256
+        or existing.claim_receipt_file_sha256 != fresh.claim_receipt_file_sha256
+        or existing.outputs != fresh.outputs
+    ):
+        raise ProviderPhaseRuntimeError(
+            "existing provider phase receipt differs from fresh closure"
+        )
+    return existing
+
+
+def _output_receipt(
+    row: ProviderDriverRequest,
+    *,
+    analysis_outcome: object | None = None,
+    label_release_authority: LabelReleaseOutputAuthority | None = None,
+) -> ProviderDriverOutput:
     try:
         inventory = digest_directory_tree(Path(row.output_root))
     except ArtifactIntegrityError as exc:
         raise ProviderPhaseRuntimeError("cannot close provider driver output tree") from exc
     if not inventory.entries:
         raise ProviderPhaseRuntimeError("provider driver produced an empty output tree")
+    analysis_values: dict[str, str | None] = {
+        "analysis_execution_receipt_uri": None,
+        "analysis_execution_receipt_sha256": None,
+        "analysis_execution_receipt_file_sha256": None,
+    }
+    if analysis_outcome is not None:
+        from .offline_analysis_provider import OfflineAnalysisOutcome
+
+        if row.driver_id != _DRIVER_IDS[ANALYSIS_PHASE] or not isinstance(
+            analysis_outcome, OfflineAnalysisOutcome
+        ):
+            raise ProviderPhaseRuntimeError(
+                "analysis output receipt received untyped execution evidence"
+            )
+        analysis_values = {
+            "analysis_execution_receipt_uri": (analysis_outcome.execution_receipt_path.as_uri()),
+            "analysis_execution_receipt_sha256": (analysis_outcome.execution_receipt_sha256),
+            "analysis_execution_receipt_file_sha256": (
+                analysis_outcome.execution_receipt_file_sha256
+            ),
+        }
     return ProviderDriverOutput(
         corpus_id=row.corpus_id,
         driver_id=row.driver_id,
         output_root=row.output_root,
         output_tree_sha256=inventory.sha256,
         output_entries=tuple(inventory.entries),
+        **analysis_values,
+        label_release_authority_sha256=(
+            None if label_release_authority is None else label_release_authority.authority_sha256
+        ),
+        label_release_authority=label_release_authority,
     )
 
 
@@ -784,9 +1872,23 @@ def _run_label_release(
     row: ProviderDriverRequest,
     claim_bytes: bytes,
     phase_claim: VerifiedPhaseClaimCapability,
-) -> None:
+    provider_claimed: VerifiedProviderPredecessor,
+    tle_runner: DockerTleDecryptRunner,
+) -> object:
     if not isinstance(phase_claim, VerifiedPhaseClaimCapability):
         raise ProviderPhaseRuntimeError("label release lacks in-memory claim authority")
+    if not isinstance(provider_claimed, VerifiedProviderPredecessor):
+        raise ProviderPhaseRuntimeError("label release lacks verified provider state")
+    if not isinstance(tle_runner, DockerTleDecryptRunner):
+        raise ProviderPhaseRuntimeError("label release lacks the fixed Docker TLE runner")
+    if (
+        provider_claimed.state.state != "LABEL_RELEASE_CLAIMED"
+        or provider_claimed.state.record_sha256 != phase_claim.phase_claim_state_sha256
+        or provider_claimed.ledger_commit != phase_claim.phase_claim_ledger_commit
+    ):
+        raise ProviderPhaseRuntimeError(
+            "label release capability and provider state name another claim"
+        )
     receipt = _load_phase_runtime_claim(
         claim_bytes,
         phase=LABEL_RELEASE_PHASE,
@@ -807,43 +1909,71 @@ def _run_label_release(
         Path(row.control_path), row.control_file_sha256, label="label-release driver control"
     )
     control = LabelReleaseDriverControl.from_bytes(control_bytes)
+    bindings = [
+        binding for binding in phase_claim.contract.corpora if binding.corpus_id == row.corpus_id
+    ]
+    if len(bindings) != 1:
+        raise ProviderPhaseRuntimeError("label-release claim lacks one exact corpus binding")
+    binding = bindings[0]
     if Path(control.plaintext_output_path).parent != Path(row.output_root):
         raise ProviderPhaseRuntimeError("label plaintext output differs from its driver root")
     if Path(control.decryption_receipt_path).parent != Path(row.output_root):
         raise ProviderPhaseRuntimeError("label receipt output differs from its driver root")
-    from .cli import main as core_main
+    if (
+        Path(control.ciphertext_path).as_uri() != receipt.input_uri
+        or Path(control.encryption_receipt_path).as_uri() != receipt.supporting_input_uri
+        or Path(control.plaintext_output_path).as_uri() != binding.output_uri
+        or Path(control.decryption_receipt_path).name != "timelock-decryption-receipt.json"
+    ):
+        raise ProviderPhaseRuntimeError(
+            "label-release control paths differ from the fresh phase binding"
+        )
+    if provider_claimed.namespace != Path(control.suite_namespace):
+        raise ProviderPhaseRuntimeError(
+            "label-release control differs from the verified canonical suite namespace"
+        )
+    completion_root = provider_claimed.namespace / "completion"
+    if (
+        Path(control.completion_receipt_path)
+        != completion_root / f"{row.corpus_id}-prediction-completion.json"
+        or Path(control.completion_anchor_record_path)
+        != completion_root / f"{row.corpus_id}-prediction-completion-anchor.json"
+        or Path(control.completion_anchor_receipt_path)
+        != completion_root / f"{row.corpus_id}-prediction-completion-anchor-receipt.json"
+    ):
+        raise ProviderPhaseRuntimeError(
+            "label-release completion paths differ from the provider closure"
+        )
+    try:
+        verified_completion = revalidate_post_online_completion_authority(
+            provider_claimed,
+            phase_claim,
+        )
+    except PostOnlineCompletionError as exc:
+        raise ProviderPhaseRuntimeError(
+            "post-online completion authority failed anonymous revalidation"
+        ) from exc
 
-    status = core_main(
-        [
-            "release-timelock-label",
-            "--manifest",
-            control.manifest_path,
-            "--corpus-id",
-            row.corpus_id,
-            "--custody-seal",
-            control.custody_seal_path,
-            "--encryption-receipt",
-            control.encryption_receipt_path,
-            "--completion-receipt",
-            control.completion_receipt_path,
-            "--completion-anchor-record",
-            control.completion_anchor_record_path,
-            "--completion-anchor-receipt",
-            control.completion_anchor_receipt_path,
-            "--suite-namespace",
-            control.suite_namespace,
-            "--ciphertext",
-            control.ciphertext_path,
-            "--tle-binary",
-            control.tle_binary_path,
-            "--plaintext-output",
-            control.plaintext_output_path,
-            "--receipt",
-            control.decryption_receipt_path,
-        ]
+    verified_release = release_timelock_label(
+        load_study_manifest(control.manifest_path),
+        corpus_id=row.corpus_id,
+        custody_seal=load_custody_seal_receipt(control.custody_seal_path),
+        encryption_receipt=load_timelock_encryption_receipt(control.encryption_receipt_path),
+        verified_post_online_completion=verified_completion,
+        verified_suite_completion=provider_claimed,
+        verified_phase_claim=phase_claim,
+        ciphertext_path=control.ciphertext_path,
+        tle_binary_path=control.tle_binary_path,
+        plaintext_output_path=control.plaintext_output_path,
+        decryption_receipt_output_path=control.decryption_receipt_path,
+        trusted_tle_runner=tle_runner,
     )
-    if status != 0:
-        raise ProviderPhaseRuntimeError("label-release core returned a failure status")
+    if (
+        load_timelock_decryption_receipt(control.decryption_receipt_path)
+        != verified_release.receipt
+    ):
+        raise ProviderPhaseRuntimeError("persisted label-release receipt differs")
+    return verified_release
 
 
 def _verify_pre_decryption_marker(
@@ -923,12 +2053,13 @@ def _verify_pre_decryption_marker(
 
 
 def _run_analysis(
+    plan: ProviderPhasePlan,
     row: ProviderDriverRequest,
     claim_bytes: bytes,
     provider_claimed: VerifiedProviderPredecessor | None,
     phase_claim: VerifiedPhaseClaimCapability | None,
     fresh_claim_supplier: AnalysisClaimSupplier | None = None,
-) -> None:
+) -> object:
     bundle = AnalysisRuntimeClaimBundle.from_bytes(claim_bytes)
     if not isinstance(provider_claimed, VerifiedProviderPredecessor) or not isinstance(
         phase_claim, VerifiedPhaseClaimCapability
@@ -962,19 +2093,23 @@ def _run_analysis(
                 raise ProviderPhaseRuntimeError(
                     "analysis start authority differs from the fixed input intent"
                 )
-    from .confirmatory_input_operator import (
-        load_confirmatory_input_operator_config,
-        run_provider_claimed_confirmatory_analysis_once,
-    )
+    if fresh_claim_supplier is None:
+        raise ProviderPhaseRuntimeError("analysis runtime lacks a fresh claim supplier")
+    from .confirmatory_input_operator import load_confirmatory_input_operator_config
+    from .offline_analysis_provider import run_provider_claimed_offline_analysis_once
 
-    candidate = run_provider_claimed_confirmatory_analysis_once(
+    completion = run_provider_claimed_offline_analysis_once(
         load_confirmatory_input_operator_config(row.control_path),
+        plan,
         provider_claimed,
         phase_claim,
+        package_root=analysis_offline_package_root(plan),
+        results_root=Path(row.output_root),
         fresh_claim_supplier=fresh_claim_supplier,
     )
-    if candidate.state != "ANALYSIS_COMPLETE":
+    if completion.candidate.state != "ANALYSIS_COMPLETE":
         raise ProviderPhaseRuntimeError("analysis driver did not reach candidate closure")
+    return completion
 
 
 _DRIVERS: dict[ProviderPhase, Callable[[ProviderDriverRequest, bytes], None]] = {}
@@ -1033,22 +2168,50 @@ def execute_provider_phase_request(
     if request.phase == LABEL_RELEASE_PHASE and label_phase_claim_supplier is None:
         raise ProviderPhaseRuntimeError("label runtime lacks a fresh claim supplier")
     phase_output_root = Path(request.phase_output_root)
+    existing_label_authorities: dict[str, LabelReleaseOutputAuthority] = {}
     if online_run_claim_supplier is not None:
         if _controlled_directory_entries(phase_output_root, label="online phase output root"):
             raise ProviderPhaseRuntimeError("online phase output root is not empty")
     if label_phase_claim_supplier is not None:
         expected = tuple(sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8")))
-        if (
-            _controlled_directory_entries(phase_output_root, label="label phase output root")
-            != expected
-        ):
-            raise ProviderPhaseRuntimeError("label phase output roots differ from fixed corpora")
-        for corpus_id in expected:
-            if _controlled_directory_entries(
-                phase_output_root / corpus_id,
-                label=f"{corpus_id} label output root",
+        label_admission = admit_label_release_phase_root(
+            phase_output_root,
+            create_if_absent=False,
+        )
+        if label_admission.execution_receipt_present:
+            existing_receipt = ProviderPhaseExecutionReceipt.from_bytes(
+                _secure_file_bytes(
+                    phase_output_root / PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME,
+                    label="provider phase execution receipt",
+                )
+            )
+            if (
+                existing_receipt.phase != LABEL_RELEASE_PHASE
+                or existing_receipt.suite_attempt_id != request.suite_attempt_id
+                or existing_receipt.provider_plan_sha256 != request.provider_plan_sha256
+                or existing_receipt.provider_plan_file_sha256 != request.provider_plan_file_sha256
+                or existing_receipt.claim_receipt_file_sha256 != request.claim_receipt_file_sha256
             ):
-                raise ProviderPhaseRuntimeError(f"{corpus_id} label output root is not empty")
+                raise ProviderPhaseRuntimeError(
+                    "existing label phase receipt differs from the current claim"
+                )
+            existing_label_authorities = {
+                output.corpus_id: output.label_release_authority
+                for output in existing_receipt.outputs
+                if output.label_release_authority is not None
+            }
+            if set(existing_label_authorities) != set(FIXED_CORPORA):
+                raise ProviderPhaseRuntimeError(
+                    "existing label phase receipt lacks five action authorities"
+                )
+        rows = {row.corpus_id: row for row in request.drivers}
+        if set(rows) != set(expected) or any(
+            Path(rows[corpus_id].output_root) != phase_output_root / corpus_id
+            for corpus_id in expected
+        ):
+            raise ProviderPhaseRuntimeError(
+                "label phase output roots differ from the fixed corpus targets"
+            )
     if request.phase == ANALYSIS_PHASE:
         if not isinstance(analysis_phase_claim, VerifiedPhaseClaimCapability):
             raise ProviderPhaseRuntimeError("analysis runtime lacks phase claim authority")
@@ -1068,15 +2231,28 @@ def execute_provider_phase_request(
             raise ProviderPhaseRuntimeError(
                 "analysis driver output differs from the claimed results store"
             )
-        if _controlled_directory_entries(phase_output_root, label="analysis phase evidence root"):
-            raise ProviderPhaseRuntimeError("analysis phase evidence root is not empty")
-        if _controlled_directory_entries(authorized_output, label="analysis results store"):
+        phase_entries = _controlled_directory_entries(
+            phase_output_root,
+            label="analysis phase evidence root",
+        )
+        if not set(phase_entries).issubset({PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME}):
             raise ProviderPhaseRuntimeError(
-                "analysis results store is not empty before input materialization"
+                "analysis phase evidence root contains an unregistered restart member"
             )
+        admit_analysis_results_store(
+            authorized_output,
+            manifest_sha256=analysis_phase_claim.contract.manifest_sha256,
+        )
 
     outputs: list[ProviderDriverOutput] = []
+    label_tle_runner = (
+        DockerTleDecryptRunner.from_plan(plan) if request.phase == LABEL_RELEASE_PHASE else None
+    )
+    if label_tle_runner is not None:
+        label_tle_runner.prepare()
     for row in request.drivers:
+        analysis_completion: Any | None = None
+        label_output_authority: LabelReleaseOutputAuthority | None = None
         _verified_file(
             Path(row.control_path),
             row.control_file_sha256,
@@ -1102,7 +2278,8 @@ def execute_provider_phase_request(
             if analysis_claim_supplier is None:
                 raise ProviderPhaseRuntimeError("analysis runtime lacks a fresh claim supplier")
             start_claimed, start_phase_claim = analysis_claim_supplier()
-            _run_analysis(
+            analysis_completion = _run_analysis(
+                plan,
                 row,
                 claim_bytes,
                 start_claimed,
@@ -1113,21 +2290,35 @@ def execute_provider_phase_request(
             fresh_label = label_phase_claim_supplier(row)
             if not isinstance(fresh_label, FreshLabelClaimAuthority):
                 raise ProviderPhaseRuntimeError("label supplier returned untyped authority")
+            if label_tle_runner is None:
+                raise ProviderPhaseRuntimeError("label runtime lacks its Docker TLE runner")
             _verify_pre_decryption_marker(
                 row,
                 fresh_label,
                 suite_attempt_id=request.suite_attempt_id,
             )
-            _run_label_release(
+            verified_release = _run_label_release(
                 row,
                 fresh_label.claim_bytes,
                 fresh_label.capability,
+                fresh_label.predecessor,
+                label_tle_runner,
+            )
+            label_output_authority = _close_label_release_action_authority(
+                row=row,
+                receipt=verified_release.receipt,
+                fresh=fresh_label,
+                existing_phase_authority=existing_label_authorities.get(row.corpus_id),
             )
         elif request.phase in _DRIVERS:
             _DRIVERS[request.phase](row, claim_bytes)
         else:
             raise ProviderPhaseRuntimeError("provider phase lacks an in-memory execution authority")
-        output = _output_receipt(row)
+        output = _output_receipt(
+            row,
+            analysis_outcome=(None if analysis_completion is None else analysis_completion.outcome),
+            label_release_authority=label_output_authority,
+        )
         if request.phase == ANALYSIS_PHASE:
             from .confirmatory_input_operator import confirmatory_store_closure_filenames
 
@@ -1151,12 +2342,57 @@ def execute_provider_phase_request(
         outputs=tuple(outputs),
     )
     target = Path(request.phase_output_root) / PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME
-    try:
-        write_exclusive_receipt_bytes(receipt.canonical_file_bytes(), target)
-    except ArtifactIntegrityError as exc:
-        raise ProviderPhaseRuntimeError("provider phase execution receipt already exists") from exc
+    if os.path.lexists(target):
+        receipt = _admit_existing_phase_execution_receipt(
+            target,
+            request,
+            receipt,
+        )
+    else:
+        try:
+            write_exclusive_receipt_bytes(receipt.canonical_file_bytes(), target)
+        except ArtifactIntegrityError as exc:
+            raise ProviderPhaseRuntimeError(
+                "cannot close provider phase execution receipt"
+            ) from exc
     if digest_regular_file(target, label="provider phase execution receipt") != receipt.file_sha256:
         raise ProviderPhaseRuntimeError("provider phase execution receipt failed readback")
+    if request.phase == LABEL_RELEASE_PHASE:
+        try:
+            for corpus_id in FIXED_CORPORA:
+                journal = Path(request.phase_output_root) / label_release_authority_journal_name(
+                    corpus_id
+                )
+                if os.path.lexists(journal):
+                    journal.unlink()
+            phase_descriptor = os.open(
+                request.phase_output_root,
+                os.O_RDONLY
+                | os.O_CLOEXEC
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            try:
+                os.fsync(phase_descriptor)
+            finally:
+                os.close(phase_descriptor)
+        except OSError as exc:
+            raise ProviderPhaseRuntimeError(
+                "cannot close label-release authority journals"
+            ) from exc
+        admission = admit_label_release_phase_root(
+            Path(request.phase_output_root),
+            create_if_absent=False,
+        )
+        if (
+            admission.completed_corpora
+            != tuple(sorted(FIXED_CORPORA, key=lambda value: value.encode("utf-8")))
+            or admission.staged_corpus is not None
+            or not admission.execution_receipt_present
+        ):
+            raise ProviderPhaseRuntimeError(
+                "label phase did not close its exact five pairs and one receipt"
+            )
     return receipt
 
 
