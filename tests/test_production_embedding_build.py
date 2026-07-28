@@ -423,6 +423,7 @@ def _run_builder_environment_import_probe(*, include_ml_stack: bool) -> None:
     expected = production._current_builder_environment()
     expected_map = dict(expected)
     source_root = Path(__file__).resolve().parents[1] / "src"
+    safe_path_flag = ["-P"] if sys.version_info >= (3, 11) else []
     probe = """
 import os
 import sys
@@ -461,7 +462,7 @@ production._validated_builder_environment(observed)
     completed = subprocess.run(
         [
             sys.executable,
-            "-P",
+            *safe_path_flag,
             "-s",
             "-c",
             probe,

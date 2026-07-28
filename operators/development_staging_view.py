@@ -3922,7 +3922,7 @@ def _build_development_staging_view(
                 ) from cleanup_error
             raise
     finally:
-        active_error = sys.exception()
+        active_error = sys.exc_info()[1]
         close_error = _close_transaction_descriptors(
             temporary_descriptor=temporary_descriptor,
             leases=leases,
