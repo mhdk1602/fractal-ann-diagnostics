@@ -1735,9 +1735,15 @@ jobs:
           jq -e '
             keys == ["linux/amd64", "linux/arm64"]
             and all(.[];
-              .SLSA.buildType == "https://mobyproject.org/buildkit@v1"
-              and (.SLSA.invocation.parameters | type == "object")
-              and (.SLSA.materials | type == "array" and length > 0)
+              .SLSA.buildDefinition.buildType
+                == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
+              and (.SLSA.buildDefinition.externalParameters | type == "object")
+              and (.SLSA.buildDefinition.internalParameters | type == "object")
+              and (.SLSA.buildDefinition.resolvedDependencies
+                | type == "array" and length > 0)
+              and (.SLSA.runDetails.builder.id
+                | type == "string" and length > 0)
+              and (.SLSA.runDetails.metadata | type == "object")
             )
           ' "$evidence_dir/buildkit-provenance.json" >/dev/null
           docker buildx imagetools inspect "$digest_reference" \
@@ -1816,23 +1822,25 @@ jobs:
             --format '{{json .Provenance}}' \
             | jq -S -c . > "$evidence_dir/buildkit-release-provenance.json"
           jq -e '
-            keys == ["linux/arm64"]
-            and all(.[];
-              .SLSA.buildType == "https://mobyproject.org/buildkit@v1"
-              and (.SLSA.invocation.parameters | type == "object")
-              and (.SLSA.materials | type == "array" and length > 0)
-            )
+            keys == ["SLSA"]
+            and .SLSA.buildDefinition.buildType
+              == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
+            and (.SLSA.buildDefinition.externalParameters | type == "object")
+            and (.SLSA.buildDefinition.internalParameters | type == "object")
+            and (.SLSA.buildDefinition.resolvedDependencies
+              | type == "array" and length > 0)
+            and (.SLSA.runDetails.builder.id
+              | type == "string" and length > 0)
+            and (.SLSA.runDetails.metadata | type == "object")
           ' "$evidence_dir/buildkit-release-provenance.json" >/dev/null
           docker buildx imagetools inspect "$release_digest_reference" \
             --format '{{json .SBOM}}' \
             | jq -S -c . > "$evidence_dir/buildkit-release-sbom.spdx.json"
           jq -e '
-            keys == ["linux/arm64"]
-            and all(.[];
-              (.SPDX.spdxVersion | startswith("SPDX-"))
-              and .SPDX.SPDXID == "SPDXRef-DOCUMENT"
-              and (.SPDX.packages | type == "array" and length > 0)
-            )
+            keys == ["SPDX"]
+            and (.SPDX.spdxVersion | startswith("SPDX-"))
+            and .SPDX.SPDXID == "SPDXRef-DOCUMENT"
+            and (.SPDX.packages | type == "array" and length > 0)
           ' "$evidence_dir/buildkit-release-sbom.spdx.json" >/dev/null
 
       - name: Prove safe and official tlock v1.2.0 Quicknet interoperability

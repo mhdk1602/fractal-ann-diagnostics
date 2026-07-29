@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -437,6 +438,160 @@ def test_workflow_compares_two_independent_arm64_builds_before_publication() -> 
     assert '"$published_release_arm64_digest"' in registry_gate
     assert "fractal-c0-published-release-arm64-projection-v1" in registry_gate
     assert "published-release-arm64-projection.json" in workflow
+    assert registry_gate.count(".SLSA.buildDefinition.buildType") == 2
+    assert registry_gate.count(".SLSA.buildDefinition.externalParameters") == 2
+    assert registry_gate.count(".SLSA.buildDefinition.internalParameters") == 2
+    assert registry_gate.count(".SLSA.buildDefinition.resolvedDependencies") == 2
+    assert registry_gate.count(".SLSA.runDetails.builder.id") == 2
+    assert registry_gate.count(".SLSA.runDetails.metadata") == 2
+    assert (
+        "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
+    ) in registry_gate
+    assert ".SLSA.buildType" not in registry_gate
+    assert ".SLSA.invocation.parameters" not in registry_gate
+    assert ".SLSA.materials" not in registry_gate
+    assert "https://mobyproject.org/buildkit@v1" not in registry_gate
+    assert 'keys == ["SLSA"]' in registry_gate
+    assert 'keys == ["SPDX"]' in registry_gate
+
+
+def _registry_metadata_filter(filename: str) -> str:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    registry_gate = workflow[
+        workflow.index(
+            "- name: Verify registry identity, platforms, provenance, and SBOM"
+        ) : workflow.index("- name: Prove safe and official tlock")
+    ]
+    match = re.search(
+        rf"jq -e '\n(?P<program>[^']*?)\n\s*' "
+        rf'"\$evidence_dir/{re.escape(filename)}" >/dev/null',
+        registry_gate,
+    )
+    assert match is not None, filename
+    return textwrap.dedent(match.group("program"))
+
+
+def _jq_filter_accepts(program: str, document: object) -> bool:
+    result = subprocess.run(
+        ["jq", "-e", program],
+        input=json.dumps(document, allow_nan=False, separators=(",", ":")),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _slsa_v1_fixture() -> dict[str, object]:
+    return {
+        "buildDefinition": {
+            "buildType": (
+                "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
+            ),
+            "externalParameters": {"source": "fixture"},
+            "internalParameters": {},
+            "resolvedDependencies": [{"uri": "pkg:docker/example"}],
+        },
+        "runDetails": {
+            "builder": {"id": "https://github.com/example/actions/runs/1/attempts/1"},
+            "metadata": {},
+        },
+    }
+
+
+def _spdx_fixture() -> dict[str, object]:
+    return {
+        "spdxVersion": "SPDX-2.3",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "packages": [{"SPDXID": "SPDXRef-Package-example"}],
+    }
+
+
+def test_registry_metadata_filters_accept_exact_buildx_034_shapes() -> None:
+    scientific_provenance = _registry_metadata_filter("buildkit-provenance.json")
+    release_provenance = _registry_metadata_filter("buildkit-release-provenance.json")
+    scientific_sbom = _registry_metadata_filter("buildkit-sbom.spdx.json")
+    release_sbom = _registry_metadata_filter("buildkit-release-sbom.spdx.json")
+
+    assert _jq_filter_accepts(
+        scientific_provenance,
+        {
+            "linux/amd64": {"SLSA": _slsa_v1_fixture()},
+            "linux/arm64": {"SLSA": _slsa_v1_fixture()},
+        },
+    )
+    assert _jq_filter_accepts(
+        release_provenance,
+        {"SLSA": _slsa_v1_fixture()},
+    )
+    assert _jq_filter_accepts(
+        scientific_sbom,
+        {
+            "linux/amd64": {"SPDX": _spdx_fixture()},
+            "linux/arm64": {"SPDX": _spdx_fixture()},
+        },
+    )
+    assert _jq_filter_accepts(release_sbom, {"SPDX": _spdx_fixture()})
+
+
+def test_registry_metadata_filters_reject_ambiguous_or_obsolete_shapes() -> None:
+    scientific_provenance = _registry_metadata_filter("buildkit-provenance.json")
+    release_provenance = _registry_metadata_filter("buildkit-release-provenance.json")
+    scientific_sbom = _registry_metadata_filter("buildkit-sbom.spdx.json")
+    release_sbom = _registry_metadata_filter("buildkit-release-sbom.spdx.json")
+
+    old_slsa = {
+        "buildType": "https://mobyproject.org/buildkit@v1",
+        "invocation": {"parameters": {}},
+        "materials": [{"uri": "pkg:docker/example"}],
+    }
+    assert not _jq_filter_accepts(
+        scientific_provenance,
+        {
+            "linux/amd64": {"SLSA": _slsa_v1_fixture()},
+        },
+    )
+    assert not _jq_filter_accepts(
+        scientific_provenance,
+        {
+            "linux/amd64": {"SLSA": _slsa_v1_fixture()},
+            "linux/arm64": {"SLSA": _slsa_v1_fixture()},
+            "linux/ppc64le": {"SLSA": _slsa_v1_fixture()},
+        },
+    )
+    assert not _jq_filter_accepts(
+        scientific_provenance,
+        {
+            "linux/amd64": {"SLSA": old_slsa},
+            "linux/arm64": {"SLSA": old_slsa},
+        },
+    )
+    empty_dependencies = _slsa_v1_fixture()
+    build_definition = empty_dependencies["buildDefinition"]
+    assert isinstance(build_definition, dict)
+    build_definition["resolvedDependencies"] = []
+    assert not _jq_filter_accepts(
+        release_provenance,
+        {"SLSA": empty_dependencies},
+    )
+    assert not _jq_filter_accepts(
+        release_provenance,
+        {"SLSA": _slsa_v1_fixture(), "unexpected": {}},
+    )
+    assert not _jq_filter_accepts(
+        scientific_sbom,
+        {
+            "linux/amd64": {"SPDX": _spdx_fixture()},
+            "linux/arm64": {"SPDX": _spdx_fixture()},
+            "unexpected": {},
+        },
+    )
+    empty_packages = _spdx_fixture()
+    empty_packages["packages"] = []
+    assert not _jq_filter_accepts(release_sbom, {"SPDX": empty_packages})
+    missing_spdx_id = _spdx_fixture()
+    del missing_spdx_id["SPDXID"]
+    assert not _jq_filter_accepts(release_sbom, {"SPDX": missing_spdx_id})
 
 
 def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
