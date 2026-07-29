@@ -45,6 +45,7 @@ from .execution_claim import (
     ExecutionClaimError,
     LiveExecuteJobReceipt,
     PhaseBeaconReceipt,
+    PhaseHostToolReceipt,
     PhaseRuntimeClaimReceipt,
     ProviderPhase,
     ProviderPhasePlan,
@@ -70,9 +71,9 @@ from .timelock_release import (
 )
 
 PROVIDER_DRIVER_REQUEST_SCHEMA = "fractal-provider-driver-request-v1"
-PROVIDER_PHASE_RUNTIME_REQUEST_SCHEMA = "fractal-provider-phase-runtime-request-v1"
+PROVIDER_PHASE_RUNTIME_REQUEST_SCHEMA = "fractal-provider-phase-runtime-request-v2"
 PROVIDER_DRIVER_OUTPUT_SCHEMA = "fractal-provider-driver-output-v2"
-PROVIDER_PHASE_EXECUTION_RECEIPT_SCHEMA = "fractal-provider-phase-execution-v2"
+PROVIDER_PHASE_EXECUTION_RECEIPT_SCHEMA = "fractal-provider-phase-execution-v3"
 LABEL_RELEASE_DRIVER_CONTROL_SCHEMA = "fractal-provider-label-release-driver-v1"
 ONLINE_SEALED_LAUNCH_DRIVER_CONTROL_SCHEMA = "fractal-provider-online-sealed-launch-driver-v1"
 ANALYSIS_RUNTIME_CLAIM_BUNDLE_SCHEMA = "fractal-analysis-runtime-claim-bundle-v1"
@@ -931,6 +932,9 @@ class ProviderPhaseRuntimeRequest:
     provider_plan_file_sha256: str
     claim_receipt_path: str
     claim_receipt_file_sha256: str
+    phase_host_tool_receipt_path: str
+    phase_host_tool_receipt_sha256: str
+    phase_host_tool_receipt_file_sha256: str
     phase_input_root: str
     phase_output_root: str
     drivers: tuple[ProviderDriverRequest, ...]
@@ -947,6 +951,18 @@ class ProviderPhaseRuntimeRequest:
         _digest("provider_plan_file_sha256", self.provider_plan_file_sha256)
         _absolute_path("claim_receipt_path", self.claim_receipt_path)
         _digest("claim_receipt_file_sha256", self.claim_receipt_file_sha256)
+        _absolute_path(
+            "phase_host_tool_receipt_path",
+            self.phase_host_tool_receipt_path,
+        )
+        _digest(
+            "phase_host_tool_receipt_sha256",
+            self.phase_host_tool_receipt_sha256,
+        )
+        _digest(
+            "phase_host_tool_receipt_file_sha256",
+            self.phase_host_tool_receipt_file_sha256,
+        )
         input_root = _absolute_path("phase_input_root", self.phase_input_root)
         output_root = _absolute_path("phase_output_root", self.phase_output_root)
         if (
@@ -1626,6 +1642,9 @@ class ProviderPhaseExecutionReceipt:
     provider_plan_sha256: str
     provider_plan_file_sha256: str
     claim_receipt_file_sha256: str
+    phase_host_tool_receipt_path: str
+    phase_host_tool_receipt_sha256: str
+    phase_host_tool_receipt_file_sha256: str
     runtime_request_sha256: str
     runtime_request_file_sha256: str
     outputs: tuple[ProviderDriverOutput, ...]
@@ -1639,10 +1658,16 @@ class ProviderPhaseExecutionReceipt:
             "provider_plan_sha256",
             "provider_plan_file_sha256",
             "claim_receipt_file_sha256",
+            "phase_host_tool_receipt_sha256",
+            "phase_host_tool_receipt_file_sha256",
             "runtime_request_sha256",
             "runtime_request_file_sha256",
         ):
             _digest(name, getattr(self, name))
+        _absolute_path(
+            "phase_host_tool_receipt_path",
+            self.phase_host_tool_receipt_path,
+        )
         rows = tuple(self.outputs)
         if (
             not rows
@@ -1751,6 +1776,9 @@ def _admit_existing_phase_execution_receipt(
         or existing.provider_plan_sha256 != fresh.provider_plan_sha256
         or existing.provider_plan_file_sha256 != fresh.provider_plan_file_sha256
         or existing.claim_receipt_file_sha256 != fresh.claim_receipt_file_sha256
+        or existing.phase_host_tool_receipt_path != fresh.phase_host_tool_receipt_path
+        or existing.phase_host_tool_receipt_sha256 != fresh.phase_host_tool_receipt_sha256
+        or existing.phase_host_tool_receipt_file_sha256 != fresh.phase_host_tool_receipt_file_sha256
         or existing.outputs != fresh.outputs
     ):
         raise ProviderPhaseRuntimeError(
@@ -2155,6 +2183,52 @@ def execute_provider_phase_request(
         request.claim_receipt_file_sha256,
         label="provider claim receipt",
     )
+    host_receipt_bytes = _verified_file(
+        Path(request.phase_host_tool_receipt_path),
+        request.phase_host_tool_receipt_file_sha256,
+        label="phase host-tool receipt",
+    )
+    if not host_receipt_bytes.endswith(b"\n") or host_receipt_bytes.endswith(b"\n\n"):
+        raise ProviderPhaseRuntimeError("phase host-tool receipt needs one terminal newline")
+    try:
+        host_receipt = PhaseHostToolReceipt.from_dict(
+            _strict_object(
+                host_receipt_bytes[:-1],
+                label="phase host-tool receipt",
+            )
+        )
+    except ExecutionClaimError as exc:
+        raise ProviderPhaseRuntimeError("phase host-tool receipt is invalid") from exc
+    if (
+        host_receipt.receipt_sha256 != request.phase_host_tool_receipt_sha256
+        or _canonical_bytes(host_receipt.to_dict()) + b"\n" != host_receipt_bytes
+    ):
+        raise ProviderPhaseRuntimeError("phase host-tool receipt semantic digest differs")
+    expected_host_receipt = {
+        "contract_sha256": plan.host_tools.contract_sha256,
+        "controlled_root_realpath": plan.host_tools.controlled_root,
+        "docker_executable_sha256": plan.host_tools.docker_executable_sha256,
+        "docker_resolved_executable": plan.host_tools.docker_resolved_executable,
+        "docker_server_probe_receipt_file_sha256": (
+            plan.host_tools.docker_server_probe_receipt_sha256
+        ),
+        "gh_executable_sha256": plan.host_tools.gh_executable_sha256,
+        "host_probe_receipt_file_sha256": (plan.host_tools.host_probe_receipt_sha256),
+        "python_executable_sha256": plan.host_tools.python_executable_sha256,
+        "python_import_tree_sha256": plan.host_tools.python_import_tree_sha256,
+        "python_package_content_sha256": (plan.host_tools.python_package_content_sha256),
+        "python_package_tree_sha256": plan.host_tools.python_package_tree_sha256,
+        "runner_config_sha256": plan.host_tools.runner_config_sha256,
+        "runner_listener_dll_sha256": plan.host_tools.runner_listener_dll_sha256,
+        "runner_listener_sha256": plan.host_tools.runner_listener_sha256,
+        "runner_run_sha256": plan.host_tools.runner_run_sha256,
+        "venv_symlink_inventory_sha256": (plan.host_tools.venv_symlink_inventory_sha256),
+        "venv_tree_sha256": plan.host_tools.venv_tree_sha256,
+    }
+    if any(
+        getattr(host_receipt, name) != expected for name, expected in expected_host_receipt.items()
+    ):
+        raise ProviderPhaseRuntimeError("phase host-tool receipt differs from the resolved C1 plan")
     request_path = Path(request.phase_input_root) / PROVIDER_RUNTIME_REQUEST_FILENAME
     request_bytes = _verified_file(
         request_path,
@@ -2191,6 +2265,12 @@ def execute_provider_phase_request(
                 or existing_receipt.provider_plan_sha256 != request.provider_plan_sha256
                 or existing_receipt.provider_plan_file_sha256 != request.provider_plan_file_sha256
                 or existing_receipt.claim_receipt_file_sha256 != request.claim_receipt_file_sha256
+                or existing_receipt.phase_host_tool_receipt_path
+                != request.phase_host_tool_receipt_path
+                or existing_receipt.phase_host_tool_receipt_sha256
+                != request.phase_host_tool_receipt_sha256
+                or existing_receipt.phase_host_tool_receipt_file_sha256
+                != request.phase_host_tool_receipt_file_sha256
             ):
                 raise ProviderPhaseRuntimeError(
                     "existing label phase receipt differs from the current claim"
@@ -2337,6 +2417,9 @@ def execute_provider_phase_request(
         provider_plan_sha256=request.provider_plan_sha256,
         provider_plan_file_sha256=request.provider_plan_file_sha256,
         claim_receipt_file_sha256=request.claim_receipt_file_sha256,
+        phase_host_tool_receipt_path=request.phase_host_tool_receipt_path,
+        phase_host_tool_receipt_sha256=request.phase_host_tool_receipt_sha256,
+        phase_host_tool_receipt_file_sha256=(request.phase_host_tool_receipt_file_sha256),
         runtime_request_sha256=request.request_sha256,
         runtime_request_file_sha256=request.file_sha256,
         outputs=tuple(outputs),

@@ -66,6 +66,7 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         controlled_root=controlled,
         python_executable=controlled / "python/bin/python3.12",
         venv_root=controlled / "venv",
+        python_import_root=controlled / "venv/lib/python3.12/site-packages",
         gh_executable=controlled / "gh/bin/gh",
         runner_listener_executable=controlled / "runner/bin/Runner.Listener",
         runner_listener_dll=controlled / "runner/bin/Runner.Listener.dll",
@@ -75,7 +76,13 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         host_probe_path=tmp_path / "phase-host-probe.json",
         docker_server_probe_path=tmp_path / "docker-server-probe.json",
     )
-    monkeypatch.setattr(operator, "_derive_host_tool_contract", lambda sources: host_tools)
+    monkeypatch.setattr(
+        operator,
+        "_derive_host_tool_contract",
+        lambda sources, **kwargs: (host_tools, "1" * 40),
+    )
+    candidate_source_root = tmp_path / "candidate-source"
+    candidate_source_root.mkdir(mode=0o700)
 
     closure = _closure()
     closure_path = tmp_path / "candidate-image-closure.json"
@@ -195,6 +202,7 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         blueprint_bundle=tmp_path / "blueprint-bundle",
         closure=closure,
         closure_path=closure_path,
+        candidate_source_root=candidate_source_root,
         config_path=config_path,
         config_receipt_path=config_receipt_path,
         controlled=controlled,
@@ -210,6 +218,7 @@ def inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 def _write_blueprint(inputs: SimpleNamespace) -> operator.ProviderPlanBlueprintWriteReceipt:
     return operator.write_provider_plan_blueprint(
         candidate_manifest_path=inputs.source_path,
+        candidate_source_root=inputs.candidate_source_root,
         production_control_config_path=inputs.config_path,
         production_control_config_write_receipt_path=inputs.config_receipt_path,
         candidate_image_closure_path=inputs.closure_path,

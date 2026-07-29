@@ -39,13 +39,34 @@ python -m fractal_ann_diagnostics.opa_runtime_binary materialize-retained \
   --output /controlled/fractal-v0.3/artifacts/runtime/opa
 ```
 
-The materializer derives `linux-amd64` or `linux-arm64` from the five plans. It loads only that
-platform's closed `runtime-extraction.json`, requires the exact OCI index, selected manifest,
-platform, C0 commit, in-image paths, digests, and byte counts, then checks the receipt, OPA, Python,
-and `uv.lock` rows in `C0-ARTIFACT-SHA256SUMS`. It calls `gh attestation verify` separately for all
-four files against the retained `c0-artifact-attestation-bundle.json`, with the fixed repository,
-C0 workflow identity, C0 tag, source commit, GitHub OIDC issuer, and hosted-runner restriction. Only
-then does it copy the retained OPA bytes once and set the destination to mode `0555`.
+The materializer derives `linux-amd64` or `linux-arm64` from the five plans. It admits only the
+canonical, closed `fractal-c0-runtime-extraction-v3` receipt for that platform. Missing or unknown
+fields, another fixed in-image path, a malformed digest, and an absent or out-of-range byte count
+are rejected where the v3 schema supplies those values. The selected retained-file closure is
+exactly:
+
+```text
+runtime-extraction.json
+opa
+python
+uv.lock
+hnswlib-runtime-receipt.json
+hnswlib/<receipt.hnswlib_wheel_basename>
+native-build/native-build-receipt.json
+opa-build/opa-build-receipt.json
+runtime-library-manifest.json
+libsqlite3.so.0
+libz.so.1
+```
+
+The receipt must name the expected OCI index, selected manifest, platform, and C0 commit. The
+materializer checks the receipt-bound digest for each extracted subject and the receipt-bound byte
+count for OPA, Python, `uv.lock`, the hnsw wheel, SQLite, and zlib. It then requires a matching
+`C0-ARTIFACT-SHA256SUMS` row and a separate `gh attestation verify` result for each of the eleven
+files against `c0-artifact-attestation-bundle.json`, with the fixed repository, C0 workflow
+identity, C0 tag, source commit, GitHub OIDC issuer, and hosted-runner restriction. It rereads the
+eleven admitted files after attestation review. Only then does it copy the retained OPA bytes once
+and set the destination to mode `0555`.
 
 Every template must pin those same bytes at `/usr/local/bin/opa` through one file-kind, read-only
 mount with role `opa-runtime-binary`. The five templates must also agree on the C0 image,

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-PHASE_HOST_TOOL_CONTRACT_SCHEMA = "fractal-phase-host-tool-contract-v1"
+PHASE_HOST_TOOL_CONTRACT_SCHEMA = "fractal-phase-host-tool-contract-v3"
+REGISTERED_HOST_PYTHON_LAUNCHER_SHA256 = (
+    "4af5ed3bc78c0573545c3557ec51879b17ede54fe889e60016c5683527f0e9e1"
+)
 PHASE_HOST_PROBE_SCHEMA = "fractal-phase-host-probe-v1"
 DOCKER_SERVER_PROBE_SCHEMA = "fractal-docker-server-probe-v1"
 
@@ -107,6 +110,13 @@ PHASE_HOST_TOOL_CONTRACT_FIELDS = frozenset(
         "python_archive_uri",
         "python_executable",
         "python_executable_sha256",
+        "python_import_root",
+        "python_import_tree_sha256",
+        "python_launcher_sha256",
+        "python_package_content_sha256",
+        "python_package_source_commit",
+        "python_package_source_tree",
+        "python_package_tree_sha256",
         "python_version",
         "runner_archive_byte_count",
         "runner_archive_sha256",

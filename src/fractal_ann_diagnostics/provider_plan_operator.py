@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import tempfile
 import unicodedata
@@ -77,6 +78,7 @@ from .provider_contract import (
     OFFICIAL_PYTHON_BUILD_STANDALONE_VERSION,
     REGISTERED_DOCKER_CLIENT_BUILD,
     REGISTERED_DOCKER_CLIENT_VERSION,
+    REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
     SOURCE_BUILT_LINUX_ARM64_TLE_SHA256,
 )
 from .provider_rehearsal import CandidateImageClosure
@@ -89,8 +91,11 @@ from .study import (
     PROVIDER_PHASE_RUNTIME_BINDINGS,
     PROVIDER_PHASE_RUNTIME_CEILINGS,
     PROVIDER_PHASE_WORKFLOWS,
+    PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
     PROVIDER_PLAN_C1_COMMIT_BINDING,
     PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
+    PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
+    PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
     PROVIDER_PLAN_MANIFEST_BINDING,
     PROVIDER_PLAN_PHASE_INPUT_BINDING,
     PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
@@ -98,10 +103,10 @@ from .study import (
     PROVIDER_PLAN_SUITE_BINDING,
 )
 
-PROVIDER_PLAN_BLUEPRINT_SCHEMA = "fractal-provider-plan-blueprint-v2"
+PROVIDER_PLAN_BLUEPRINT_SCHEMA = "fractal-provider-plan-blueprint-v3"
 PROVIDER_PLAN_BLUEPRINT_WRITE_RECEIPT_SCHEMA = "fractal-provider-plan-blueprint-write-receipt-v1"
 PROVIDER_PLAN_FINALIZATION_RECEIPT_SCHEMA = "fractal-provider-plan-finalization-receipt-v2"
-PROVIDER_PLAN_CLAIM_NONCE_DERIVATION = "sha256-fractal-provider-plan-claim-nonce-v2"
+PROVIDER_PLAN_CLAIM_NONCE_DERIVATION = "sha256-fractal-provider-plan-claim-nonce-v3"
 PROVIDER_PLAN_BLUEPRINT_FILENAME = "provider-plan-blueprint.json"
 PROVIDER_PLAN_BLUEPRINT_WRITE_RECEIPT_FILENAME = "provider-plan-blueprint-write-receipt.json"
 PROVIDER_PLAN_FRAGMENT_FILENAME = "provider-phase-plans.json"
@@ -578,6 +583,7 @@ class HostToolSources:
     controlled_root: Path
     python_executable: Path
     venv_root: Path
+    python_import_root: Path
     gh_executable: Path
     runner_listener_executable: Path
     runner_listener_dll: Path
@@ -635,6 +641,9 @@ class ProviderRunnerExpectation:
 class ProviderPlanBlueprint:
     candidate_manifest_path: Path
     candidate_manifest_file_sha256: str
+    candidate_source_root: Path
+    candidate_source_tree: str
+    candidate_python_package_source_tree: str
     production_control_config_path: Path
     production_control_config_file_sha256: str
     production_control_config_write_receipt_path: Path
@@ -666,6 +675,7 @@ class ProviderPlanBlueprint:
     def __post_init__(self) -> None:
         for name in (
             "candidate_manifest_path",
+            "candidate_source_root",
             "production_control_config_path",
             "production_control_config_write_receipt_path",
             "production_control_blueprint_receipt_path",
@@ -686,6 +696,11 @@ class ProviderPlanBlueprint:
         ):
             _digest(name, getattr(self, name))
         _commit("candidate_image_source_commit", self.candidate_image_source_commit)
+        _commit("candidate_source_tree", self.candidate_source_tree)
+        _commit(
+            "candidate_python_package_source_tree",
+            self.candidate_python_package_source_tree,
+        )
         for name in (
             "scientific_candidate_reference",
             "scientific_production_reference",
@@ -708,6 +723,14 @@ class ProviderPlanBlueprint:
         if str(self.host_tool_sources.controlled_root) != self.host_tools.controlled_root:
             raise ProviderPlanOperatorError(
                 "host-tool source root differs from the derived contract"
+            )
+        if (
+            self.host_tools.python_package_source_commit != self.candidate_image_source_commit
+            or self.host_tools.python_package_source_tree
+            != self.candidate_python_package_source_tree
+        ):
+            raise ProviderPlanOperatorError(
+                "host Python package provenance differs from candidate source P"
             )
         if not isinstance(self.execution_claim_inputs, ExecutionClaimInputs):
             raise ProviderPlanOperatorError("blueprint execution-claim inputs must be typed")
@@ -1268,7 +1291,228 @@ def _canonical_regular_file_digest(path: Path, *, label: str) -> str:
         raise ProviderPlanOperatorError(f"cannot hash {label}: {exc}") from exc
 
 
-def _derive_host_tool_contract(sources: HostToolSources) -> PhaseHostToolContract:
+def _git_bytes(repository: Path, *arguments: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            ("/usr/bin/git", "-C", str(repository), *arguments),
+            check=False,
+            capture_output=True,
+            env={
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "HOME": "/var/empty",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+            },
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ProviderPlanOperatorError("cannot inspect candidate source Git closure") from exc
+    if completed.returncode != 0 or completed.stderr:
+        raise ProviderPlanOperatorError("candidate source Git inspection failed")
+    return completed.stdout
+
+
+def _git_output(repository: Path, *arguments: str, allow_empty: bool = False) -> str:
+    encoded = _git_bytes(repository, *arguments)
+    if b"\0" in encoded:
+        raise ProviderPlanOperatorError("candidate source Git output is malformed")
+    try:
+        value = encoded.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ProviderPlanOperatorError("candidate source Git output is not ASCII") from exc
+    if value.endswith("\n"):
+        value = value[:-1]
+    if "\n" in value or "\r" in value or (not allow_empty and not value):
+        raise ProviderPlanOperatorError("candidate source Git output is malformed")
+    return value
+
+
+def _verify_candidate_package_worktree(root: Path) -> None:
+    encoded = _git_bytes(
+        root,
+        "ls-tree",
+        "-r",
+        "-z",
+        "HEAD",
+        "--",
+        "src/fractal_ann_diagnostics",
+    )
+    expected: dict[str, tuple[str, str]] = {}
+    for raw in encoded.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, kind, object_id = metadata.decode("ascii").split(" ")
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise ProviderPlanOperatorError("candidate package Git tree is malformed") from exc
+        if (
+            kind != "blob"
+            or mode not in {"100644", "100755"}
+            or _GIT_COMMIT.fullmatch(object_id) is None
+            or not path.startswith("src/fractal_ann_diagnostics/")
+            or path in expected
+        ):
+            raise ProviderPlanOperatorError("candidate package Git tree has a forbidden entry")
+        expected[path] = (mode, object_id)
+    package_root = root / "src" / "fractal_ann_diagnostics"
+    observed: dict[str, tuple[str, str]] = {}
+    try:
+        for directory, directory_names, file_names in os.walk(package_root, followlinks=False):
+            directory_names.sort(key=lambda value: value.encode("utf-8"))
+            file_names.sort(key=lambda value: value.encode("utf-8"))
+            current = Path(directory)
+            for name in (*directory_names, *file_names):
+                candidate = current / name
+                metadata = candidate.lstat()
+                if stat.S_ISDIR(metadata.st_mode):
+                    if stat.S_ISLNK(metadata.st_mode):
+                        raise ProviderPlanOperatorError(
+                            "candidate package worktree contains a symlink"
+                        )
+                    continue
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or "__pycache__" in candidate.parts
+                    or candidate.suffix in {".pyc", ".pyo"}
+                ):
+                    raise ProviderPlanOperatorError(
+                        "candidate package worktree has a forbidden entry"
+                    )
+                relative = candidate.relative_to(root).as_posix()
+                content = candidate.read_bytes()
+                object_id = hashlib.sha1(
+                    f"blob {len(content)}\0".encode("ascii") + content,
+                    usedforsecurity=False,
+                ).hexdigest()
+                mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
+                observed[relative] = (mode, object_id)
+    except OSError as exc:
+        raise ProviderPlanOperatorError("cannot read candidate package worktree") from exc
+    if observed != expected:
+        raise ProviderPlanOperatorError(
+            "candidate package worktree bytes differ from the exact source-P tree"
+        )
+
+
+def _candidate_source_provenance(
+    source_root: Path,
+    *,
+    expected_commit: str,
+) -> tuple[str, str, str]:
+    try:
+        root = source_root.resolve(strict=True)
+        metadata = source_root.lstat()
+    except OSError as exc:
+        raise ProviderPlanOperatorError("candidate source root is unavailable") from exc
+    if root != source_root or not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise ProviderPlanOperatorError("candidate source root must be one canonical directory")
+    if _git_output(root, "rev-parse", "--show-toplevel") != str(root):
+        raise ProviderPlanOperatorError("candidate source root is not the Git worktree root")
+    if _git_output(root, "rev-parse", "HEAD") != expected_commit:
+        raise ProviderPlanOperatorError("candidate source checkout is not closure source P")
+    source_tree = _git_output(root, "rev-parse", "HEAD^{tree}")
+    package_source_tree = _git_output(
+        root,
+        "rev-parse",
+        "HEAD:src/fractal_ann_diagnostics",
+    )
+    _commit("candidate source tree", source_tree)
+    _commit("candidate package source tree", package_source_tree)
+    if _git_output(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        allow_empty=True,
+    ):
+        raise ProviderPlanOperatorError("candidate source worktree is not clean")
+    if _git_output(
+        root,
+        "status",
+        "--porcelain=v1",
+        "--ignored=matching",
+        "--untracked-files=all",
+        "--",
+        "src/fractal_ann_diagnostics",
+        allow_empty=True,
+    ):
+        raise ProviderPlanOperatorError("candidate package source has ignored or untracked bytes")
+    _verify_candidate_package_worktree(root)
+    package_root = root / "src" / "fractal_ann_diagnostics"
+    try:
+        _package_tree_sha256, package_symlinks = execution_claim_module._venv_tree_digests(
+            package_root,
+            root,
+        )
+        package_content_sha256 = execution_claim_module._content_tree_digest(package_root)
+    except (ExecutionClaimError, OSError, ValueError) as exc:
+        raise ProviderPlanOperatorError(
+            f"cannot derive candidate source-P package tree: {exc}"
+        ) from exc
+    empty_symlinks = _sha256_bytes(_canonical_bytes({"symlinks": []}))
+    if package_symlinks != empty_symlinks:
+        raise ProviderPlanOperatorError("candidate source-P package contains a symlink")
+    return source_tree, package_source_tree, package_content_sha256
+
+
+def _require_nonwritable_import_closure(
+    controlled: Path,
+    venv: Path,
+    import_root: Path,
+) -> None:
+    ancestors = (
+        controlled,
+        venv,
+        venv / "lib",
+        venv / "lib" / "python3.12",
+        import_root,
+    )
+    try:
+        for candidate in ancestors:
+            metadata = candidate.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_uid != 0
+                or stat.S_IMODE(metadata.st_mode) & 0o222
+                or os.access(candidate, os.W_OK)
+            ):
+                raise ProviderPlanOperatorError(
+                    "Python import-root ancestors must be real read-only directories"
+                )
+        for directory, directory_names, file_names in os.walk(import_root, followlinks=False):
+            current = Path(directory)
+            for name in (*directory_names, *file_names):
+                candidate = current / name
+                metadata = candidate.lstat()
+                if (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or metadata.st_uid != 0
+                    or stat.S_IMODE(metadata.st_mode) & 0o222
+                    or os.access(candidate, os.W_OK)
+                    or not (
+                        stat.S_ISDIR(metadata.st_mode)
+                        or (stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1)
+                    )
+                ):
+                    raise ProviderPlanOperatorError(
+                        "Python import closure must be read-only, singly linked, and symlink-free"
+                    )
+    except OSError as exc:
+        raise ProviderPlanOperatorError("cannot inspect Python import closure modes") from exc
+
+
+def _derive_host_tool_contract(
+    sources: HostToolSources,
+    *,
+    candidate_source_root: Path,
+    candidate_source_commit: str,
+) -> tuple[PhaseHostToolContract, str]:
     try:
         controlled = sources.controlled_root.resolve(strict=True)
         controlled_metadata = sources.controlled_root.lstat()
@@ -1288,6 +1532,47 @@ def _derive_host_tool_contract(sources: HostToolSources) -> PhaseHostToolContrac
         )
     except (ExecutionClaimError, OSError, ValueError) as exc:
         raise ProviderPlanOperatorError(f"cannot derive the controlled venv: {exc}") from exc
+    source_tree, package_source_tree, source_package_tree_sha256 = _candidate_source_provenance(
+        candidate_source_root,
+        expected_commit=candidate_source_commit,
+    )
+    if os.pathsep in str(sources.python_import_root):
+        raise ProviderPlanOperatorError("python_import_root cannot contain a path separator")
+    try:
+        import_root = sources.python_import_root.resolve(strict=True)
+        import_root.relative_to(venv)
+    except (OSError, ValueError) as exc:
+        raise ProviderPlanOperatorError("python_import_root escapes the controlled venv") from exc
+    if (
+        import_root != sources.python_import_root
+        or import_root == venv
+        or import_root.relative_to(venv).parts != ("lib", "python3.12", "site-packages")
+    ):
+        raise ProviderPlanOperatorError(
+            "python_import_root must be the canonical Python 3.12 site-packages root"
+        )
+    _require_nonwritable_import_closure(controlled, venv, import_root)
+    try:
+        import_tree_sha256, import_symlinks = execution_claim_module._venv_tree_digests(
+            import_root,
+            controlled,
+        )
+        package_tree_sha256, package_symlinks = execution_claim_module._venv_tree_digests(
+            import_root / "fractal_ann_diagnostics",
+            controlled,
+        )
+        package_content_sha256 = execution_claim_module._content_tree_digest(
+            import_root / "fractal_ann_diagnostics"
+        )
+    except (ExecutionClaimError, OSError, ValueError) as exc:
+        raise ProviderPlanOperatorError(f"cannot derive the Python import closure: {exc}") from exc
+    empty_symlinks = _sha256_bytes(_canonical_bytes({"symlinks": []}))
+    if import_symlinks != empty_symlinks or package_symlinks != empty_symlinks:
+        raise ProviderPlanOperatorError("Python import closure cannot contain symlinks")
+    if package_content_sha256 != source_package_tree_sha256:
+        raise ProviderPlanOperatorError(
+            "controlled apparatus package bytes differ from candidate source P"
+        )
 
     digests = {
         "python": _canonical_regular_file_digest(
@@ -1327,49 +1612,59 @@ def _derive_host_tool_contract(sources: HostToolSources) -> PhaseHostToolContrac
     host_probe = _load_phase_host_probe(sources.host_probe_path)
     docker_probe = _load_docker_server_probe(sources.docker_server_probe_path)
     try:
-        return PhaseHostToolContract(
-            controlled_root=str(controlled),
-            python_archive_uri=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_URI,
-            python_archive_sha256=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_SHA256,
-            python_archive_byte_count=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_BYTE_COUNT,
-            python_executable=str(sources.python_executable),
-            python_version=OFFICIAL_PYTHON_BUILD_STANDALONE_VERSION,
-            python_executable_sha256=digests["python"],
-            venv_root=str(venv),
-            venv_tree_sha256=venv_tree_sha256,
-            venv_symlink_inventory_sha256=venv_symlink_inventory_sha256,
-            gh_archive_uri=OFFICIAL_GH_OSX_ARM64_ARCHIVE_URI,
-            gh_archive_sha256=OFFICIAL_GH_OSX_ARM64_ARCHIVE_SHA256,
-            gh_archive_byte_count=OFFICIAL_GH_OSX_ARM64_ARCHIVE_BYTE_COUNT,
-            gh_executable=str(sources.gh_executable),
-            gh_executable_sha256=digests["gh"],
-            gh_version=OFFICIAL_GH_VERSION,
-            runner_archive_uri=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_URI,
-            runner_archive_sha256=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_SHA256,
-            runner_archive_byte_count=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_BYTE_COUNT,
-            runner_listener_executable=str(sources.runner_listener_executable),
-            runner_listener_sha256=digests["runner_listener"],
-            runner_listener_dll=str(sources.runner_listener_dll),
-            runner_listener_dll_sha256=digests["runner_listener_dll"],
-            runner_config_executable=str(sources.runner_config_executable),
-            runner_config_sha256=digests["runner_config"],
-            runner_run_executable=str(sources.runner_run_executable),
-            runner_run_sha256=digests["runner_run"],
-            runner_version=OFFICIAL_ACTIONS_RUNNER_VERSION,
-            runner_ephemeral=True,
-            runner_disable_update=True,
-            runner_unattended=True,
-            docker_executable=str(sources.docker_executable),
-            docker_resolved_executable=str(docker_resolved),
-            docker_executable_sha256=docker_digest,
-            docker_client_version=REGISTERED_DOCKER_CLIENT_VERSION,
-            docker_client_build=REGISTERED_DOCKER_CLIENT_BUILD,
-            host_probe=host_probe,
-            docker_server_probe=docker_probe,
-            host_probe_receipt_sha256=host_probe.file_sha256,
-            docker_server_probe_receipt_sha256=docker_probe.file_sha256,
-            host_operating_system="macOS",
-            host_architecture="ARM64",
+        return (
+            PhaseHostToolContract(
+                controlled_root=str(controlled),
+                python_archive_uri=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_URI,
+                python_archive_sha256=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_SHA256,
+                python_archive_byte_count=OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_BYTE_COUNT,
+                python_executable=str(sources.python_executable),
+                python_version=OFFICIAL_PYTHON_BUILD_STANDALONE_VERSION,
+                python_executable_sha256=digests["python"],
+                venv_root=str(venv),
+                venv_tree_sha256=venv_tree_sha256,
+                venv_symlink_inventory_sha256=venv_symlink_inventory_sha256,
+                python_import_root=str(import_root),
+                python_import_tree_sha256=import_tree_sha256,
+                python_launcher_sha256=REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
+                python_package_content_sha256=package_content_sha256,
+                python_package_tree_sha256=package_tree_sha256,
+                python_package_source_commit=candidate_source_commit,
+                python_package_source_tree=package_source_tree,
+                gh_archive_uri=OFFICIAL_GH_OSX_ARM64_ARCHIVE_URI,
+                gh_archive_sha256=OFFICIAL_GH_OSX_ARM64_ARCHIVE_SHA256,
+                gh_archive_byte_count=OFFICIAL_GH_OSX_ARM64_ARCHIVE_BYTE_COUNT,
+                gh_executable=str(sources.gh_executable),
+                gh_executable_sha256=digests["gh"],
+                gh_version=OFFICIAL_GH_VERSION,
+                runner_archive_uri=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_URI,
+                runner_archive_sha256=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_SHA256,
+                runner_archive_byte_count=OFFICIAL_ACTIONS_RUNNER_OSX_ARM64_ARCHIVE_BYTE_COUNT,
+                runner_listener_executable=str(sources.runner_listener_executable),
+                runner_listener_sha256=digests["runner_listener"],
+                runner_listener_dll=str(sources.runner_listener_dll),
+                runner_listener_dll_sha256=digests["runner_listener_dll"],
+                runner_config_executable=str(sources.runner_config_executable),
+                runner_config_sha256=digests["runner_config"],
+                runner_run_executable=str(sources.runner_run_executable),
+                runner_run_sha256=digests["runner_run"],
+                runner_version=OFFICIAL_ACTIONS_RUNNER_VERSION,
+                runner_ephemeral=True,
+                runner_disable_update=True,
+                runner_unattended=True,
+                docker_executable=str(sources.docker_executable),
+                docker_resolved_executable=str(docker_resolved),
+                docker_executable_sha256=docker_digest,
+                docker_client_version=REGISTERED_DOCKER_CLIENT_VERSION,
+                docker_client_build=REGISTERED_DOCKER_CLIENT_BUILD,
+                host_probe=host_probe,
+                docker_server_probe=docker_probe,
+                host_probe_receipt_sha256=host_probe.file_sha256,
+                docker_server_probe_receipt_sha256=docker_probe.file_sha256,
+                host_operating_system="macOS",
+                host_architecture="ARM64",
+            ),
+            source_tree,
         )
     except ExecutionClaimError as exc:
         raise ProviderPlanOperatorError(f"derived host-tool contract is invalid: {exc}") from exc
@@ -1624,6 +1919,7 @@ def _candidate_image_closure_from_exact_bytes(
 def write_provider_plan_blueprint(
     *,
     candidate_manifest_path: str | Path,
+    candidate_source_root: str | Path,
     production_control_config_path: str | Path,
     production_control_config_write_receipt_path: str | Path,
     candidate_image_closure_path: str | Path,
@@ -1652,6 +1948,7 @@ def write_provider_plan_blueprint(
         raise ProviderPlanOperatorError("provider-plan blueprint output already exists")
 
     manifest_path = _absolute_path("candidate_manifest_path", candidate_manifest_path)
+    source_root = _absolute_path("candidate_source_root", candidate_source_root)
     config_path = _absolute_path("production_control_config_path", production_control_config_path)
     config_receipt_path = _absolute_path(
         "production_control_config_write_receipt_path",
@@ -1661,6 +1958,7 @@ def write_provider_plan_blueprint(
     beacon_path = _absolute_path("execution_beacon_contract_path", execution_beacon_contract_path)
     inputs = {
         manifest_path,
+        source_root,
         config_path,
         config_receipt_path,
         closure_path,
@@ -1778,7 +2076,11 @@ def write_provider_plan_blueprint(
             registered_online_runtime_budget_seconds=(registered_online_runtime_budget_seconds),
             beacon=beacon,
         )
-        host_tools = _derive_host_tool_contract(host_tool_sources)
+        host_tools, source_tree = _derive_host_tool_contract(
+            host_tool_sources,
+            candidate_source_root=source_root,
+            candidate_source_commit=closure.github_sha,
+        )
         _admit_candidate_source_shell(
             manifest,
             candidate_image_source_commit=closure.github_sha,
@@ -1829,6 +2131,9 @@ def write_provider_plan_blueprint(
     blueprint = ProviderPlanBlueprint(
         candidate_manifest_path=manifest_path,
         candidate_manifest_file_sha256=manifest_sha256,
+        candidate_source_root=source_root,
+        candidate_source_tree=source_tree,
+        candidate_python_package_source_tree=(host_tools.python_package_source_tree),
         production_control_config_path=config_path,
         production_control_config_file_sha256=config_sha256,
         production_control_config_write_receipt_path=config_receipt_path,
@@ -2010,8 +2315,12 @@ def _revalidate_blueprint_sources(
             or factory.design_seed_sha256 != blueprint.execution_claim_inputs.design_seed_sha256
         ):
             raise ProviderPlanOperatorError("execution-claim inputs changed after blueprint")
-        host_tools = _derive_host_tool_contract(blueprint.host_tool_sources)
-        if host_tools != blueprint.host_tools:
+        host_tools, source_tree = _derive_host_tool_contract(
+            blueprint.host_tool_sources,
+            candidate_source_root=blueprint.candidate_source_root,
+            candidate_source_commit=blueprint.candidate_image_source_commit,
+        )
+        if host_tools != blueprint.host_tools or source_tree != blueprint.candidate_source_tree:
             raise ProviderPlanOperatorError("host-tool closure changed after blueprint")
         _admit_candidate_source_shell(
             manifest,
@@ -2195,21 +2504,48 @@ def _provider_plan_templates(
         result[phase] = {
             "activation_argv_template": [
                 blueprint.host_tools.python_executable,
-                "-m",
-                "fractal_ann_diagnostics.provider_phase_runtime",
-                PROVIDER_PHASE_COMMAND_IDS[phase],
-                "--provider-plan",
-                str(provider_path),
+                "-I",
+                "-S",
+                "-P",
+                "-s",
+                "-c",
+                PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
+                "fractal-host-python-verified-launcher-v1",
+                "fractal_ann_diagnostics.execution_claim",
+                "verify-prerequisites",
+                "--phase",
+                phase,
                 "--suite-attempt-id",
                 PROVIDER_PLAN_SUITE_BINDING,
                 "--claim-receipt",
                 PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
-                "--phase-input-root",
-                PROVIDER_PLAN_PHASE_INPUT_BINDING,
-                "--phase-output-root",
-                PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
+                "--activate-and-execute",
+                "--output-dir",
+                PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
+                "--github-output",
+                PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
             ],
             "activation_command_id": PROVIDER_PHASE_COMMAND_IDS[phase],
+            "activation_environment": {
+                "HOST_CONTROLLED_ROOT": blueprint.host_tools.controlled_root,
+                "HOST_PYTHON_IMPORT_ROOT": (blueprint.host_tools.python_import_root),
+                "HOST_PYTHON_IMPORT_TREE_SHA256": (blueprint.host_tools.python_import_tree_sha256),
+                "HOST_PYTHON_PACKAGE_CONTENT_SHA256": (
+                    blueprint.host_tools.python_package_content_sha256
+                ),
+                "HOST_PYTHON_PACKAGE_TREE_SHA256": (
+                    blueprint.host_tools.python_package_tree_sha256
+                ),
+                "HOST_PYTHON_VENV_ROOT": blueprint.host_tools.venv_root,
+                "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256": (
+                    blueprint.host_tools.venv_symlink_inventory_sha256
+                ),
+                "HOST_PYTHON_VENV_TREE_SHA256": (blueprint.host_tools.venv_tree_sha256),
+                "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256": (
+                    blueprint.host_tools.python_launcher_sha256
+                ),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
             "approval_environment": blueprint.approval_environment,
             "c1_commit_binding": PROVIDER_PLAN_C1_COMMIT_BINDING,
             "claim_job_name": claim_job,
@@ -2523,6 +2859,7 @@ def _add_host_tool_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--controlled-root", type=Path, required=True)
     parser.add_argument("--python-executable", type=Path, required=True)
     parser.add_argument("--venv-root", type=Path, required=True)
+    parser.add_argument("--python-import-root", type=Path, required=True)
     parser.add_argument("--gh-executable", type=Path, required=True)
     parser.add_argument("--runner-listener-executable", type=Path, required=True)
     parser.add_argument("--runner-listener-dll", type=Path, required=True)
@@ -2541,6 +2878,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     blueprint = subparsers.add_parser("write-blueprint")
     blueprint.add_argument("--candidate-manifest", type=Path, required=True)
+    blueprint.add_argument("--candidate-source-root", type=Path, required=True)
     blueprint.add_argument("--production-control-config", type=Path, required=True)
     blueprint.add_argument(
         "--production-control-config-write-receipt",
@@ -2574,6 +2912,7 @@ def _host_sources_from_arguments(arguments: argparse.Namespace) -> HostToolSourc
         controlled_root=arguments.controlled_root,
         python_executable=arguments.python_executable,
         venv_root=arguments.venv_root,
+        python_import_root=arguments.python_import_root,
         gh_executable=arguments.gh_executable,
         runner_listener_executable=arguments.runner_listener_executable,
         runner_listener_dll=arguments.runner_listener_dll,
@@ -2589,6 +2928,7 @@ def _run(arguments: argparse.Namespace) -> Mapping[str, object]:
     if arguments.command == "write-blueprint":
         receipt = write_provider_plan_blueprint(
             candidate_manifest_path=arguments.candidate_manifest,
+            candidate_source_root=arguments.candidate_source_root,
             production_control_config_path=arguments.production_control_config,
             production_control_config_write_receipt_path=(
                 arguments.production_control_config_write_receipt

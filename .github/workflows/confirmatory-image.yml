@@ -700,7 +700,9 @@ jobs:
               "candidate_bootstrap_closure_sha256",
               "candidate_image_closure_file_sha256",
               "candidate_image_source_commit",
+              "candidate_python_package_source_tree",
               "completed_at_utc",
+              "host_python_launcher_sha256",
               "manifest_sha256",
               "phase_execute_job_ids",
               "phase_receipt_file_sha256",
@@ -714,6 +716,8 @@ jobs:
               "scientific_inputs_opened",
               "suite_attempt_id",
               "workflow_path",
+              "workflow_python_launcher_sha256",
+              "workflow_python_package_source_tree",
               "workflow_sha",
           }
           if set(receipt) != expected_fields:
@@ -760,7 +764,7 @@ jobs:
               "run_attempt": 1,
               "run_head_branch": branch,
               "run_id": run_id,
-              "schema_version": "fractal-provider-rehearsal-aggregate-v1",
+              "schema_version": "fractal-provider-rehearsal-aggregate-v2",
               "scientific_inputs_opened": False,
               "suite_attempt_id": None,
               "workflow_path": ".github/workflows/confirmatory-provider-rehearsal.yml",
@@ -769,7 +773,32 @@ jobs:
           for field, expected in exact.items():
               if receipt[field] != expected:
                   raise SystemExit(f"provider rehearsal receipt has invalid {field}")
+          git_tree = re.compile(r"^[0-9a-f]{40}$")
+          for field in (
+              "candidate_python_package_source_tree",
+              "workflow_python_package_source_tree",
+          ):
+              if not git_tree.fullmatch(receipt[field]):
+                  raise SystemExit(f"provider rehearsal receipt has invalid {field}")
+          if (
+              receipt["candidate_python_package_source_tree"]
+              != receipt["workflow_python_package_source_tree"]
+          ):
+              raise SystemExit(
+                  "candidate and workflow Python package source trees differ"
+              )
           sha256 = re.compile(r"^[0-9a-f]{64}$")
+          for field in (
+              "host_python_launcher_sha256",
+              "workflow_python_launcher_sha256",
+          ):
+              if not sha256.fullmatch(receipt[field]):
+                  raise SystemExit(f"provider rehearsal receipt has invalid {field}")
+          if (
+              receipt["host_python_launcher_sha256"]
+              != receipt["workflow_python_launcher_sha256"]
+          ):
+              raise SystemExit("host and workflow Python launcher sources differ")
           for field in ("manifest_sha256", "plan_closure_sha256"):
               if not sha256.fullmatch(receipt[field]):
                   raise SystemExit(f"provider rehearsal receipt has invalid {field}")

@@ -39,7 +39,9 @@ from .execution_claim import (
     ANALYSIS_PHASE,
     LABEL_RELEASE_PHASE,
     ONLINE_PHASE,
+    PHASE_HOST_TOOL_RECEIPT_FILENAME,
     ExecutionClaimContract,
+    ExecutionClaimError,
     LiveExecuteJobReceipt,
     PhaseClaimContract,
     ProviderPhase,
@@ -47,6 +49,7 @@ from .execution_claim import (
     VerifiedPhaseClaimCapability,
     load_materialized_provider_phase_plan,
     verify_live_execute_job,
+    verify_phase_host_tools,
 )
 from .github_artifact_transport import (
     GitHubArtifactReadApi,
@@ -791,6 +794,26 @@ def activate_and_execute_provider_phase(
     plan = load_materialized_provider_phase_plan(plan_from_artifact.provider_plan_path)
     if plan != plan_from_artifact or plan.canonical_file_bytes() != plan_copy.read_bytes():
         raise ProviderActivationError("self-hosted C1 plan differs from the claim artifact copy")
+    host_verified_at = verified_at_utc or (
+        datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    )
+    try:
+        host_receipt = verify_phase_host_tools(
+            plan.host_tools,
+            probe_output_dir=root / "phase-host-probes",
+            verified_at_utc=host_verified_at,
+        )
+    except ExecutionClaimError as exc:
+        raise ProviderActivationError(f"phase host-tool verification failed: {exc}") from exc
+    host_receipt_path = _write_once(
+        root / PHASE_HOST_TOOL_RECEIPT_FILENAME,
+        _canonical_file_bytes(host_receipt.to_dict()),
+        label="phase host-tool receipt",
+    )
+    host_receipt_file_sha256 = digest_regular_file(
+        host_receipt_path,
+        label="phase host-tool receipt",
+    )
     claim_path = _materialize_fixed_claim_receipt(
         downloaded_path=downloaded_claim_path,
         packaged_path=packaged_claim,
@@ -1398,6 +1421,9 @@ def activate_and_execute_provider_phase(
         provider_plan_file_sha256=plan.file_sha256,
         claim_receipt_path=str(claim_path),
         claim_receipt_file_sha256=receipt.file_sha256,
+        phase_host_tool_receipt_path=str(host_receipt_path),
+        phase_host_tool_receipt_sha256=host_receipt.receipt_sha256,
+        phase_host_tool_receipt_file_sha256=host_receipt_file_sha256,
         phase_input_root=str(phase_input),
         phase_output_root=str(phase_output),
         drivers=tuple(driver_rows),
@@ -1433,6 +1459,9 @@ def activate_and_execute_provider_phase(
         "fixed_corpora_completed": "true",
         "live_execute_job_receipt_path": str(live_path),
         "live_execute_job_receipt_sha256": digest_regular_file(live_path, label="live job receipt"),
+        "phase_host_tool_receipt_path": str(host_receipt_path),
+        "phase_host_tool_receipt_sha256": host_receipt.receipt_sha256,
+        "phase_host_tool_receipt_file_sha256": host_receipt_file_sha256,
         "phase_execution_receipt_path": str(execution_path),
         "phase_execution_receipt_sha256": execution.file_sha256,
         "runtime_claim_receipt_path": str(portable_path),

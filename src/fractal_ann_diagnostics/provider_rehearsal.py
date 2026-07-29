@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+import yaml
+
 from .execution_claim import (
     ANALYSIS_PHASE,
     BASE_EXECUTE_RUNNER_LABELS,
@@ -46,11 +48,11 @@ REPOSITORY = "mhdk1602/fractal-ann-diagnostics"
 REHEARSAL_WORKFLOW_PATH = ".github/workflows/confirmatory-provider-rehearsal.yml"
 REHEARSAL_RUNNER_LABEL_DERIVATION = "sha256-fractal-provider-rehearsal-label-v1"
 REHEARSAL_RUNNER_LABEL_PREFIX = "fractal-ann-rehearsal-"
-REHEARSAL_PLAN_SCHEMA = "fractal-provider-rehearsal-plan-v1"
+REHEARSAL_PLAN_SCHEMA = "fractal-provider-rehearsal-plan-v2"
 REHEARSAL_BOOTSTRAP_SCHEMA = "fractal-provider-rehearsal-bootstrap-v1"
 REHEARSAL_LIVE_JOB_SCHEMA = "fractal-provider-rehearsal-live-job-v1"
 REHEARSAL_PHASE_RECEIPT_SCHEMA = "fractal-provider-rehearsal-phase-v1"
-REHEARSAL_AGGREGATE_SCHEMA = "fractal-provider-rehearsal-aggregate-v1"
+REHEARSAL_AGGREGATE_SCHEMA = "fractal-provider-rehearsal-aggregate-v2"
 REHEARSAL_TAG_PROBE_SCHEMA = "fractal-provider-tag-head-branch-probe-v1"
 REHEARSAL_INCIDENT_SCHEMA = "fractal-provider-rehearsal-incident-v1"
 REPOSITORY_RUNNER_INVENTORY_SCHEMA = "fractal-repository-runner-inventory-v1"
@@ -113,6 +115,121 @@ def _canonical_bytes(value: object) -> bytes:
 
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _git_output(root: Path, *arguments: str, label: str) -> str:
+    try:
+        completed = subprocess.run(
+            (
+                "git",
+                "--no-optional-locks",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.untrackedCache=false",
+                "-C",
+                str(root),
+                *arguments,
+            ),
+            check=False,
+            capture_output=True,
+            env={
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            },
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ProviderRehearsalError(f"cannot inspect {label}") from exc
+    if (
+        completed.returncode != 0
+        or len(completed.stdout) > 1024 * 1024
+        or len(completed.stderr) > 1024 * 1024
+    ):
+        raise ProviderRehearsalError(f"cannot inspect {label}")
+    try:
+        return completed.stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ProviderRehearsalError(f"{label} is not UTF-8") from exc
+
+
+def _verify_workflow_package_tree(
+    source_root: str | Path,
+    *,
+    workflow_sha: str,
+) -> tuple[str, str]:
+    """Bind checkout A to its clean package tree before admitting source P."""
+
+    root = Path(source_root)
+    if not root.is_absolute():
+        raise ProviderRehearsalError("workflow source root must be absolute")
+    try:
+        metadata = root.lstat()
+        resolved = root.resolve(strict=True)
+    except OSError as exc:
+        raise ProviderRehearsalError("workflow source root is unavailable") from exc
+    if resolved != root or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise ProviderRehearsalError("workflow source root must be one canonical directory")
+    top_level = _git_output(root, "rev-parse", "--show-toplevel", label="workflow Git root").strip()
+    if top_level != str(root):
+        raise ProviderRehearsalError("workflow source root differs from the Git root")
+    observed_head = _git_output(root, "rev-parse", "HEAD", label="workflow commit").strip()
+    if observed_head != workflow_sha:
+        raise ProviderRehearsalError("workflow checkout commit differs from A")
+    package_root = root / "src" / "fractal_ann_diagnostics"
+    try:
+        package_metadata = package_root.lstat()
+        package_real = package_root.resolve(strict=True)
+    except OSError as exc:
+        raise ProviderRehearsalError("workflow package root is unavailable") from exc
+    if (
+        package_real != package_root
+        or stat.S_ISLNK(package_metadata.st_mode)
+        or not stat.S_ISDIR(package_metadata.st_mode)
+    ):
+        raise ProviderRehearsalError("workflow package root is not canonical")
+    package_tree = _git_output(
+        root,
+        "rev-parse",
+        "HEAD:src/fractal_ann_diagnostics",
+        label="workflow package tree",
+    ).strip()
+    _git_commit("workflow_python_package_source_tree", package_tree)
+    status = _git_output(
+        root,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+        "--",
+        "src/fractal_ann_diagnostics",
+        label="workflow package worktree",
+    )
+    if status:
+        raise ProviderRehearsalError(
+            "workflow package worktree contains changed, untracked, or ignored bytes"
+        )
+    try:
+        workflow_source = _git_output(
+            root,
+            "show",
+            f"HEAD:{REHEARSAL_WORKFLOW_PATH}",
+            label="workflow-fixed host-Python launcher",
+        )
+        workflow = yaml.safe_load(workflow_source)
+        launcher_source = workflow["env"]["HOST_PYTHON_VERIFIED_LAUNCHER"]
+    except (TypeError, KeyError, yaml.YAMLError) as exc:
+        raise ProviderRehearsalError(
+            "cannot recover the workflow-fixed host-Python launcher"
+        ) from exc
+    if type(launcher_source) is not str or not launcher_source:
+        raise ProviderRehearsalError(
+            "workflow-fixed host-Python launcher is not one literal source string"
+        )
+    launcher_sha256 = _sha256(launcher_source.encode("utf-8"))
+    return package_tree, launcher_sha256
 
 
 def _text(name: str, value: object) -> str:
@@ -479,8 +596,21 @@ class RehearsalPhaseAdmission:
     provider_plan_path: str
     provider_plan_sha256: str
     provider_plan_file_sha256: str
+    host_controlled_root: str
     host_python_path: str
     host_python_file_sha256: str
+    host_python_venv_root: str
+    host_python_venv_tree_sha256: str
+    host_python_venv_symlink_inventory_sha256: str
+    host_python_import_root: str
+    host_python_import_tree_sha256: str
+    host_python_launcher_sha256: str
+    host_python_package_content_sha256: str
+    host_python_package_tree_sha256: str
+    host_python_package_source_commit: str
+    host_python_package_source_tree: str
+    workflow_python_package_source_tree: str
+    workflow_python_launcher_sha256: str
     host_gh_path: str
     host_gh_file_sha256: str
     host_docker_path: str
@@ -511,6 +641,12 @@ class RehearsalPhaseAdmission:
             "provider_plan_file_sha256",
             "candidate_runtime_probe_receipt_sha256",
             "host_python_file_sha256",
+            "host_python_venv_tree_sha256",
+            "host_python_venv_symlink_inventory_sha256",
+            "host_python_import_tree_sha256",
+            "host_python_launcher_sha256",
+            "host_python_package_content_sha256",
+            "host_python_package_tree_sha256",
             "host_gh_file_sha256",
             "host_docker_file_sha256",
             "host_tools_contract_sha256",
@@ -518,18 +654,62 @@ class RehearsalPhaseAdmission:
         ):
             _digest(name, getattr(self, name))
         _git_commit("candidate_image_source_commit", self.candidate_image_source_commit)
+        _git_commit(
+            "host_python_package_source_commit",
+            self.host_python_package_source_commit,
+        )
+        _digest(
+            "workflow_python_launcher_sha256",
+            self.workflow_python_launcher_sha256,
+        )
+        _git_commit(
+            "host_python_package_source_tree",
+            self.host_python_package_source_tree,
+        )
+        _git_commit(
+            "workflow_python_package_source_tree",
+            self.workflow_python_package_source_tree,
+        )
+        if self.host_python_package_source_commit != self.candidate_image_source_commit:
+            raise ProviderRehearsalError(
+                "host Python package provenance differs from candidate source P"
+            )
+        if self.workflow_python_package_source_tree != self.host_python_package_source_tree:
+            raise ProviderRehearsalError(
+                "workflow package tree at A differs from candidate package tree at P"
+            )
+        if self.workflow_python_launcher_sha256 != self.host_python_launcher_sha256:
+            raise ProviderRehearsalError(
+                "workflow launcher source differs from the source-P launcher pin"
+            )
         _git_commit("c0_commit", self.c0_commit)
         _git_commit("workflow_sha", self.workflow_sha)
         for name in ("run_id", "run_attempt"):
             _positive(name, getattr(self, name))
         for name in (
             "provider_plan_path",
+            "host_controlled_root",
             "host_python_path",
+            "host_python_venv_root",
+            "host_python_import_root",
             "host_gh_path",
             "host_docker_path",
         ):
             if not Path(getattr(self, name)).is_absolute():
                 raise ProviderRehearsalError(f"{name} must be absolute")
+        if os.pathsep in self.host_python_import_root:
+            raise ProviderRehearsalError("host_python_import_root cannot contain multiple roots")
+        try:
+            relative_import = Path(self.host_python_import_root).relative_to(
+                self.host_python_venv_root
+            )
+            Path(self.host_python_venv_root).relative_to(self.host_controlled_root)
+        except ValueError as exc:
+            raise ProviderRehearsalError(
+                "host Python import closure escapes controlled_root"
+            ) from exc
+        if relative_import.parts != ("lib", "python3.12", "site-packages"):
+            raise ProviderRehearsalError("host Python import root differs")
         _oci_digest("candidate_image_index_digest", self.candidate_image_index_digest)
         _oci_digest(
             "candidate_platform_manifest_digest",
@@ -611,6 +791,7 @@ def build_rehearsal_admissions(
     run_id: int,
     run_attempt: int,
     materialization_root: str | Path,
+    workflow_source_root: str | Path,
 ) -> tuple[Mapping[ProviderPhase, RehearsalPhaseAdmission], tuple[Path, ...]]:
     """Load the production plans and build the three rehearsal queue admissions."""
 
@@ -618,6 +799,10 @@ def build_rehearsal_admissions(
     workflow = _git_commit("workflow_sha", workflow_sha)
     if commit != workflow:
         raise ProviderRehearsalError("candidate manifest and rehearsal workflow SHA differ")
+    workflow_package_tree, workflow_launcher_sha256 = _verify_workflow_package_tree(
+        workflow_source_root,
+        workflow_sha=workflow,
+    )
     try:
         plans = load_provider_phase_plans(
             manifest_path,
@@ -650,6 +835,10 @@ def build_rehearsal_admissions(
             raise ProviderRehearsalError(
                 f"{phase} candidate image closure differs from the production plan"
             )
+        if plan.host_tools.python_package_source_tree != workflow_package_tree:
+            raise ProviderRehearsalError(f"{phase} source P package tree differs from workflow A")
+        if plan.host_tools.python_launcher_sha256 != workflow_launcher_sha256:
+            raise ProviderRehearsalError(f"{phase} launcher pin differs from workflow A")
         materialization = materialize_provider_phase_plan(plan, root / phase)
         materializations.append(materialization)
         admissions[phase] = RehearsalPhaseAdmission(
@@ -668,8 +857,23 @@ def build_rehearsal_admissions(
             provider_plan_path=plan.provider_plan_path,
             provider_plan_sha256=plan.plan_sha256,
             provider_plan_file_sha256=plan.file_sha256,
+            host_controlled_root=plan.host_tools.controlled_root,
             host_python_path=plan.host_tools.python_executable,
             host_python_file_sha256=plan.host_tools.python_executable_sha256,
+            host_python_venv_root=plan.host_tools.venv_root,
+            host_python_venv_tree_sha256=plan.host_tools.venv_tree_sha256,
+            host_python_venv_symlink_inventory_sha256=(
+                plan.host_tools.venv_symlink_inventory_sha256
+            ),
+            host_python_import_root=plan.host_tools.python_import_root,
+            host_python_import_tree_sha256=(plan.host_tools.python_import_tree_sha256),
+            host_python_launcher_sha256=plan.host_tools.python_launcher_sha256,
+            host_python_package_content_sha256=(plan.host_tools.python_package_content_sha256),
+            host_python_package_tree_sha256=(plan.host_tools.python_package_tree_sha256),
+            host_python_package_source_commit=(plan.host_tools.python_package_source_commit),
+            host_python_package_source_tree=(plan.host_tools.python_package_source_tree),
+            workflow_python_package_source_tree=workflow_package_tree,
+            workflow_python_launcher_sha256=workflow_launcher_sha256,
             host_gh_path=plan.host_tools.gh_executable,
             host_gh_file_sha256=plan.host_tools.gh_executable_sha256,
             host_docker_path=plan.host_tools.docker_executable,
@@ -1255,9 +1459,22 @@ def _load_fixed_plan_components(
         raise ProviderRehearsalError("fixed provider-plan semantic digest differs")
     if plan.file_sha256 != admission.provider_plan_file_sha256:
         raise ProviderRehearsalError("fixed provider-plan file digest differs")
+    if plan.host_tools.contract_sha256 != admission.host_tools_contract_sha256:
+        raise ProviderRehearsalError("fixed provider-plan host-tool contract digest differs")
     exact_tools = {
+        "controlled_root": admission.host_controlled_root,
         "python_executable": admission.host_python_path,
         "python_executable_sha256": admission.host_python_file_sha256,
+        "venv_root": admission.host_python_venv_root,
+        "venv_tree_sha256": admission.host_python_venv_tree_sha256,
+        "venv_symlink_inventory_sha256": (admission.host_python_venv_symlink_inventory_sha256),
+        "python_import_root": admission.host_python_import_root,
+        "python_import_tree_sha256": admission.host_python_import_tree_sha256,
+        "python_launcher_sha256": admission.host_python_launcher_sha256,
+        "python_package_content_sha256": (admission.host_python_package_content_sha256),
+        "python_package_tree_sha256": admission.host_python_package_tree_sha256,
+        "python_package_source_commit": admission.host_python_package_source_commit,
+        "python_package_source_tree": admission.host_python_package_source_tree,
         "gh_executable": admission.host_gh_path,
         "gh_executable_sha256": admission.host_gh_file_sha256,
         "docker_executable": admission.host_docker_path,
@@ -1700,6 +1917,10 @@ class RehearsalAggregateReceipt:
     run_attempt: int
     c0_commit: str
     candidate_image_source_commit: str
+    candidate_python_package_source_tree: str
+    workflow_python_package_source_tree: str
+    host_python_launcher_sha256: str
+    workflow_python_launcher_sha256: str
     candidate_image_closure_file_sha256: str
     candidate_bootstrap_closure_sha256: str
     build_context_tree_sha256: str
@@ -1719,6 +1940,27 @@ class RehearsalAggregateReceipt:
         _git_commit("workflow_sha", self.workflow_sha)
         _git_commit("c0_commit", self.c0_commit)
         _git_commit("candidate_image_source_commit", self.candidate_image_source_commit)
+        _git_commit(
+            "candidate_python_package_source_tree",
+            self.candidate_python_package_source_tree,
+        )
+        _git_commit(
+            "workflow_python_package_source_tree",
+            self.workflow_python_package_source_tree,
+        )
+        if self.candidate_python_package_source_tree != self.workflow_python_package_source_tree:
+            raise ProviderRehearsalError(
+                "aggregate candidate package tree P differs from workflow package tree A"
+            )
+        for name in (
+            "host_python_launcher_sha256",
+            "workflow_python_launcher_sha256",
+        ):
+            _digest(name, getattr(self, name))
+        if self.host_python_launcher_sha256 != self.workflow_python_launcher_sha256:
+            raise ProviderRehearsalError(
+                "aggregate host launcher pin differs from workflow launcher source"
+            )
         if self.workflow_sha != self.c0_commit:
             raise ProviderRehearsalError("aggregate workflow and candidate C0 commit differ")
         if _CANDIDATE_BRANCH.fullmatch(self.run_head_branch) is None:
@@ -1785,6 +2027,10 @@ def aggregate_rehearsal_receipts(
         first.live_job.run_attempt,
         first.admission.c0_commit,
         first.admission.candidate_image_source_commit,
+        first.admission.host_python_package_source_tree,
+        first.admission.workflow_python_package_source_tree,
+        first.admission.host_python_launcher_sha256,
+        first.admission.workflow_python_launcher_sha256,
         first.admission.candidate_image_closure_file_sha256,
         first.admission.candidate_bootstrap_closure_sha256,
         first.admission.build_context_tree_sha256,
@@ -1801,6 +2047,10 @@ def aggregate_rehearsal_receipts(
             receipt.live_job.run_attempt,
             receipt.admission.c0_commit,
             receipt.admission.candidate_image_source_commit,
+            receipt.admission.host_python_package_source_tree,
+            receipt.admission.workflow_python_package_source_tree,
+            receipt.admission.host_python_launcher_sha256,
+            receipt.admission.workflow_python_launcher_sha256,
             receipt.admission.candidate_image_closure_file_sha256,
             receipt.admission.candidate_bootstrap_closure_sha256,
             receipt.admission.build_context_tree_sha256,
@@ -1827,7 +2077,7 @@ def aggregate_rehearsal_receipts(
         candidate_closure.build_context_tree_sha256,
         candidate_closure.candidate_branch,
     )
-    if closure_exact != (*exact[5:9], exact[1]):
+    if closure_exact != (exact[5], exact[10], exact[11], exact[12], exact[1]):
         raise ProviderRehearsalError(
             "candidate image closure differs from the aggregate source, bootstrap, or branch"
         )
@@ -1840,11 +2090,15 @@ def aggregate_rehearsal_receipts(
         run_attempt=exact[3],
         c0_commit=exact[4],
         candidate_image_source_commit=exact[5],
-        candidate_image_closure_file_sha256=exact[6],
-        candidate_bootstrap_closure_sha256=exact[7],
-        build_context_tree_sha256=exact[8],
-        manifest_sha256=exact[9],
-        plan_closure_sha256=exact[10],
+        candidate_python_package_source_tree=exact[6],
+        workflow_python_package_source_tree=exact[7],
+        host_python_launcher_sha256=exact[8],
+        workflow_python_launcher_sha256=exact[9],
+        candidate_image_closure_file_sha256=exact[10],
+        candidate_bootstrap_closure_sha256=exact[11],
+        build_context_tree_sha256=exact[12],
+        manifest_sha256=exact[13],
+        plan_closure_sha256=exact[14],
         phase_receipt_file_sha256={
             phase: receipt.file_sha256 for phase, receipt in receipts.items()
         },
@@ -2051,12 +2305,23 @@ PLAN_PHASE_OUTPUT_FIELDS = frozenset(
         "admission_json",
         "admission_sha256",
         "candidate_image_reference",
+        "host_controlled_root",
         "host_docker_file_sha256",
         "host_docker_path",
         "host_gh_file_sha256",
         "host_gh_path",
         "host_python_file_sha256",
+        "host_python_import_root",
+        "host_python_import_tree_sha256",
+        "host_python_launcher_sha256",
+        "host_python_package_content_sha256",
+        "host_python_package_source_commit",
+        "host_python_package_source_tree",
+        "host_python_package_tree_sha256",
         "host_python_path",
+        "host_python_venv_root",
+        "host_python_venv_symlink_inventory_sha256",
+        "host_python_venv_tree_sha256",
         "provider_plan_file_sha256",
         "provider_plan_path",
         "provider_plan_sha256",
@@ -2137,6 +2402,7 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--c0-commit", required=True)
     plan.add_argument("--candidate-closure", required=True, type=Path)
     plan.add_argument("--workflow-sha", required=True)
+    plan.add_argument("--workflow-source-root", required=True, type=Path)
     plan.add_argument("--run-id", required=True, type=int)
     plan.add_argument("--run-attempt", required=True, type=int)
     plan.add_argument("--output-dir", required=True, type=Path)
@@ -2211,6 +2477,7 @@ def _cli_plan(arguments: argparse.Namespace) -> Mapping[str, str]:
         run_id=arguments.run_id,
         run_attempt=arguments.run_attempt,
         materialization_root=arguments.output_dir / "hosted-plan-materializations",
+        workflow_source_root=arguments.workflow_source_root,
     )
     if len(materializations) != 3:
         raise ProviderRehearsalError("plan did not materialize exactly three hosted copies")
@@ -2240,12 +2507,35 @@ def _cli_plan(arguments: argparse.Namespace) -> Mapping[str, str]:
                 f"{prefix}_admission_json": _canonical_bytes(admission.to_dict()).decode("ascii"),
                 f"{prefix}_admission_sha256": admission.admission_sha256,
                 f"{prefix}_candidate_image_reference": admission.candidate_image_reference,
+                f"{prefix}_host_controlled_root": admission.host_controlled_root,
                 f"{prefix}_host_docker_file_sha256": admission.host_docker_file_sha256,
                 f"{prefix}_host_docker_path": admission.host_docker_path,
                 f"{prefix}_host_gh_file_sha256": admission.host_gh_file_sha256,
                 f"{prefix}_host_gh_path": admission.host_gh_path,
                 f"{prefix}_host_python_file_sha256": admission.host_python_file_sha256,
+                f"{prefix}_host_python_import_root": admission.host_python_import_root,
+                f"{prefix}_host_python_import_tree_sha256": (
+                    admission.host_python_import_tree_sha256
+                ),
+                f"{prefix}_host_python_launcher_sha256": (admission.host_python_launcher_sha256),
+                f"{prefix}_host_python_package_content_sha256": (
+                    admission.host_python_package_content_sha256
+                ),
+                f"{prefix}_host_python_package_source_commit": (
+                    admission.host_python_package_source_commit
+                ),
+                f"{prefix}_host_python_package_source_tree": (
+                    admission.host_python_package_source_tree
+                ),
+                f"{prefix}_host_python_package_tree_sha256": (
+                    admission.host_python_package_tree_sha256
+                ),
                 f"{prefix}_host_python_path": admission.host_python_path,
+                f"{prefix}_host_python_venv_root": admission.host_python_venv_root,
+                f"{prefix}_host_python_venv_symlink_inventory_sha256": (
+                    admission.host_python_venv_symlink_inventory_sha256
+                ),
+                f"{prefix}_host_python_venv_tree_sha256": (admission.host_python_venv_tree_sha256),
                 f"{prefix}_provider_plan_file_sha256": admission.provider_plan_file_sha256,
                 f"{prefix}_provider_plan_path": admission.provider_plan_path,
                 f"{prefix}_provider_plan_sha256": admission.provider_plan_sha256,

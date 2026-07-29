@@ -139,9 +139,21 @@ def test_workflow_closes_zip_members_and_rechecks_both_checksum_layers() -> None
     assert ".release_anonymous_readback_equal == true" in text
     assert "provider-rehearsal-production-gate.json" in text
     assert "fractal-c0-provider-rehearsal-gate-v2" in text
+    assert "fractal-provider-rehearsal-aggregate-v2" in text
     assert ".candidate_bootstrap_closure_sha256" in text
     assert ".candidate_image_closure_file_sha256" in text
     assert ".candidate_image_source_commit" in text
+    assert ".candidate_python_package_source_tree" in text
+    assert ".workflow_python_package_source_tree" in text
+    assert ".host_python_launcher_sha256" in text
+    assert ".workflow_python_launcher_sha256" in text
+    assert (
+        ".candidate_python_package_source_tree\n"
+        "                  == .workflow_python_package_source_tree"
+    ) in text
+    assert (
+        ".host_python_launcher_sha256\n                  == .workflow_python_launcher_sha256"
+    ) in text
     assert "provider-rehearsal-receipt.json" in text
     assert "rehearsal-attestation-verification.json" in text
     assert ".provider_rehearsal_receipt_sha256" in text

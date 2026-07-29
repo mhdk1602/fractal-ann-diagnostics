@@ -46,6 +46,7 @@ from .provider_contract import (
 from .provider_contract import (
     PHASE_HOST_TOOL_CONTRACT_SCHEMA as SHARED_PHASE_HOST_TOOL_CONTRACT_SCHEMA,
 )
+from .provider_contract import REGISTERED_HOST_PYTHON_LAUNCHER_SHA256
 from .study import (
     FIXED_CORPORA,
     PROVIDER_APPROVAL_ENVIRONMENT,
@@ -54,8 +55,11 @@ from .study import (
     PROVIDER_PHASE_PLAN_TEMPLATE_SCHEMA,
     PROVIDER_PHASE_RUNTIME_CEILINGS,
     PROVIDER_PHASE_WORKFLOWS,
+    PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
     PROVIDER_PLAN_C1_COMMIT_BINDING,
     PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
+    PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
+    PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
     PROVIDER_PLAN_MANIFEST_BINDING,
     PROVIDER_PLAN_PHASE_INPUT_BINDING,
     PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
@@ -78,16 +82,17 @@ C1_REGISTRATION_PACKAGE_FILE_COUNT = 27
 ZENODO_ADMISSION_SCHEMA = "fractal-zenodo-anonymous-admission-v2"
 PHASE_FAILURE_SCHEMA = "fractal-provider-phase-failure-v1"
 RUNTIME_CLAIM_RECEIPT_SCHEMA = "fractal-runtime-claim-capability-v1"
-PHASE_HOST_TOOL_CONTRACT_SCHEMA = "fractal-phase-host-tool-contract-v1"
-PHASE_HOST_TOOL_RECEIPT_SCHEMA = "fractal-phase-host-tool-receipt-v1"
+PHASE_HOST_TOOL_CONTRACT_SCHEMA = "fractal-phase-host-tool-contract-v3"
+PHASE_HOST_TOOL_RECEIPT_SCHEMA = "fractal-phase-host-tool-receipt-v2"
 PHASE_HOST_PROBE_SCHEMA = "fractal-phase-host-probe-v1"
 DOCKER_SERVER_PROBE_SCHEMA = "fractal-docker-server-probe-v1"
 PHASE_HOST_PROBE_FILENAME = "phase-host-probe.json"
 DOCKER_SERVER_PROBE_FILENAME = "docker-server-probe.json"
+PHASE_HOST_TOOL_RECEIPT_FILENAME = "phase-host-tool-receipt.json"
 PHASE_CLAIM_CONTRACT_SCHEMA = "fractal-provider-phase-claim-contract-v1"
 PHASE_BEACON_RECEIPT_SCHEMA = "fractal-provider-phase-beacon-receipt-v1"
 PHASE_RUNTIME_CLAIM_RECEIPT_SCHEMA = "fractal-provider-phase-runtime-claim-v1"
-PROVIDER_PHASE_PLAN_SCHEMA = "fractal-provider-phase-plan-v2"
+PROVIDER_PHASE_PLAN_SCHEMA = "fractal-provider-phase-plan-v3"
 PROVIDER_RUNNER_BOOTSTRAP_SCHEMA = "fractal-provider-runner-bootstrap-v2"
 LIVE_EXECUTE_JOB_RECEIPT_SCHEMA = "fractal-live-execute-job-identity-v1"
 FAILED_EXECUTE_JOB_RECEIPT_SCHEMA = "fractal-failed-execute-job-identity-v1"
@@ -192,8 +197,19 @@ PREREQUISITE_OUTPUT_KEYS = frozenset(
         "gh_file_sha256",
         "gh_path",
         "gh_version",
+        "host_controlled_root",
         "host_python_file_sha256",
+        "host_python_import_root",
+        "host_python_import_tree_sha256",
+        "host_python_launcher_sha256",
+        "host_python_package_content_sha256",
+        "host_python_package_source_commit",
+        "host_python_package_source_tree",
+        "host_python_package_tree_sha256",
         "host_python_path",
+        "host_python_venv_root",
+        "host_python_venv_symlink_inventory_sha256",
+        "host_python_venv_tree_sha256",
         "oci_index_digest",
         "oci_platform_manifest_digest",
         "phase_evidence_root",
@@ -219,6 +235,9 @@ ACTIVATION_COMMON_OUTPUT_KEYS = frozenset(
         "fixed_corpora_completed",
         "live_execute_job_receipt_path",
         "live_execute_job_receipt_sha256",
+        "phase_host_tool_receipt_path",
+        "phase_host_tool_receipt_file_sha256",
+        "phase_host_tool_receipt_sha256",
         "phase_execution_receipt_path",
         "phase_execution_receipt_sha256",
         "runtime_claim_receipt_path",
@@ -595,6 +614,13 @@ class PhaseHostToolContract:
     venv_root: str
     venv_tree_sha256: str
     venv_symlink_inventory_sha256: str
+    python_import_root: str
+    python_import_tree_sha256: str
+    python_launcher_sha256: str
+    python_package_content_sha256: str
+    python_package_tree_sha256: str
+    python_package_source_commit: str
+    python_package_source_tree: str
     gh_archive_uri: str
     gh_archive_sha256: str
     gh_archive_byte_count: int
@@ -636,6 +662,7 @@ class PhaseHostToolContract:
         for name in (
             "python_executable",
             "venv_root",
+            "python_import_root",
             "gh_executable",
             "runner_listener_executable",
             "runner_listener_dll",
@@ -652,6 +679,10 @@ class PhaseHostToolContract:
             "python_archive_sha256",
             "venv_tree_sha256",
             "venv_symlink_inventory_sha256",
+            "python_import_tree_sha256",
+            "python_launcher_sha256",
+            "python_package_content_sha256",
+            "python_package_tree_sha256",
             "gh_archive_sha256",
             "gh_executable_sha256",
             "runner_archive_sha256",
@@ -682,6 +713,18 @@ class PhaseHostToolContract:
             raise ExecutionClaimError("Python version differs from the registered release")
         if self.python_executable_sha256 != OFFICIAL_PYTHON_BUILD_STANDALONE_BINARY_SHA256:
             raise ExecutionClaimError("Python executable SHA-256 differs from the official archive")
+        if self.python_launcher_sha256 != REGISTERED_HOST_PYTHON_LAUNCHER_SHA256:
+            raise ExecutionClaimError("host-Python launcher differs from the C0 source pin")
+        import_root = Path(self.python_import_root)
+        venv_root = Path(self.venv_root)
+        try:
+            import_root.relative_to(venv_root)
+        except ValueError as exc:
+            raise ExecutionClaimError("python_import_root must be below venv_root") from exc
+        if import_root == venv_root:
+            raise ExecutionClaimError("python_import_root cannot equal venv_root")
+        _git_commit("python_package_source_commit", self.python_package_source_commit)
+        _git_commit("python_package_source_tree", self.python_package_source_tree)
         if self.gh_archive_uri != OFFICIAL_GH_OSX_ARM64_ARCHIVE_URI:
             raise ExecutionClaimError("gh archive URI is not the registered official release")
         if self.gh_archive_sha256 != OFFICIAL_GH_OSX_ARM64_ARCHIVE_SHA256:
@@ -951,6 +994,7 @@ class ProviderPhasePlan:
     tle_interoperability_receipt_sha256: str | None
     maximum_runtime_seconds: int
     activation_command_id: str
+    activation_environment: Mapping[str, str]
     activation_argv_template: tuple[str, ...]
     schema_version: str = PROVIDER_PHASE_PLAN_SCHEMA
 
@@ -1133,21 +1177,47 @@ class ProviderPhasePlan:
             raise ExecutionClaimError("non-release provider plan introduces TLE")
         if self.activation_command_id != PROVIDER_PHASE_COMMAND_IDS[self.phase]:
             raise ExecutionClaimError("provider phase activation command differs")
+        expected_environment = {
+            "HOST_CONTROLLED_ROOT": self.host_tools.controlled_root,
+            "HOST_PYTHON_IMPORT_ROOT": self.host_tools.python_import_root,
+            "HOST_PYTHON_IMPORT_TREE_SHA256": (self.host_tools.python_import_tree_sha256),
+            "HOST_PYTHON_PACKAGE_CONTENT_SHA256": (self.host_tools.python_package_content_sha256),
+            "HOST_PYTHON_PACKAGE_TREE_SHA256": (self.host_tools.python_package_tree_sha256),
+            "HOST_PYTHON_VENV_ROOT": self.host_tools.venv_root,
+            "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256": (
+                self.host_tools.venv_symlink_inventory_sha256
+            ),
+            "HOST_PYTHON_VENV_TREE_SHA256": self.host_tools.venv_tree_sha256,
+            "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256": (self.host_tools.python_launcher_sha256),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        if (
+            type(self.activation_environment) is not dict
+            or self.activation_environment != expected_environment
+        ):
+            raise ExecutionClaimError("provider phase activation environment differs")
         expected_argv = (
             self.host_tools.python_executable,
-            "-m",
-            "fractal_ann_diagnostics.provider_phase_runtime",
-            self.activation_command_id,
-            "--provider-plan",
-            self.provider_plan_path,
+            "-I",
+            "-S",
+            "-P",
+            "-s",
+            "-c",
+            PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
+            "fractal-host-python-verified-launcher-v1",
+            "fractal_ann_diagnostics.execution_claim",
+            "verify-prerequisites",
+            "--phase",
+            self.phase,
             "--suite-attempt-id",
             PROVIDER_PLAN_SUITE_BINDING,
             "--claim-receipt",
             PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
-            "--phase-input-root",
-            PROVIDER_PLAN_PHASE_INPUT_BINDING,
-            "--phase-output-root",
-            PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
+            "--activate-and-execute",
+            "--output-dir",
+            PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
+            "--github-output",
+            PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
         )
         if self.activation_argv_template != expected_argv:
             raise ExecutionClaimError("provider phase activation argv differs")
@@ -1176,12 +1246,14 @@ class ProviderPhasePlan:
                 if name
                 not in {
                     "activation_argv_template",
+                    "activation_environment",
                     "execution_claim_inputs",
                     "host_tools",
                     "runner_bootstrap_receipt",
                 }
             },
             "activation_argv_template": list(self.activation_argv_template),
+            "activation_environment": dict(self.activation_environment),
             "c1_commit_source": PROVIDER_PLAN_C1_COMMIT_BINDING,
             "execution_claim_inputs": (
                 None
@@ -1212,6 +1284,11 @@ class ProviderPhasePlan:
         argv = row["activation_argv_template"]
         if not isinstance(argv, list) or not all(type(item) is str for item in argv):
             raise ExecutionClaimError("resolved provider-plan argv is malformed")
+        environment = row["activation_environment"]
+        if type(environment) is not dict or not all(
+            type(key) is str and type(item) is str for key, item in environment.items()
+        ):
+            raise ExecutionClaimError("resolved provider-plan environment is malformed")
         return cls(
             **{
                 key: item
@@ -1219,6 +1296,7 @@ class ProviderPhasePlan:
                 if key
                 not in {
                     "activation_argv_template",
+                    "activation_environment",
                     "c1_commit_source",
                     "execution_claim_inputs",
                     "host_tools",
@@ -1226,6 +1304,7 @@ class ProviderPhasePlan:
                 }
             },
             activation_argv_template=tuple(argv),
+            activation_environment=dict(environment),
             execution_claim_inputs=(
                 None
                 if row["execution_claim_inputs"] is None
@@ -1612,6 +1691,13 @@ def _venv_tree_digests(venv_root: Path, controlled_root: Path) -> tuple[str, str
         raise ExecutionClaimError("cannot lstat registered venv_root") from exc
     if not stat.S_ISDIR(root_stat.st_mode) or stat.S_ISLNK(root_stat.st_mode):
         raise ExecutionClaimError("venv_root must be a real directory, not a symlink")
+    entries.append(
+        {
+            "kind": "directory",
+            "mode": f"{stat.S_IMODE(root_stat.st_mode):04o}",
+            "path": ".",
+        }
+    )
     for directory, directory_names, file_names in os.walk(venv_root, followlinks=False):
         directory_names.sort(key=lambda value: value.encode("utf-8"))
         file_names.sort(key=lambda value: value.encode("utf-8"))
@@ -1639,16 +1725,33 @@ def _venv_tree_digests(venv_root: Path, controlled_root: Path) -> tuple[str, str
                     "target": raw_target,
                 }
                 symlinks.append(row)
-                entries.append({"kind": "symlink", **row})
-            elif stat.S_ISDIR(mode):
-                entries.append({"kind": "directory", "path": relative})
-            elif stat.S_ISREG(mode):
-                size = candidate.stat().st_size
                 entries.append(
                     {
-                        "byte_count": size,
+                        "kind": "symlink",
+                        "mode": f"{stat.S_IMODE(mode):04o}",
+                        **row,
+                    }
+                )
+            elif stat.S_ISDIR(mode):
+                entries.append(
+                    {
+                        "kind": "directory",
+                        "mode": f"{stat.S_IMODE(mode):04o}",
+                        "path": relative,
+                    }
+                )
+            elif stat.S_ISREG(mode):
+                metadata = candidate.stat()
+                if metadata.st_nlink != 1:
+                    raise ExecutionClaimError(f"venv file {relative} is multiply linked")
+                if "__pycache__" in candidate.parts or candidate.suffix in {".pyc", ".pyo"}:
+                    raise ExecutionClaimError(f"venv contains bytecode cache entry {relative}")
+                entries.append(
+                    {
+                        "byte_count": metadata.st_size,
                         "file_sha256": _hash_file(candidate, label=f"venv file {relative}"),
                         "kind": "file",
+                        "mode": f"{stat.S_IMODE(mode):04o}",
                         "path": relative,
                     }
                 )
@@ -1659,6 +1762,113 @@ def _venv_tree_digests(venv_root: Path, controlled_root: Path) -> tuple[str, str
     tree = _sha256(_canonical_bytes({"derivation": HOST_TOOL_TREE_DERIVATION, "entries": entries}))
     inventory = _sha256(_canonical_bytes({"symlinks": symlinks}))
     return tree, inventory
+
+
+def _content_tree_digest(root: Path) -> str:
+    """Hash one closed directory tree without deployment-mode differences."""
+
+    entries: list[dict[str, object]] = [{"kind": "directory", "path": "."}]
+    try:
+        root_metadata = root.lstat()
+    except OSError as exc:
+        raise ExecutionClaimError("cannot lstat content tree root") from exc
+    if not stat.S_ISDIR(root_metadata.st_mode) or stat.S_ISLNK(root_metadata.st_mode):
+        raise ExecutionClaimError("content tree root must be one real directory")
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        directory_names.sort(key=lambda value: value.encode("utf-8"))
+        file_names.sort(key=lambda value: value.encode("utf-8"))
+        current = Path(directory)
+        for name in (*directory_names, *file_names):
+            candidate = current / name
+            relative = candidate.relative_to(root).as_posix()
+            try:
+                metadata = candidate.lstat()
+            except OSError as exc:
+                raise ExecutionClaimError(f"cannot lstat content entry {relative}") from exc
+            if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                entries.append({"kind": "directory", "path": relative})
+            elif stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                if (
+                    metadata.st_nlink != 1
+                    or "__pycache__" in candidate.parts
+                    or candidate.suffix in {".pyc", ".pyo"}
+                ):
+                    raise ExecutionClaimError(
+                        f"content tree file {relative} is not a closed source file"
+                    )
+                entries.append(
+                    {
+                        "byte_count": metadata.st_size,
+                        "file_sha256": _hash_file(
+                            candidate,
+                            label=f"content tree file {relative}",
+                        ),
+                        "kind": "file",
+                        "path": relative,
+                    }
+                )
+            else:
+                raise ExecutionClaimError(
+                    f"content tree entry {relative} has a forbidden file type"
+                )
+    entries.sort(key=lambda row: str(row["path"]).encode("utf-8"))
+    return _sha256(
+        _canonical_bytes(
+            {
+                "derivation": "sha256-fractal-python-package-content-v1",
+                "entries": entries,
+            }
+        )
+    )
+
+
+def _require_root_owned_readonly_import_closure(
+    controlled_root: Path,
+    venv_root: Path,
+    import_root: Path,
+) -> None:
+    """Reject effective write authority over every importable path."""
+
+    ancestors = (
+        controlled_root,
+        venv_root,
+        venv_root / "lib",
+        venv_root / "lib" / "python3.12",
+        import_root,
+    )
+    try:
+        for candidate in ancestors:
+            metadata = candidate.lstat()
+            if (
+                not stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_uid != 0
+                or stat.S_IMODE(metadata.st_mode) & 0o222
+                or os.access(candidate, os.W_OK)
+            ):
+                raise ExecutionClaimError(
+                    "Python import-root ancestors must be root-owned and effectively read-only"
+                )
+        for directory, directory_names, file_names in os.walk(
+            import_root,
+            followlinks=False,
+        ):
+            current = Path(directory)
+            for name in (*directory_names, *file_names):
+                candidate = current / name
+                metadata = candidate.lstat()
+                if (
+                    stat.S_ISLNK(metadata.st_mode)
+                    or metadata.st_uid != 0
+                    or stat.S_IMODE(metadata.st_mode) & 0o222
+                    or os.access(candidate, os.W_OK)
+                ):
+                    raise ExecutionClaimError(
+                        "Python import closure must be root-owned, symlink-free, "
+                        "and effectively read-only"
+                    )
+    except OSError as exc:
+        raise ExecutionClaimError("cannot inspect Python import closure authority") from exc
 
 
 def capture_phase_host_probe() -> PhaseHostProbe:
@@ -1787,6 +1997,9 @@ class PhaseHostToolReceipt:
     python_executable_sha256: str
     venv_tree_sha256: str
     venv_symlink_inventory_sha256: str
+    python_import_tree_sha256: str
+    python_package_content_sha256: str
+    python_package_tree_sha256: str
     gh_executable_sha256: str
     runner_listener_sha256: str
     runner_listener_dll_sha256: str
@@ -1805,6 +2018,9 @@ class PhaseHostToolReceipt:
             "python_executable_sha256",
             "venv_tree_sha256",
             "venv_symlink_inventory_sha256",
+            "python_import_tree_sha256",
+            "python_package_content_sha256",
+            "python_package_tree_sha256",
             "gh_executable_sha256",
             "runner_listener_sha256",
             "runner_listener_dll_sha256",
@@ -1909,6 +2125,25 @@ def verify_phase_host_tools(
         raise ExecutionClaimError("controlled venv tree differs from the C1 contract")
     if symlink_inventory != contract.venv_symlink_inventory_sha256:
         raise ExecutionClaimError("controlled venv symlink inventory differs from C1")
+    import_root = Path(contract.python_import_root)
+    try:
+        import_real = import_root.resolve(strict=True)
+        import_real.relative_to(venv_real)
+    except (OSError, ValueError) as exc:
+        raise ExecutionClaimError("python_import_root resolves outside venv_root") from exc
+    if import_real != import_root:
+        raise ExecutionClaimError("python_import_root or one of its parents is a symlink")
+    _require_root_owned_readonly_import_closure(root_real, venv_real, import_real)
+    import_tree, _import_symlinks = _venv_tree_digests(import_real, root_real)
+    if import_tree != contract.python_import_tree_sha256:
+        raise ExecutionClaimError("Python import tree differs from the C1 contract")
+    package_root = import_real / "fractal_ann_diagnostics"
+    package_tree, _package_symlinks = _venv_tree_digests(package_root, root_real)
+    if package_tree != contract.python_package_tree_sha256:
+        raise ExecutionClaimError("apparatus package tree differs from source P")
+    package_content = _content_tree_digest(package_root)
+    if package_content != contract.python_package_content_sha256:
+        raise ExecutionClaimError("apparatus package content differs from source P")
     host_probe_receipt_path, docker_server_probe_receipt_path = generate_phase_host_probes(
         contract, probe_output_dir
     )
@@ -1952,6 +2187,9 @@ def verify_phase_host_tools(
         python_executable_sha256=observed["python_executable"],
         venv_tree_sha256=tree,
         venv_symlink_inventory_sha256=symlink_inventory,
+        python_import_tree_sha256=import_tree,
+        python_package_content_sha256=package_content,
+        python_package_tree_sha256=package_tree,
         gh_executable_sha256=observed["gh_executable"],
         runner_listener_sha256=observed["runner_listener"],
         runner_listener_dll_sha256=observed["runner_listener_dll"],

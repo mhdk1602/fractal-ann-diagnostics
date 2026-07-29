@@ -11,10 +11,15 @@ import pytest
 from fractal_ann_diagnostics.opa_runtime_binary import (
     C0_ARTIFACT_ATTESTATION_BUNDLE_FILENAME,
     C0_ARTIFACT_CHECKSUMS_FILENAME,
+    NATIVE_BUILD_RECEIPT_IMAGE_PATH,
+    OPA_BUILD_RECEIPT_IMAGE_PATH,
     OPA_RUNTIME_BINARY_PATH,
     OPA_RUNTIME_MOUNT_ROLE,
     PYTHON_RUNTIME_BINARY_PATH,
+    RUNTIME_LIBRARY_MANIFEST_IMAGE_PATH,
+    SQLITE_RUNTIME_LIBRARY_IMAGE_PATH,
     UV_LOCK_RUNTIME_PATH,
+    ZLIB_RUNTIME_LIBRARY_IMAGE_PATH,
     GhC0ArtifactAttestationVerifier,
     OpaRuntimeBinaryError,
     load_c0_runtime_extraction_receipt,
@@ -43,6 +48,13 @@ _PYTHON_SHA256 = hashlib.sha256(_PYTHON_BYTES).hexdigest()
 _UV_LOCK_BYTES = b'version = 1\nrevision = 3\nrequires-python = ">=3.10"\n'
 _UV_LOCK_SHA256 = hashlib.sha256(_UV_LOCK_BYTES).hexdigest()
 _MANIFEST_DIGEST = "sha256:" + "c" * 64
+_NATIVE_BUILD_RECEIPT_BYTES = b'{"schema_version":"fractal-native-build-receipt-v1"}\n'
+_OPA_BUILD_RECEIPT_BYTES = b'{"schema_version":"fractal-opa-build-receipt-v2"}\n'
+_RUNTIME_LIBRARY_MANIFEST_BYTES = b'{"schema_version":"fractal-runtime-library-manifest-v1"}\n'
+_SQLITE_LIBRARY_BYTES = b"\x7fELFretained-sqlite-library\n"
+_ZLIB_LIBRARY_BYTES = b"\x7fELFretained-zlib-library\n"
+_HNSW_WHEEL_BASENAME = "hnswlib-0.8.0-cp312-cp312-linux_x86_64.whl"
+_HNSW_WHEEL_BYTES = b"retained-hnswlib-wheel\n"
 
 
 def test_c0_attestation_verifier_pins_public_github_host(
@@ -200,19 +212,56 @@ def _retained_package(root: Path, *, overrides: dict[str, object] | None = None)
     python.chmod(0o644)
     uv_lock = runtime / "uv.lock"
     uv_lock.write_bytes(_UV_LOCK_BYTES)
+    native_build_receipt = runtime / "native-build" / "native-build-receipt.json"
+    native_build_receipt.parent.mkdir()
+    native_build_receipt.write_bytes(_NATIVE_BUILD_RECEIPT_BYTES)
+    opa_build_receipt = runtime / "opa-build" / "opa-build-receipt.json"
+    opa_build_receipt.parent.mkdir()
+    opa_build_receipt.write_bytes(_OPA_BUILD_RECEIPT_BYTES)
+    runtime_library_manifest = runtime / "runtime-library-manifest.json"
+    runtime_library_manifest.write_bytes(_RUNTIME_LIBRARY_MANIFEST_BYTES)
+    sqlite_library = runtime / "libsqlite3.so.0"
+    sqlite_library.write_bytes(_SQLITE_LIBRARY_BYTES)
+    zlib_library = runtime / "libz.so.1"
+    zlib_library.write_bytes(_ZLIB_LIBRARY_BYTES)
+    hnswlib_wheel = runtime / "hnswlib" / _HNSW_WHEEL_BASENAME
+    hnswlib_wheel.parent.mkdir()
+    hnswlib_wheel.write_bytes(_HNSW_WHEEL_BYTES)
+    hnswlib_receipt = runtime / "hnswlib-runtime-receipt.json"
+    hnswlib_receipt.write_bytes(
+        _canonical_bytes(
+            {
+                "extension_basename": "hnswlib.cpython-312-x86_64-linux-gnu.so",
+                "extension_byte_count": 1,
+                "extension_sha256": "9" * 64,
+                "package": "hnswlib",
+                "python_abi": "cp312",
+                "schema_version": "fractal-hnswlib-runtime-artifact-v1",
+                "sdist_sha256": (
+                    "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
+                ),
+                "version": "0.8.0",
+                "wheel_basename": _HNSW_WHEEL_BASENAME,
+                "wheel_byte_count": len(_HNSW_WHEEL_BYTES),
+                "wheel_sha256": hashlib.sha256(_HNSW_WHEEL_BYTES).hexdigest(),
+            }
+        )
+    )
     receipt_payload: dict[str, object] = {
         "c0_sha": _COMMIT,
         "hnswlib_receipt_image_path": "/opt/artifacts/hnswlib-runtime-receipt.json",
-        "hnswlib_receipt_sha256": "d" * 64,
-        "hnswlib_wheel_basename": "hnswlib-0.8.0-cp312-cp312-linux_x86_64.whl",
-        "hnswlib_wheel_byte_count": 4096,
-        "hnswlib_wheel_image_path": (
-            "/opt/artifacts/hnswlib/hnswlib-0.8.0-cp312-cp312-linux_x86_64.whl"
-        ),
-        "hnswlib_wheel_sha256": "e" * 64,
+        "hnswlib_receipt_sha256": hashlib.sha256(hnswlib_receipt.read_bytes()).hexdigest(),
+        "hnswlib_wheel_basename": _HNSW_WHEEL_BASENAME,
+        "hnswlib_wheel_byte_count": len(_HNSW_WHEEL_BYTES),
+        "hnswlib_wheel_image_path": f"/opt/artifacts/hnswlib/{_HNSW_WHEEL_BASENAME}",
+        "hnswlib_wheel_sha256": hashlib.sha256(_HNSW_WHEEL_BYTES).hexdigest(),
         "image_digest": _IMAGE.rsplit("@", 1)[1],
         "image_manifest_digest": _MANIFEST_DIGEST,
         "image_reference": _IMAGE,
+        "native_build_receipt_image_path": NATIVE_BUILD_RECEIPT_IMAGE_PATH,
+        "native_build_receipt_sha256": hashlib.sha256(_NATIVE_BUILD_RECEIPT_BYTES).hexdigest(),
+        "opa_build_receipt_image_path": OPA_BUILD_RECEIPT_IMAGE_PATH,
+        "opa_build_receipt_sha256": hashlib.sha256(_OPA_BUILD_RECEIPT_BYTES).hexdigest(),
         "opa_byte_count": len(_OPA_BYTES),
         "opa_image_path": OPA_RUNTIME_BINARY_PATH,
         "opa_sha256": _OPA_SHA256,
@@ -220,11 +269,21 @@ def _retained_package(root: Path, *, overrides: dict[str, object] | None = None)
         "python_binary_byte_count": len(_PYTHON_BYTES),
         "python_binary_image_path": PYTHON_RUNTIME_BINARY_PATH,
         "python_binary_sha256": _PYTHON_SHA256,
-        "schema_version": "fractal-c0-runtime-extraction-v2",
+        "runtime_library_manifest_image_path": RUNTIME_LIBRARY_MANIFEST_IMAGE_PATH,
+        "runtime_library_manifest_sha256": hashlib.sha256(
+            _RUNTIME_LIBRARY_MANIFEST_BYTES
+        ).hexdigest(),
+        "schema_version": "fractal-c0-runtime-extraction-v3",
         "source_date_epoch": 1_750_000_000,
+        "sqlite_library_byte_count": len(_SQLITE_LIBRARY_BYTES),
+        "sqlite_library_image_path": SQLITE_RUNTIME_LIBRARY_IMAGE_PATH,
+        "sqlite_library_sha256": hashlib.sha256(_SQLITE_LIBRARY_BYTES).hexdigest(),
         "uv_lock_byte_count": len(_UV_LOCK_BYTES),
         "uv_lock_image_path": UV_LOCK_RUNTIME_PATH,
         "uv_lock_sha256": _UV_LOCK_SHA256,
+        "zlib_library_byte_count": len(_ZLIB_LIBRARY_BYTES),
+        "zlib_library_image_path": ZLIB_RUNTIME_LIBRARY_IMAGE_PATH,
+        "zlib_library_sha256": hashlib.sha256(_ZLIB_LIBRARY_BYTES).hexdigest(),
     }
     if overrides:
         receipt_payload.update(overrides)
@@ -237,6 +296,27 @@ def _retained_package(root: Path, *, overrides: dict[str, object] | None = None)
             receipt.read_bytes()
         ).hexdigest(),
         "runtime-artifacts/linux-amd64/uv.lock": hashlib.sha256(uv_lock.read_bytes()).hexdigest(),
+        "runtime-artifacts/linux-amd64/hnswlib-runtime-receipt.json": hashlib.sha256(
+            hnswlib_receipt.read_bytes()
+        ).hexdigest(),
+        f"runtime-artifacts/linux-amd64/hnswlib/{_HNSW_WHEEL_BASENAME}": hashlib.sha256(
+            hnswlib_wheel.read_bytes()
+        ).hexdigest(),
+        "runtime-artifacts/linux-amd64/native-build/native-build-receipt.json": (
+            hashlib.sha256(native_build_receipt.read_bytes()).hexdigest()
+        ),
+        "runtime-artifacts/linux-amd64/opa-build/opa-build-receipt.json": (
+            hashlib.sha256(opa_build_receipt.read_bytes()).hexdigest()
+        ),
+        "runtime-artifacts/linux-amd64/runtime-library-manifest.json": (
+            hashlib.sha256(runtime_library_manifest.read_bytes()).hexdigest()
+        ),
+        "runtime-artifacts/linux-amd64/libsqlite3.so.0": hashlib.sha256(
+            sqlite_library.read_bytes()
+        ).hexdigest(),
+        "runtime-artifacts/linux-amd64/libz.so.1": hashlib.sha256(
+            zlib_library.read_bytes()
+        ).hexdigest(),
     }
     (package / C0_ARTIFACT_CHECKSUMS_FILENAME).write_text(
         "".join(f"{digest}  {path}\n" for path, digest in sorted(checksums.items())),
@@ -397,12 +477,36 @@ def test_retained_materializer_verifies_receipt_attestations_and_five_plans(
     retained_opa = package / "runtime-artifacts/linux-amd64/opa"
     retained_python = package / "runtime-artifacts/linux-amd64/python"
     retained_uv_lock = package / "runtime-artifacts/linux-amd64/uv.lock"
+    retained_hnswlib_receipt = (
+        package / "runtime-artifacts/linux-amd64/hnswlib-runtime-receipt.json"
+    )
+    retained_hnswlib_wheel = (
+        package / "runtime-artifacts/linux-amd64/hnswlib" / _HNSW_WHEEL_BASENAME
+    )
+    retained_native_build_receipt = (
+        package / "runtime-artifacts/linux-amd64/native-build/native-build-receipt.json"
+    )
+    retained_opa_build_receipt = (
+        package / "runtime-artifacts/linux-amd64/opa-build/opa-build-receipt.json"
+    )
+    retained_runtime_library_manifest = (
+        package / "runtime-artifacts/linux-amd64/runtime-library-manifest.json"
+    )
+    retained_sqlite_library = package / "runtime-artifacts/linux-amd64/libsqlite3.so.0"
+    retained_zlib_library = package / "runtime-artifacts/linux-amd64/libz.so.1"
     bundle = package / C0_ARTIFACT_ATTESTATION_BUNDLE_FILENAME
     assert verifier.calls == [
         (receipt, bundle, _COMMIT),
         (retained_opa, bundle, _COMMIT),
         (retained_python, bundle, _COMMIT),
         (retained_uv_lock, bundle, _COMMIT),
+        (retained_hnswlib_receipt, bundle, _COMMIT),
+        (retained_hnswlib_wheel, bundle, _COMMIT),
+        (retained_native_build_receipt, bundle, _COMMIT),
+        (retained_opa_build_receipt, bundle, _COMMIT),
+        (retained_runtime_library_manifest, bundle, _COMMIT),
+        (retained_sqlite_library, bundle, _COMMIT),
+        (retained_zlib_library, bundle, _COMMIT),
     ]
     assert output.read_bytes() == _OPA_BYTES
     assert output.stat().st_mode & 0o777 == 0o555
@@ -427,8 +531,56 @@ def test_retained_materializer_verifies_receipt_attestations_and_five_plans(
         ),
         ({"uv_lock_sha256": "f" * 64}, "retained uv lock differs"),
         ({"uv_lock_byte_count": len(_UV_LOCK_BYTES) + 1}, "retained uv lock differs"),
+        ({"hnswlib_receipt_sha256": "f" * 64}, "retained hnswlib receipt differs"),
+        ({"hnswlib_wheel_sha256": "f" * 64}, "retained hnswlib wheel differs"),
+        (
+            {"hnswlib_wheel_byte_count": len(_HNSW_WHEEL_BYTES) + 1},
+            "retained hnswlib wheel differs",
+        ),
+        (
+            {"native_build_receipt_sha256": "f" * 64},
+            "retained native-build receipt differs",
+        ),
+        (
+            {"opa_build_receipt_sha256": "f" * 64},
+            "retained OPA-build receipt differs",
+        ),
+        (
+            {"runtime_library_manifest_sha256": "f" * 64},
+            "retained runtime-library manifest differs",
+        ),
+        ({"sqlite_library_sha256": "f" * 64}, "retained SQLite library differs"),
+        (
+            {"sqlite_library_byte_count": len(_SQLITE_LIBRARY_BYTES) + 1},
+            "retained SQLite library differs",
+        ),
+        ({"zlib_library_sha256": "f" * 64}, "retained zlib library differs"),
+        (
+            {"zlib_library_byte_count": len(_ZLIB_LIBRARY_BYTES) + 1},
+            "retained zlib library differs",
+        ),
         ({"python_binary_image_path": "/usr/bin/python"}, "another Python image path"),
         ({"uv_lock_image_path": "/workspace/uv.lock"}, "another uv lock image path"),
+        (
+            {"native_build_receipt_image_path": "/tmp/native.json"},
+            "another native-build receipt path",
+        ),
+        (
+            {"opa_build_receipt_image_path": "/tmp/opa.json"},
+            "another OPA-build receipt path",
+        ),
+        (
+            {"runtime_library_manifest_image_path": "/tmp/libraries.json"},
+            "another runtime-library manifest path",
+        ),
+        (
+            {"sqlite_library_image_path": "/tmp/libsqlite3.so.0"},
+            "another SQLite library path",
+        ),
+        (
+            {"zlib_library_image_path": "/tmp/libz.so.1"},
+            "another zlib library path",
+        ),
     ],
 )
 def test_retained_materializer_rejects_receipt_disagreement_before_attestation(
@@ -459,9 +611,22 @@ def test_retained_materializer_rejects_receipt_disagreement_before_attestation(
     [
         ("python", "retained Python bytes differ"),
         ("uv.lock", "retained uv lock differs"),
+        ("hnswlib-runtime-receipt.json", "retained hnswlib receipt differs"),
+        (f"hnswlib/{_HNSW_WHEEL_BASENAME}", "retained hnswlib wheel differs"),
+        (
+            "native-build/native-build-receipt.json",
+            "retained native-build receipt differs",
+        ),
+        ("opa-build/opa-build-receipt.json", "retained OPA-build receipt differs"),
+        (
+            "runtime-library-manifest.json",
+            "retained runtime-library manifest differs",
+        ),
+        ("libsqlite3.so.0", "retained SQLite library differs"),
+        ("libz.so.1", "retained zlib library differs"),
     ],
 )
-def test_retained_materializer_rejects_python_or_uv_file_substitution(
+def test_retained_materializer_rejects_bound_runtime_file_substitution(
     tmp_path: Path,
     retained_name: str,
     message: str,
@@ -510,6 +675,73 @@ def test_retained_materializer_rejects_checksum_or_receipt_schema_substitution(
     receipt_path = second / "runtime-artifacts/linux-amd64/runtime-extraction.json"
     with pytest.raises(OpaRuntimeBinaryError, match="schema mismatch"):
         load_c0_runtime_extraction_receipt(receipt_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            field,
+            value,
+            message,
+        )
+        for field, message in (
+            ("hnswlib_wheel_byte_count", "hnsw wheel byte count is invalid"),
+            ("sqlite_library_byte_count", "SQLite library byte count is invalid"),
+            ("zlib_library_byte_count", "zlib library byte count is invalid"),
+        )
+        for value in (True, 0, 512 * 1024 * 1024 + 1)
+    ],
+)
+def test_runtime_extraction_loader_rejects_invalid_retained_byte_count_boundaries(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    package = _retained_package(tmp_path, overrides={field: value})
+    receipt_path = package / "runtime-artifacts/linux-amd64/runtime-extraction.json"
+
+    with pytest.raises(OpaRuntimeBinaryError, match=message):
+        load_c0_runtime_extraction_receipt(receipt_path)
+
+
+def test_retained_materializer_rejects_receipt_change_after_typed_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fractal_ann_diagnostics import opa_runtime_binary as runtime_module
+
+    plan_root = (tmp_path / "runtime").resolve()
+    plan_root.mkdir()
+    paths = _write_plans(plan_root)
+    package = _retained_package(tmp_path)
+    receipt_path = package / "runtime-artifacts/linux-amd64/runtime-extraction.json"
+    verifier = _AttestationVerifier()
+    original_read = runtime_module.read_secure_regular_file
+    receipt_reads = 0
+
+    def changing_read(path: str | Path, **kwargs: object) -> bytes:
+        nonlocal receipt_reads
+        encoded = original_read(path, **kwargs)  # type: ignore[arg-type]
+        if Path(path) == receipt_path:
+            receipt_reads += 1
+            if receipt_reads == 2:
+                return encoded + b" "
+        return encoded
+
+    monkeypatch.setattr(runtime_module, "read_secure_regular_file", changing_read)
+    with pytest.raises(OpaRuntimeBinaryError, match="changed after typed admission"):
+        materialize_retained_opa_runtime_binary(
+            c0_package_root=package,
+            image=_IMAGE,
+            plan_paths=paths,
+            output_path=plan_root / "opa",
+            attestation_verifier=verifier,
+        )
+    assert receipt_reads == 2
+    assert verifier.calls == []
+    assert not (plan_root / "opa").exists()
 
 
 def test_retained_materializer_rejects_linked_source_and_existing_output(tmp_path: Path) -> None:

@@ -25,21 +25,53 @@ Each phase has the same four-job structure.
    execute job can run only on the ephemeral self-hosted runner carrying that label.
 3. The execute job checks the C1-pinned host Python, GitHub CLI, Docker client and resolved
    target, Actions runner listener, bootstrap receipt, and provider plan before the guarded
-   activation call. That call re-reads GitHub job evidence, binds the actual runner ID,
-   runner name, runner group, job identity, run ID, and run attempt to the C1 contract,
-   then performs the fixed phase operation once. The short-lived GitHub job token is
-   present only for this host-side API readback. The guard removes it before Docker starts;
-   it cannot enter container environment, command arguments, receipts, artifacts, or logs.
+   activation call. The first Python process uses `-I -S -P -s` and the workflow-fixed
+   `fractal-host-python-verified-launcher-v1` program. That program verifies the
+   permission-sensitive venv, import-root, and package identities before inserting the
+   sole C1-bound site-packages root and invoking the allowlisted module with `runpy`.
+   Its exact source SHA-256 is part of the pre-A host-tool contract; the workflow literal
+   must hash to that value. There is no preliminary import and no second Python start.
+   The activation call then
+   re-reads GitHub job evidence, binds the actual runner ID, runner name, runner group, job
+   identity, run ID, and run attempt to the C1 contract, then performs the fixed phase
+   operation once. The short-lived GitHub job token is present only for this host-side API
+   readback. The guard removes it before Docker starts; it cannot enter container
+   environment, command arguments, receipts, artifacts, or logs.
 4. A GitHub-hosted completion job downloads the subject file, attests that file by path,
    and publishes the terminal state only after it verifies the returned bundle and Rekor
    evidence. If any claimed phase does not complete, the failure job recovers the live
    claim by suite-attempt ID and uses the same prepare, attest, publish sequence.
 
 The self-hosted jobs do not check out source, install Python, run `uv sync`, or accept a
-tool path from the dispatcher. The online job is capped at 1,380 minutes so its job token
-cannot cross GitHub's 24-hour lifetime. Label release and analysis are capped at 360 and
-720 minutes. Hosted claim, completion, and failure jobs pin Python 3.14.6; C1 binds the
-official Ubuntu 24.04 x64 archive and installed verifier-environment digests.
+tool path from the dispatcher. They do not inherit the hosted jobs' `PYTHONPATH`, admit
+the working directory, process user-site files, or execute raw `python -m` and
+`python -` forms. All eleven self-hosted calls, including the two post-execution
+validators that formerly used stdin scripts, pass through the same launcher and
+allowlist. The import closure was constructed before C0 from package P, is read-only to
+the runner, and is fixed by C1. The rehearsal additionally proves that the package
+subtree did not change between P and workflow commit A.
+
+The authority boundary is narrower than a hostile-host proof. Construction seals and
+checks the complete venv; each phase rehashes that venv's bytes and modes, then checks
+root ownership and effective non-writability along the import-root ancestors and every
+site-packages entry. The official standalone Python distribution and its standard
+library sit outside that import root. C1 binds the registered archive and interpreter
+binary, but the privileged seal and later administration of that distribution remain
+in the honest-administrator trusted computing base. The apparatus does not claim
+protection from a root administrator who replaces the interpreter while forging its
+own observations.
+
+The online job is capped at 1,380 minutes so its job token cannot cross GitHub's 24-hour
+lifetime. Label release and analysis are capped at 360 and 720 minutes. Hosted claim,
+completion, and failure jobs pin Python 3.14.6; C1 binds the official Ubuntu 24.04 x64
+archive and installed verifier-environment digests.
+
+After the guarded import, production activation rehashes the full C1 host-tool closure
+before it reads a beacon, opens phase input, or starts Docker. It writes a canonical
+host-tool receipt once and carries both the semantic receipt digest and the retained-file
+digest through the runtime request and phase execution receipt. The evidence package
+therefore records the host closure observed during the sealed phase, rather than only the
+pre-C0 construction claim.
 
 ## Runtime image roles
 

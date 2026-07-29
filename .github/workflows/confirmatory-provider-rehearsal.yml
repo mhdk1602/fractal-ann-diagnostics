@@ -24,7 +24,82 @@ concurrency:
 
 env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
-  PYTHONPATH: src
+  PYTHONDONTWRITEBYTECODE: "1"
+  HOST_PYTHON_VERIFIED_LAUNCHER: |
+    import hashlib,json,os,runpy,stat,sys
+    from pathlib import Path
+    MARKER="fractal-host-python-verified-launcher-v1"
+    TREE_DERIVATION="sha256-fractal-host-tool-tree-v1"
+    CONTENT_DERIVATION="sha256-fractal-python-package-content-v1"
+    ALLOWED=frozenset({"fractal_ann_diagnostics.execution_claim","fractal_ann_diagnostics.provider_rehearsal","fractal_ann_diagnostics.provider_workflow_validation"})
+    def fail(message): raise SystemExit("verified host-Python launcher: "+message)
+    def canonical(value): return json.dumps(value,allow_nan=False,ensure_ascii=True,separators=(",",":"),sort_keys=True).encode("ascii")
+    def digest_file(path):
+        value=hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk:=handle.read(1024*1024): value.update(chunk)
+        return value.hexdigest()
+    def expected_digest(name):
+        value=os.environ.get(name,"")
+        if len(value)!=64 or any(character not in "0123456789abcdef" for character in value): fail(name+" is not one SHA-256 digest")
+        return value
+    def exact_root(name):
+        value=os.environ.get(name,"")
+        if not value or os.pathsep in value: fail(name+" is absent or contains multiple roots")
+        path=Path(value)
+        try: metadata=path.lstat(); resolved=path.resolve(strict=True)
+        except OSError: fail(name+" is unavailable")
+        if not path.is_absolute() or resolved!=path or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode): fail(name+" is not one canonical real directory")
+        return path
+    def tree(root,controlled):
+        metadata=root.lstat()
+        entries=[{"kind":"directory","mode":f"{stat.S_IMODE(metadata.st_mode):04o}","path":"."}]
+        symlinks=[]
+        for directory,directory_names,file_names in os.walk(root,followlinks=False):
+            directory_names.sort(key=lambda value:value.encode("utf-8")); file_names.sort(key=lambda value:value.encode("utf-8")); current=Path(directory)
+            for name in (*directory_names,*file_names):
+                candidate=current/name; relative=candidate.relative_to(root).as_posix(); metadata=candidate.lstat(); mode=metadata.st_mode
+                if stat.S_ISLNK(mode):
+                    raw_target=os.readlink(candidate); resolved=candidate.resolve(strict=True)
+                    try: resolved.relative_to(controlled)
+                    except ValueError: fail("symlink escapes controlled root: "+relative)
+                    row={"path":relative,"resolved_path":str(resolved),"target":raw_target}; symlinks.append(row); entries.append({"kind":"symlink","mode":f"{stat.S_IMODE(mode):04o}",**row})
+                elif stat.S_ISDIR(mode): entries.append({"kind":"directory","mode":f"{stat.S_IMODE(mode):04o}","path":relative})
+                elif stat.S_ISREG(mode):
+                    if metadata.st_nlink!=1 or "__pycache__" in candidate.parts or candidate.suffix in {".pyc",".pyo"}: fail("unclosed regular file: "+relative)
+                    entries.append({"byte_count":metadata.st_size,"file_sha256":digest_file(candidate),"kind":"file","mode":f"{stat.S_IMODE(mode):04o}","path":relative})
+                else: fail("special file in import closure: "+relative)
+        entries.sort(key=lambda row:str(row["path"]).encode("utf-8")); symlinks.sort(key=lambda row:row["path"].encode("utf-8"))
+        return hashlib.sha256(canonical({"derivation":TREE_DERIVATION,"entries":entries})).hexdigest(),hashlib.sha256(canonical({"symlinks":symlinks})).hexdigest()
+    def content(root):
+        entries=[{"kind":"directory","path":"."}]
+        for directory,directory_names,file_names in os.walk(root,followlinks=False):
+            directory_names.sort(key=lambda value:value.encode("utf-8")); file_names.sort(key=lambda value:value.encode("utf-8")); current=Path(directory)
+            for name in (*directory_names,*file_names):
+                candidate=current/name; relative=candidate.relative_to(root).as_posix(); metadata=candidate.lstat()
+                if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode): entries.append({"kind":"directory","path":relative})
+                elif stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                    if metadata.st_nlink!=1 or "__pycache__" in candidate.parts or candidate.suffix in {".pyc",".pyo"}: fail("unclosed package file: "+relative)
+                    entries.append({"byte_count":metadata.st_size,"file_sha256":digest_file(candidate),"kind":"file","path":relative})
+                else: fail("special package entry: "+relative)
+        entries.sort(key=lambda row:str(row["path"]).encode("utf-8"))
+        return hashlib.sha256(canonical({"derivation":CONTENT_DERIVATION,"entries":entries})).hexdigest()
+    if hashlib.sha256(os.environ.get("HOST_PYTHON_VERIFIED_LAUNCHER","").encode("utf-8")).hexdigest()!=expected_digest("HOST_PYTHON_VERIFIED_LAUNCHER_SHA256"): fail("launcher source differs from C1")
+    if len(sys.argv)<3 or sys.argv[1]!=MARKER or sys.argv[2] not in ALLOWED: fail("marker or module differs")
+    controlled=exact_root("HOST_CONTROLLED_ROOT"); venv=exact_root("HOST_PYTHON_VENV_ROOT"); import_root=exact_root("HOST_PYTHON_IMPORT_ROOT")
+    try: venv.relative_to(controlled); relative_import=import_root.relative_to(venv)
+    except ValueError: fail("venv or import root escapes controlled root")
+    if relative_import.parts!=("lib","python3.12","site-packages"): fail("import root differs from the fixed site-packages root")
+    venv_tree,venv_symlinks=tree(venv,controlled); import_tree,import_symlinks=tree(import_root,controlled); package_root=import_root/"fractal_ann_diagnostics"; package_tree,package_symlinks=tree(package_root,controlled); empty_symlinks=hashlib.sha256(canonical({"symlinks":[]})).hexdigest()
+    if venv_tree!=expected_digest("HOST_PYTHON_VENV_TREE_SHA256") or venv_symlinks!=expected_digest("HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256") or import_tree!=expected_digest("HOST_PYTHON_IMPORT_TREE_SHA256") or package_tree!=expected_digest("HOST_PYTHON_PACKAGE_TREE_SHA256") or content(package_root)!=expected_digest("HOST_PYTHON_PACKAGE_CONTENT_SHA256") or import_symlinks!=empty_symlinks or package_symlinks!=empty_symlinks: fail("Python closure differs from C1")
+    for ancestor in (controlled,venv,venv/"lib",venv/"lib"/"python3.12",import_root):
+        metadata=ancestor.lstat()
+        if metadata.st_uid!=0 or stat.S_IMODE(metadata.st_mode)&0o222 or os.access(ancestor,os.W_OK): fail("import ancestor is not root-owned and effectively read-only")
+    for directory,directory_names,file_names in os.walk(import_root,followlinks=False):
+        for name in (*directory_names,*file_names):
+            candidate=Path(directory)/name; metadata=candidate.lstat()
+            if metadata.st_uid!=0 or stat.S_IMODE(metadata.st_mode)&0o222 or os.access(candidate,os.W_OK): fail("import closure is not root-owned and effectively read-only")
+    module=sys.argv[2]; arguments=sys.argv[3:]; stdlib_paths=tuple(value for value in sys.path if value and Path(value).is_absolute()); sys.dont_write_bytecode=True; sys.path[:]=[str(import_root),*stdlib_paths]; sys.argv=[module,*arguments]; runpy.run_module(module,run_name="__main__",alter_sys=False)
 
 jobs:
   plan:
@@ -35,18 +110,47 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      PYTHONPATH: src
     outputs:
       candidate_branch: ${{ steps.plan.outputs.candidate_branch }}
       plan_closure_sha256: ${{ steps.plan.outputs.plan_closure_sha256 }}
       online_admission_json: ${{ steps.plan.outputs.online_admission_json }}
       online_runner_label: ${{ steps.plan.outputs.online_runner_label }}
+      online_host_controlled_root: ${{ steps.plan.outputs.online_host_controlled_root }}
       online_host_python_path: ${{ steps.plan.outputs.online_host_python_path }}
+      online_host_python_venv_root: ${{ steps.plan.outputs.online_host_python_venv_root }}
+      online_host_python_venv_tree_sha256: ${{ steps.plan.outputs.online_host_python_venv_tree_sha256 }}
+      online_host_python_venv_symlink_inventory_sha256: ${{ steps.plan.outputs.online_host_python_venv_symlink_inventory_sha256 }}
+      online_host_python_import_root: ${{ steps.plan.outputs.online_host_python_import_root }}
+      online_host_python_import_tree_sha256: ${{ steps.plan.outputs.online_host_python_import_tree_sha256 }}
+      online_host_python_launcher_sha256: ${{ steps.plan.outputs.online_host_python_launcher_sha256 }}
+      online_host_python_package_content_sha256: ${{ steps.plan.outputs.online_host_python_package_content_sha256 }}
+      online_host_python_package_tree_sha256: ${{ steps.plan.outputs.online_host_python_package_tree_sha256 }}
       label_release_admission_json: ${{ steps.plan.outputs.label_release_admission_json }}
       label_release_runner_label: ${{ steps.plan.outputs.label_release_runner_label }}
+      label_release_host_controlled_root: ${{ steps.plan.outputs.label_release_host_controlled_root }}
       label_release_host_python_path: ${{ steps.plan.outputs.label_release_host_python_path }}
+      label_release_host_python_venv_root: ${{ steps.plan.outputs.label_release_host_python_venv_root }}
+      label_release_host_python_venv_tree_sha256: ${{ steps.plan.outputs.label_release_host_python_venv_tree_sha256 }}
+      label_release_host_python_venv_symlink_inventory_sha256: ${{ steps.plan.outputs.label_release_host_python_venv_symlink_inventory_sha256 }}
+      label_release_host_python_import_root: ${{ steps.plan.outputs.label_release_host_python_import_root }}
+      label_release_host_python_import_tree_sha256: ${{ steps.plan.outputs.label_release_host_python_import_tree_sha256 }}
+      label_release_host_python_launcher_sha256: ${{ steps.plan.outputs.label_release_host_python_launcher_sha256 }}
+      label_release_host_python_package_content_sha256: ${{ steps.plan.outputs.label_release_host_python_package_content_sha256 }}
+      label_release_host_python_package_tree_sha256: ${{ steps.plan.outputs.label_release_host_python_package_tree_sha256 }}
       analysis_admission_json: ${{ steps.plan.outputs.analysis_admission_json }}
       analysis_runner_label: ${{ steps.plan.outputs.analysis_runner_label }}
+      analysis_host_controlled_root: ${{ steps.plan.outputs.analysis_host_controlled_root }}
       analysis_host_python_path: ${{ steps.plan.outputs.analysis_host_python_path }}
+      analysis_host_python_venv_root: ${{ steps.plan.outputs.analysis_host_python_venv_root }}
+      analysis_host_python_venv_tree_sha256: ${{ steps.plan.outputs.analysis_host_python_venv_tree_sha256 }}
+      analysis_host_python_venv_symlink_inventory_sha256: ${{ steps.plan.outputs.analysis_host_python_venv_symlink_inventory_sha256 }}
+      analysis_host_python_import_root: ${{ steps.plan.outputs.analysis_host_python_import_root }}
+      analysis_host_python_import_tree_sha256: ${{ steps.plan.outputs.analysis_host_python_import_tree_sha256 }}
+      analysis_host_python_launcher_sha256: ${{ steps.plan.outputs.analysis_host_python_launcher_sha256 }}
+      analysis_host_python_package_content_sha256: ${{ steps.plan.outputs.analysis_host_python_package_content_sha256 }}
+      analysis_host_python_package_tree_sha256: ${{ steps.plan.outputs.analysis_host_python_package_tree_sha256 }}
 
     steps:
       - name: Admit one candidate branch and first attempt
@@ -172,6 +276,7 @@ jobs:
           --c0-commit "$GITHUB_SHA"
           --candidate-closure "${RUNNER_TEMP}/candidate-image-source/candidate-closure.json"
           --workflow-sha "$GITHUB_WORKFLOW_SHA"
+          --workflow-source-root "$GITHUB_WORKSPACE"
           --run-id "$GITHUB_RUN_ID"
           --run-attempt "$GITHUB_RUN_ATTEMPT"
           --output-dir "${RUNNER_TEMP}/provider-rehearsal-plan"
@@ -348,6 +453,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       actions: read
+    env:
+      HOST_CONTROLLED_ROOT: ${{ needs.plan.outputs.online_host_controlled_root }}
+      HOST_PYTHON_VENV_ROOT: ${{ needs.plan.outputs.online_host_python_venv_root }}
+      HOST_PYTHON_VENV_TREE_SHA256: ${{ needs.plan.outputs.online_host_python_venv_tree_sha256 }}
+      HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256: ${{ needs.plan.outputs.online_host_python_venv_symlink_inventory_sha256 }}
+      HOST_PYTHON_IMPORT_ROOT: ${{ needs.plan.outputs.online_host_python_import_root }}
+      HOST_PYTHON_IMPORT_TREE_SHA256: ${{ needs.plan.outputs.online_host_python_import_tree_sha256 }}
+      HOST_PYTHON_VERIFIED_LAUNCHER_SHA256: ${{ needs.plan.outputs.online_host_python_launcher_sha256 }}
+      HOST_PYTHON_PACKAGE_CONTENT_SHA256: ${{ needs.plan.outputs.online_host_python_package_content_sha256 }}
+      HOST_PYTHON_PACKAGE_TREE_SHA256: ${{ needs.plan.outputs.online_host_python_package_tree_sha256 }}
 
     steps:
       - name: Admit the exact candidate runner invocation
@@ -371,7 +486,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOST_PYTHON: ${{ needs.plan.outputs.online_host_python_path }}
         run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER"
+          fractal-host-python-verified-launcher-v1
+          fractal_ann_diagnostics.provider_rehearsal
           execute
           --admission-json "$ADMISSION_JSON"
           --run-head-branch "$CANDIDATE_BRANCH"
@@ -435,6 +552,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       actions: read
+    env:
+      HOST_CONTROLLED_ROOT: ${{ needs.plan.outputs.label_release_host_controlled_root }}
+      HOST_PYTHON_VENV_ROOT: ${{ needs.plan.outputs.label_release_host_python_venv_root }}
+      HOST_PYTHON_VENV_TREE_SHA256: ${{ needs.plan.outputs.label_release_host_python_venv_tree_sha256 }}
+      HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256: ${{ needs.plan.outputs.label_release_host_python_venv_symlink_inventory_sha256 }}
+      HOST_PYTHON_IMPORT_ROOT: ${{ needs.plan.outputs.label_release_host_python_import_root }}
+      HOST_PYTHON_IMPORT_TREE_SHA256: ${{ needs.plan.outputs.label_release_host_python_import_tree_sha256 }}
+      HOST_PYTHON_VERIFIED_LAUNCHER_SHA256: ${{ needs.plan.outputs.label_release_host_python_launcher_sha256 }}
+      HOST_PYTHON_PACKAGE_CONTENT_SHA256: ${{ needs.plan.outputs.label_release_host_python_package_content_sha256 }}
+      HOST_PYTHON_PACKAGE_TREE_SHA256: ${{ needs.plan.outputs.label_release_host_python_package_tree_sha256 }}
 
     steps:
       - name: Admit the exact candidate runner invocation
@@ -458,7 +585,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOST_PYTHON: ${{ needs.plan.outputs.label_release_host_python_path }}
         run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER"
+          fractal-host-python-verified-launcher-v1
+          fractal_ann_diagnostics.provider_rehearsal
           execute
           --admission-json "$ADMISSION_JSON"
           --run-head-branch "$CANDIDATE_BRANCH"
@@ -522,6 +651,16 @@ jobs:
     timeout-minutes: 45
     permissions:
       actions: read
+    env:
+      HOST_CONTROLLED_ROOT: ${{ needs.plan.outputs.analysis_host_controlled_root }}
+      HOST_PYTHON_VENV_ROOT: ${{ needs.plan.outputs.analysis_host_python_venv_root }}
+      HOST_PYTHON_VENV_TREE_SHA256: ${{ needs.plan.outputs.analysis_host_python_venv_tree_sha256 }}
+      HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256: ${{ needs.plan.outputs.analysis_host_python_venv_symlink_inventory_sha256 }}
+      HOST_PYTHON_IMPORT_ROOT: ${{ needs.plan.outputs.analysis_host_python_import_root }}
+      HOST_PYTHON_IMPORT_TREE_SHA256: ${{ needs.plan.outputs.analysis_host_python_import_tree_sha256 }}
+      HOST_PYTHON_VERIFIED_LAUNCHER_SHA256: ${{ needs.plan.outputs.analysis_host_python_launcher_sha256 }}
+      HOST_PYTHON_PACKAGE_CONTENT_SHA256: ${{ needs.plan.outputs.analysis_host_python_package_content_sha256 }}
+      HOST_PYTHON_PACKAGE_TREE_SHA256: ${{ needs.plan.outputs.analysis_host_python_package_tree_sha256 }}
 
     steps:
       - name: Admit the exact candidate runner invocation
@@ -545,7 +684,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HOST_PYTHON: ${{ needs.plan.outputs.analysis_host_python_path }}
         run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.provider_rehearsal
+          "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER"
+          fractal-host-python-verified-launcher-v1
+          fractal_ann_diagnostics.provider_rehearsal
           execute
           --admission-json "$ADMISSION_JSON"
           --run-head-branch "$CANDIDATE_BRANCH"

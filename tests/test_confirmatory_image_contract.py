@@ -8,7 +8,14 @@ import re
 import subprocess
 import sys
 import textwrap
+from dataclasses import fields
 from pathlib import Path
+
+from fractal_ann_diagnostics.opa_runtime_binary import (
+    _C0_RUNTIME_EXTRACTION_FIELDS,
+    C0_RUNTIME_EXTRACTION_SCHEMA,
+    C0RuntimeExtractionReceipt,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "Dockerfile.confirmatory"
@@ -724,7 +731,19 @@ def test_candidate_rehearsal_and_production_use_one_shared_execution_core() -> N
     assert "provider-rehearsal-complete-${REHEARSAL_RUN_ID}" in workflow
     assert '.path == ".github/workflows/confirmatory-provider-rehearsal.yml"' in workflow
     assert "provider rehearsal receipt is not canonical JSON" in workflow
-    assert "fractal-provider-rehearsal-aggregate-v1" in workflow
+    assert "fractal-provider-rehearsal-aggregate-v2" in workflow
+    assert "candidate_python_package_source_tree" in workflow
+    assert "workflow_python_package_source_tree" in workflow
+    assert "host_python_launcher_sha256" in workflow
+    assert "workflow_python_launcher_sha256" in workflow
+    assert (
+        'receipt["candidate_python_package_source_tree"]\n'
+        '              != receipt["workflow_python_package_source_tree"]'
+    ) in workflow
+    assert (
+        'receipt["host_python_launcher_sha256"]\n'
+        '              != receipt["workflow_python_launcher_sha256"]'
+    ) in workflow
     assert "fractal-c0-provider-rehearsal-gate-v2" in workflow
     assert "candidate_bootstrap_closure_sha256" in workflow
     assert "candidate_image_source_commit" in workflow
@@ -995,6 +1014,32 @@ def test_retained_runtime_receipt_binds_c0_image_platform_and_bytes() -> None:
     assert 'receipt["extension_sha256"] == hashlib.sha256(extension_bytes).hexdigest()' in workflow
     assert 'receipt["wheel_sha256"] == hashlib.sha256(wheel_bytes).hexdigest()' in workflow
     assert "zipfile.ZipFile(wheel_path)" in workflow
+
+
+def test_workflow_runtime_receipt_v3_matches_the_closed_python_consumer() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    schema_literal = 'schema_version: "fractal-c0-runtime-extraction-v3"'
+    schema_offset = workflow.index(schema_literal)
+    object_start = workflow.rfind("'{c0_sha: $c0_sha,", 0, schema_offset)
+    object_end = workflow.index(
+        '> "$runtime_dir/runtime-extraction.json"',
+        schema_offset,
+    )
+    assert object_start >= 0
+    producer = workflow[object_start:object_end]
+    producer_pairs = re.findall(
+        r'(?:\{|,)\s*([a-z][a-z0-9_]*):\s*(\$[a-z][a-z0-9_]*|"[^"]+")',
+        producer,
+    )
+    producer_fields = [key for key, _value in producer_pairs]
+    consumer_fields = {field.name for field in fields(C0RuntimeExtractionReceipt)}
+
+    assert C0_RUNTIME_EXTRACTION_SCHEMA == "fractal-c0-runtime-extraction-v3"
+    assert len(producer_fields) == len(set(producer_fields))
+    assert set(producer_fields) == _C0_RUNTIME_EXTRACTION_FIELDS == consumer_fields
+    for key, value in producer_pairs:
+        expected = f'"{C0_RUNTIME_EXTRACTION_SCHEMA}"' if key == "schema_version" else f"${key}"
+        assert value == expected
 
 
 def test_builder_toolchain_and_transitive_images_are_fixed() -> None:

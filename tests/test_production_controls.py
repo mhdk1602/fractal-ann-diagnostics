@@ -675,6 +675,39 @@ def test_write_config_derives_pins_and_publishes_private_canonical_readback(
     assert load_production_control_config_write_receipt(receipt_output) == receipt
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (field, f"{delimiter}unresolved")
+        for field in (
+            "hardware_provider",
+            "hardware_instance_type",
+            "hardware_cpu_model",
+            "hardware_accelerator",
+            "hardware_region",
+            "hardware_operating_system",
+        )
+        for delimiter in ("<", ">")
+    ],
+)
+def test_write_config_rejects_unresolved_hardware_placeholder_delimiters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    arguments, _, _, _ = _config_writer_arguments(tmp_path, monkeypatch)
+    arguments[field] = value
+
+    with pytest.raises(
+        ProductionControlError,
+        match=rf"{field} must not contain unresolved placeholder delimiters",
+    ):
+        write_production_control_materialization_config(**arguments)  # type: ignore[arg-type]
+    assert not Path(arguments["output"]).exists()  # type: ignore[arg-type]
+    assert not Path(arguments["receipt_output"]).exists()  # type: ignore[arg-type]
+
+
 def test_write_config_cli_wires_closed_arguments_and_reports_checksums(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

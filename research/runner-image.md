@@ -412,21 +412,31 @@ workflow-run.txt
 source/fractal-ann-diagnostics-C0.tar
 source/build-context-git-tree.z
 source/build-context-verifier.py
-runtime-artifacts/linux-amd64/{opa,python,uv.lock,runtime-extraction.json,hnswlib-runtime-receipt.json}
-runtime-artifacts/linux-amd64/hnswlib/hnswlib-0.8.0-*.whl
-runtime-artifacts/linux-arm64/{opa,python,uv.lock,runtime-extraction.json,hnswlib-runtime-receipt.json}
-runtime-artifacts/linux-arm64/hnswlib/hnswlib-0.8.0-*.whl
+runtime-artifacts/<linux-amd64|linux-arm64>/runtime-extraction.json
+runtime-artifacts/<linux-amd64|linux-arm64>/opa
+runtime-artifacts/<linux-amd64|linux-arm64>/python
+runtime-artifacts/<linux-amd64|linux-arm64>/uv.lock
+runtime-artifacts/<linux-amd64|linux-arm64>/hnswlib-runtime-receipt.json
+runtime-artifacts/<linux-amd64|linux-arm64>/hnswlib/<receipt.hnswlib_wheel_basename>
+runtime-artifacts/<linux-amd64|linux-arm64>/native-build/native-build-receipt.json
+runtime-artifacts/<linux-amd64|linux-arm64>/opa-build/opa-build-receipt.json
+runtime-artifacts/<linux-amd64|linux-arm64>/runtime-library-manifest.json
+runtime-artifacts/<linux-amd64|linux-arm64>/libsqlite3.so.0
+runtime-artifacts/<linux-amd64|linux-arm64>/libz.so.1
 ```
 
 The source tar is made by `git archive` from C0 and is rejected if it contains `.git` or
-`non-git-files`. Each platform's OPA executable, Python executable, exact `uv.lock`, hnsw wheel, and
-hnsw build receipt is copied from the stopped platform image addressed by its manifest digest. The
-workflow also compares the extracted lock byte-for-byte with C0's checked-out `uv.lock`.
-`runtime-extraction.json` binds these files to C0, the source epoch, OCI index digest, platform
-manifest digest, platform, in-image paths, byte counts, and SHA-256 values. The workflow verifies
-the inner hnsw receipt before writing that outer extraction receipt.
-The closed schema is `fractal-c0-runtime-extraction-v2`. Version 1 is rejected because it did not
-bind the Python executable or runtime lock and cannot supply their plan digests.
+`non-git-files`. For each platform, the eleven paths above are the closed set consumed by the C1
+materializer. Ten are copied from the stopped platform image addressed by its manifest digest; the
+workflow writes `runtime-extraction.json` after checking the inner hnsw receipt, the OPA-build and
+native-build receipts, and the runtime-library manifest against their corresponding bytes. It also
+compares the extracted lock byte-for-byte with C0's checked-out `uv.lock`.
+
+The closed outer schema is `fractal-c0-runtime-extraction-v3`. It binds the ten extracted subjects
+by exact in-image path and SHA-256, binds the hnsw wheel basename, and records byte counts for OPA,
+Python, `uv.lock`, the hnsw wheel, SQLite, and zlib. It also binds C0, the source epoch, OCI index
+digest, platform manifest digest, and platform. The C1 loader requires the exact v3 field set and
+canonical JSON; earlier schemas do not describe this eleven-file materialization closure.
 
 `C0-ARTIFACT-SHA256SUMS` covers every file present at extraction time. A second OIDC attestation
 signs every subject in that list. Before package sealing, the workflow rehashes and verifies each
@@ -451,12 +461,13 @@ python -m fractal_ann_diagnostics.opa_runtime_binary materialize-retained \
 ```
 
 The command selects the platform declared by all five plans. It requires regular, singly linked
-package inputs; verifies the package checksum rows, closed extraction-receipt schema, C0 commit,
-OCI index, platform manifest, and the size and digest of OPA, Python, and `uv.lock`; and calls
-`gh attestation verify` for the receipt and all three subjects. It creates the OPA destination once
-at mode `0555`, then repeats the five-plan binding check against the new file. An existing
-destination, mixed platforms, modified package bytes, or a self-hosted provenance statement causes
-failure before C1 can be frozen.
+package inputs and validates the canonical v3 receipt, C0 commit, OCI index, platform manifest,
+fixed in-image paths, digests, and the six supplied byte counts. It requires matching package
+checksum rows and calls `gh attestation verify` separately for all eleven files in the selected
+closure. It rereads those files after attestation review, creates the OPA destination once at mode
+`0555`, and repeats the five-plan binding check against the new file. An existing destination,
+mixed platforms, modified package bytes, or a self-hosted provenance statement causes failure
+before C1 can be frozen.
 
 These records identify the GitHub-hosted workflow that published and extracted the named bytes.
 They do not establish independent human custody. The Actions artifact is a 90-day transport copy,

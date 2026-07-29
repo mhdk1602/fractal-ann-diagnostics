@@ -33,9 +33,15 @@ from .study import FIXED_CORPORA
 OPA_RUNTIME_BINARY_PATH = "/usr/local/bin/opa"
 PYTHON_RUNTIME_BINARY_PATH = "/opt/venv/bin/python"
 UV_LOCK_RUNTIME_PATH = "/opt/app/uv.lock"
+HNSWLIB_RUNTIME_RECEIPT_IMAGE_PATH = "/opt/artifacts/hnswlib-runtime-receipt.json"
+NATIVE_BUILD_RECEIPT_IMAGE_PATH = "/opt/artifacts/native-build/native-build-receipt.json"
+OPA_BUILD_RECEIPT_IMAGE_PATH = "/opt/artifacts/opa-build/opa-build-receipt.json"
+RUNTIME_LIBRARY_MANIFEST_IMAGE_PATH = "/opt/artifacts/runtime-library-manifest.json"
+SQLITE_RUNTIME_LIBRARY_IMAGE_PATH = "/opt/native-libs/libsqlite3.so.0"
+ZLIB_RUNTIME_LIBRARY_IMAGE_PATH = "/opt/native-libs/libz.so.1"
 OPA_RUNTIME_MOUNT_ROLE = "opa-runtime-binary"
 OPA_RUNTIME_MATERIALIZATION_SCHEMA = "fractal-opa-runtime-materialization-v1"
-C0_RUNTIME_EXTRACTION_SCHEMA = "fractal-c0-runtime-extraction-v2"
+C0_RUNTIME_EXTRACTION_SCHEMA = "fractal-c0-runtime-extraction-v3"
 C0_ARTIFACT_CHECKSUMS_FILENAME = "C0-ARTIFACT-SHA256SUMS"
 C0_ARTIFACT_ATTESTATION_BUNDLE_FILENAME = "c0-artifact-attestation-bundle.json"
 RUNTIME_PLAN_TEMPLATE_FILENAME = "runtime-attestation-plan.template.json"
@@ -49,6 +55,9 @@ _CONTAINER_ID = re.compile(r"^[0-9a-f]{12,64}$")
 _MAX_OPA_BYTES = 256 * 1024 * 1024
 _MAX_PYTHON_BYTES = 256 * 1024 * 1024
 _MAX_UV_LOCK_BYTES = 16 * 1024 * 1024
+_MAX_HNSW_WHEEL_BYTES = 512 * 1024 * 1024
+_MAX_NATIVE_LIBRARY_BYTES = 512 * 1024 * 1024
+_MAX_RUNTIME_METADATA_BYTES = 4 * 1024 * 1024
 _MAX_RECEIPT_BYTES = 64 * 1024
 _MAX_CHECKSUM_BYTES = 4 * 1024 * 1024
 _MAX_ATTESTATION_BUNDLE_BYTES = 32 * 1024 * 1024
@@ -77,6 +86,10 @@ _C0_RUNTIME_EXTRACTION_FIELDS = frozenset(
         "image_digest",
         "image_manifest_digest",
         "image_reference",
+        "native_build_receipt_image_path",
+        "native_build_receipt_sha256",
+        "opa_build_receipt_image_path",
+        "opa_build_receipt_sha256",
         "opa_byte_count",
         "opa_image_path",
         "opa_sha256",
@@ -84,11 +97,19 @@ _C0_RUNTIME_EXTRACTION_FIELDS = frozenset(
         "python_binary_byte_count",
         "python_binary_image_path",
         "python_binary_sha256",
+        "runtime_library_manifest_image_path",
+        "runtime_library_manifest_sha256",
         "schema_version",
         "source_date_epoch",
+        "sqlite_library_byte_count",
+        "sqlite_library_image_path",
+        "sqlite_library_sha256",
         "uv_lock_byte_count",
         "uv_lock_image_path",
         "uv_lock_sha256",
+        "zlib_library_byte_count",
+        "zlib_library_image_path",
+        "zlib_library_sha256",
     }
 )
 
@@ -125,6 +146,10 @@ class C0RuntimeExtractionReceipt:
     image_digest: str
     image_manifest_digest: str
     image_reference: str
+    native_build_receipt_image_path: str
+    native_build_receipt_sha256: str
+    opa_build_receipt_image_path: str
+    opa_build_receipt_sha256: str
     opa_byte_count: int
     opa_image_path: str
     opa_sha256: str
@@ -132,10 +157,18 @@ class C0RuntimeExtractionReceipt:
     python_binary_byte_count: int
     python_binary_image_path: str
     python_binary_sha256: str
+    runtime_library_manifest_image_path: str
+    runtime_library_manifest_sha256: str
     source_date_epoch: int
+    sqlite_library_byte_count: int
+    sqlite_library_image_path: str
+    sqlite_library_sha256: str
     uv_lock_byte_count: int
     uv_lock_image_path: str
     uv_lock_sha256: str
+    zlib_library_byte_count: int
+    zlib_library_image_path: str
+    zlib_library_sha256: str
     schema_version: str = C0_RUNTIME_EXTRACTION_SCHEMA
 
     def __post_init__(self) -> None:
@@ -161,6 +194,28 @@ class C0RuntimeExtractionReceipt:
             )
         if self.platform not in set(_PLATFORMS.values()):
             raise OpaRuntimeBinaryError("C0 extraction receipt platform is not admitted")
+        if self.native_build_receipt_image_path != NATIVE_BUILD_RECEIPT_IMAGE_PATH:
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt names another native-build receipt path"
+            )
+        if (
+            not isinstance(self.native_build_receipt_sha256, str)
+            or _SHA256.fullmatch(self.native_build_receipt_sha256) is None
+        ):
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt has an invalid native-build receipt digest"
+            )
+        if self.opa_build_receipt_image_path != OPA_BUILD_RECEIPT_IMAGE_PATH:
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt names another OPA-build receipt path"
+            )
+        if (
+            not isinstance(self.opa_build_receipt_sha256, str)
+            or _SHA256.fullmatch(self.opa_build_receipt_sha256) is None
+        ):
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt has an invalid OPA-build receipt digest"
+            )
         if self.opa_image_path != OPA_RUNTIME_BINARY_PATH:
             raise OpaRuntimeBinaryError("C0 extraction receipt names another OPA image path")
         if not isinstance(self.opa_sha256, str) or _SHA256.fullmatch(self.opa_sha256) is None:
@@ -184,6 +239,24 @@ class C0RuntimeExtractionReceipt:
             or self.python_binary_byte_count > _MAX_PYTHON_BYTES
         ):
             raise OpaRuntimeBinaryError("C0 extraction receipt Python byte count is invalid")
+        if self.runtime_library_manifest_image_path != RUNTIME_LIBRARY_MANIFEST_IMAGE_PATH:
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt names another runtime-library manifest path"
+            )
+        if (
+            not isinstance(self.runtime_library_manifest_sha256, str)
+            or _SHA256.fullmatch(self.runtime_library_manifest_sha256) is None
+        ):
+            raise OpaRuntimeBinaryError(
+                "C0 extraction receipt has an invalid runtime-library manifest digest"
+            )
+        self._validate_native_library(
+            label="SQLite",
+            observed_path=self.sqlite_library_image_path,
+            expected_path=SQLITE_RUNTIME_LIBRARY_IMAGE_PATH,
+            observed_sha256=self.sqlite_library_sha256,
+            observed_byte_count=self.sqlite_library_byte_count,
+        )
         if self.uv_lock_image_path != UV_LOCK_RUNTIME_PATH:
             raise OpaRuntimeBinaryError("C0 extraction receipt names another uv lock image path")
         if (
@@ -197,7 +270,7 @@ class C0RuntimeExtractionReceipt:
             or self.uv_lock_byte_count > _MAX_UV_LOCK_BYTES
         ):
             raise OpaRuntimeBinaryError("C0 extraction receipt uv lock byte count is invalid")
-        if self.hnswlib_receipt_image_path != ("/opt/artifacts/hnswlib-runtime-receipt.json"):
+        if self.hnswlib_receipt_image_path != HNSWLIB_RUNTIME_RECEIPT_IMAGE_PATH:
             raise OpaRuntimeBinaryError("C0 extraction receipt names another hnsw receipt path")
         if (
             not isinstance(self.hnswlib_receipt_sha256, str)
@@ -217,10 +290,45 @@ class C0RuntimeExtractionReceipt:
             or _SHA256.fullmatch(self.hnswlib_wheel_sha256) is None
         ):
             raise OpaRuntimeBinaryError("C0 extraction receipt has an invalid hnsw wheel digest")
-        if type(self.hnswlib_wheel_byte_count) is not int or self.hnswlib_wheel_byte_count <= 0:
+        if (
+            type(self.hnswlib_wheel_byte_count) is not int
+            or self.hnswlib_wheel_byte_count <= 0
+            or self.hnswlib_wheel_byte_count > _MAX_HNSW_WHEEL_BYTES
+        ):
             raise OpaRuntimeBinaryError("C0 extraction receipt hnsw wheel byte count is invalid")
+        self._validate_native_library(
+            label="zlib",
+            observed_path=self.zlib_library_image_path,
+            expected_path=ZLIB_RUNTIME_LIBRARY_IMAGE_PATH,
+            observed_sha256=self.zlib_library_sha256,
+            observed_byte_count=self.zlib_library_byte_count,
+        )
         if type(self.source_date_epoch) is not int or self.source_date_epoch <= 0:
             raise OpaRuntimeBinaryError("C0 extraction receipt source epoch is invalid")
+
+    @staticmethod
+    def _validate_native_library(
+        *,
+        label: str,
+        observed_path: object,
+        expected_path: str,
+        observed_sha256: object,
+        observed_byte_count: object,
+    ) -> None:
+        if observed_path != expected_path:
+            raise OpaRuntimeBinaryError(f"C0 extraction receipt names another {label} library path")
+        if not isinstance(observed_sha256, str) or _SHA256.fullmatch(observed_sha256) is None:
+            raise OpaRuntimeBinaryError(
+                f"C0 extraction receipt has an invalid {label} library digest"
+            )
+        if (
+            type(observed_byte_count) is not int
+            or observed_byte_count <= 0
+            or observed_byte_count > _MAX_NATIVE_LIBRARY_BYTES
+        ):
+            raise OpaRuntimeBinaryError(
+                f"C0 extraction receipt {label} library byte count is invalid"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -234,6 +342,10 @@ class C0RuntimeExtractionReceipt:
             "image_digest": self.image_digest,
             "image_manifest_digest": self.image_manifest_digest,
             "image_reference": self.image_reference,
+            "native_build_receipt_image_path": self.native_build_receipt_image_path,
+            "native_build_receipt_sha256": self.native_build_receipt_sha256,
+            "opa_build_receipt_image_path": self.opa_build_receipt_image_path,
+            "opa_build_receipt_sha256": self.opa_build_receipt_sha256,
             "opa_byte_count": self.opa_byte_count,
             "opa_image_path": self.opa_image_path,
             "opa_sha256": self.opa_sha256,
@@ -241,11 +353,19 @@ class C0RuntimeExtractionReceipt:
             "python_binary_byte_count": self.python_binary_byte_count,
             "python_binary_image_path": self.python_binary_image_path,
             "python_binary_sha256": self.python_binary_sha256,
+            "runtime_library_manifest_image_path": (self.runtime_library_manifest_image_path),
+            "runtime_library_manifest_sha256": self.runtime_library_manifest_sha256,
             "schema_version": self.schema_version,
             "source_date_epoch": self.source_date_epoch,
+            "sqlite_library_byte_count": self.sqlite_library_byte_count,
+            "sqlite_library_image_path": self.sqlite_library_image_path,
+            "sqlite_library_sha256": self.sqlite_library_sha256,
             "uv_lock_byte_count": self.uv_lock_byte_count,
             "uv_lock_image_path": self.uv_lock_image_path,
             "uv_lock_sha256": self.uv_lock_sha256,
+            "zlib_library_byte_count": self.zlib_library_byte_count,
+            "zlib_library_image_path": self.zlib_library_image_path,
+            "zlib_library_sha256": self.zlib_library_sha256,
         }
 
 
@@ -369,6 +489,16 @@ def load_c0_runtime_extraction_receipt(
         image_digest=payload["image_digest"],  # type: ignore[arg-type]
         image_manifest_digest=payload["image_manifest_digest"],  # type: ignore[arg-type]
         image_reference=payload["image_reference"],  # type: ignore[arg-type]
+        native_build_receipt_image_path=payload[  # type: ignore[arg-type]
+            "native_build_receipt_image_path"
+        ],
+        native_build_receipt_sha256=payload[  # type: ignore[arg-type]
+            "native_build_receipt_sha256"
+        ],
+        opa_build_receipt_image_path=payload[  # type: ignore[arg-type]
+            "opa_build_receipt_image_path"
+        ],
+        opa_build_receipt_sha256=payload["opa_build_receipt_sha256"],  # type: ignore[arg-type]
         opa_byte_count=payload["opa_byte_count"],  # type: ignore[arg-type]
         opa_image_path=payload["opa_image_path"],  # type: ignore[arg-type]
         opa_sha256=payload["opa_sha256"],  # type: ignore[arg-type]
@@ -376,11 +506,23 @@ def load_c0_runtime_extraction_receipt(
         python_binary_byte_count=payload["python_binary_byte_count"],  # type: ignore[arg-type]
         python_binary_image_path=payload["python_binary_image_path"],  # type: ignore[arg-type]
         python_binary_sha256=payload["python_binary_sha256"],  # type: ignore[arg-type]
+        runtime_library_manifest_image_path=payload[  # type: ignore[arg-type]
+            "runtime_library_manifest_image_path"
+        ],
+        runtime_library_manifest_sha256=payload[  # type: ignore[arg-type]
+            "runtime_library_manifest_sha256"
+        ],
         schema_version=payload["schema_version"],  # type: ignore[arg-type]
         source_date_epoch=payload["source_date_epoch"],  # type: ignore[arg-type]
+        sqlite_library_byte_count=payload["sqlite_library_byte_count"],  # type: ignore[arg-type]
+        sqlite_library_image_path=payload["sqlite_library_image_path"],  # type: ignore[arg-type]
+        sqlite_library_sha256=payload["sqlite_library_sha256"],  # type: ignore[arg-type]
         uv_lock_byte_count=payload["uv_lock_byte_count"],  # type: ignore[arg-type]
         uv_lock_image_path=payload["uv_lock_image_path"],  # type: ignore[arg-type]
         uv_lock_sha256=payload["uv_lock_sha256"],  # type: ignore[arg-type]
+        zlib_library_byte_count=payload["zlib_library_byte_count"],  # type: ignore[arg-type]
+        zlib_library_image_path=payload["zlib_library_image_path"],  # type: ignore[arg-type]
+        zlib_library_sha256=payload["zlib_library_sha256"],  # type: ignore[arg-type]
     )
     if encoded != _canonical_bytes(receipt.to_dict()) + b"\n":
         raise OpaRuntimeBinaryError("C0 runtime extraction receipt is not canonical JSON")
@@ -845,14 +987,36 @@ def materialize_retained_opa_runtime_binary(
     python_relative = f"{runtime_relative}/python"
     receipt_relative = f"{runtime_relative}/runtime-extraction.json"
     uv_lock_relative = f"{runtime_relative}/uv.lock"
+    hnswlib_receipt_relative = f"{runtime_relative}/hnswlib-runtime-receipt.json"
+    native_build_receipt_relative = f"{runtime_relative}/native-build/native-build-receipt.json"
+    opa_build_receipt_relative = f"{runtime_relative}/opa-build/opa-build-receipt.json"
+    runtime_library_manifest_relative = f"{runtime_relative}/runtime-library-manifest.json"
+    sqlite_library_relative = f"{runtime_relative}/libsqlite3.so.0"
+    zlib_library_relative = f"{runtime_relative}/libz.so.1"
     opa_path = root / "runtime-artifacts" / slug / "opa"
     python_path = root / "runtime-artifacts" / slug / "python"
     receipt_path = root / "runtime-artifacts" / slug / "runtime-extraction.json"
     uv_lock_path = root / "runtime-artifacts" / slug / "uv.lock"
+    hnswlib_receipt_path = root / "runtime-artifacts" / slug / "hnswlib-runtime-receipt.json"
+    native_build_receipt_path = (
+        root / "runtime-artifacts" / slug / "native-build" / "native-build-receipt.json"
+    )
+    opa_build_receipt_path = (
+        root / "runtime-artifacts" / slug / "opa-build" / "opa-build-receipt.json"
+    )
+    runtime_library_manifest_path = (
+        root / "runtime-artifacts" / slug / "runtime-library-manifest.json"
+    )
+    sqlite_library_path = root / "runtime-artifacts" / slug / "libsqlite3.so.0"
+    zlib_library_path = root / "runtime-artifacts" / slug / "libz.so.1"
     checksums_path = root / C0_ARTIFACT_CHECKSUMS_FILENAME
     bundle_path = root / C0_ARTIFACT_ATTESTATION_BUNDLE_FILENAME
 
     receipt = load_c0_runtime_extraction_receipt(receipt_path)
+    hnswlib_wheel_relative = f"{runtime_relative}/hnswlib/{receipt.hnswlib_wheel_basename}"
+    hnswlib_wheel_path = (
+        root / "runtime-artifacts" / slug / "hnswlib" / receipt.hnswlib_wheel_basename
+    )
     if receipt.image_reference != exact_image:
         raise OpaRuntimeBinaryError("C0 extraction receipt names another OCI index")
     if receipt.platform != prospective.platform:
@@ -880,6 +1044,41 @@ def materialize_retained_opa_runtime_binary(
             max_bytes=_MAX_UV_LOCK_BYTES,
             label="retained C0 uv lock",
         )
+        hnswlib_receipt_bytes = read_secure_regular_file(
+            hnswlib_receipt_path,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="retained C0 hnswlib receipt",
+        )
+        hnswlib_wheel_bytes = read_secure_regular_file(
+            hnswlib_wheel_path,
+            max_bytes=_MAX_HNSW_WHEEL_BYTES,
+            label="retained C0 hnswlib wheel",
+        )
+        native_build_receipt_bytes = read_secure_regular_file(
+            native_build_receipt_path,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="retained C0 native-build receipt",
+        )
+        opa_build_receipt_bytes = read_secure_regular_file(
+            opa_build_receipt_path,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="retained C0 OPA-build receipt",
+        )
+        runtime_library_manifest_bytes = read_secure_regular_file(
+            runtime_library_manifest_path,
+            max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+            label="retained C0 runtime-library manifest",
+        )
+        sqlite_library_bytes = read_secure_regular_file(
+            sqlite_library_path,
+            max_bytes=_MAX_NATIVE_LIBRARY_BYTES,
+            label="retained C0 SQLite library",
+        )
+        zlib_library_bytes = read_secure_regular_file(
+            zlib_library_path,
+            max_bytes=_MAX_NATIVE_LIBRARY_BYTES,
+            label="retained C0 zlib library",
+        )
         checksum_bytes = read_secure_regular_file(
             checksums_path,
             max_bytes=_MAX_CHECKSUM_BYTES,
@@ -892,10 +1091,19 @@ def materialize_retained_opa_runtime_binary(
         )
     except ArtifactIntegrityError as exc:
         raise OpaRuntimeBinaryError(f"cannot read retained C0 custody package: {exc}") from exc
+    if receipt_bytes != _canonical_bytes(receipt.to_dict()) + b"\n":
+        raise OpaRuntimeBinaryError("C0 extraction receipt changed after typed admission")
     opa_digest = hashlib.sha256(opa_bytes).hexdigest()
     python_digest = hashlib.sha256(python_bytes).hexdigest()
     receipt_digest = hashlib.sha256(receipt_bytes).hexdigest()
     uv_lock_digest = hashlib.sha256(uv_lock_bytes).hexdigest()
+    hnswlib_receipt_digest = hashlib.sha256(hnswlib_receipt_bytes).hexdigest()
+    hnswlib_wheel_digest = hashlib.sha256(hnswlib_wheel_bytes).hexdigest()
+    native_build_receipt_digest = hashlib.sha256(native_build_receipt_bytes).hexdigest()
+    opa_build_receipt_digest = hashlib.sha256(opa_build_receipt_bytes).hexdigest()
+    runtime_library_manifest_digest = hashlib.sha256(runtime_library_manifest_bytes).hexdigest()
+    sqlite_library_digest = hashlib.sha256(sqlite_library_bytes).hexdigest()
+    zlib_library_digest = hashlib.sha256(zlib_library_bytes).hexdigest()
     if (
         not opa_bytes.startswith(b"\x7fELF")
         or opa_digest != receipt.opa_sha256
@@ -910,6 +1118,39 @@ def materialize_retained_opa_runtime_binary(
         raise OpaRuntimeBinaryError("retained Python bytes differ from the C0 extraction receipt")
     if uv_lock_digest != receipt.uv_lock_sha256 or len(uv_lock_bytes) != receipt.uv_lock_byte_count:
         raise OpaRuntimeBinaryError("retained uv lock differs from the C0 extraction receipt")
+    if hnswlib_receipt_digest != receipt.hnswlib_receipt_sha256:
+        raise OpaRuntimeBinaryError(
+            "retained hnswlib receipt differs from the C0 extraction receipt"
+        )
+    if (
+        hnswlib_wheel_digest != receipt.hnswlib_wheel_sha256
+        or len(hnswlib_wheel_bytes) != receipt.hnswlib_wheel_byte_count
+    ):
+        raise OpaRuntimeBinaryError("retained hnswlib wheel differs from the C0 extraction receipt")
+    if native_build_receipt_digest != receipt.native_build_receipt_sha256:
+        raise OpaRuntimeBinaryError(
+            "retained native-build receipt differs from the C0 extraction receipt"
+        )
+    if opa_build_receipt_digest != receipt.opa_build_receipt_sha256:
+        raise OpaRuntimeBinaryError(
+            "retained OPA-build receipt differs from the C0 extraction receipt"
+        )
+    if runtime_library_manifest_digest != receipt.runtime_library_manifest_sha256:
+        raise OpaRuntimeBinaryError(
+            "retained runtime-library manifest differs from the C0 extraction receipt"
+        )
+    if (
+        sqlite_library_digest != receipt.sqlite_library_sha256
+        or len(sqlite_library_bytes) != receipt.sqlite_library_byte_count
+    ):
+        raise OpaRuntimeBinaryError(
+            "retained SQLite library differs from the C0 extraction receipt"
+        )
+    if (
+        zlib_library_digest != receipt.zlib_library_sha256
+        or len(zlib_library_bytes) != receipt.zlib_library_byte_count
+    ):
+        raise OpaRuntimeBinaryError("retained zlib library differs from the C0 extraction receipt")
     checksums = _parse_c0_artifact_checksums(checksum_bytes)
     if checksums.get(opa_relative) != opa_digest:
         raise OpaRuntimeBinaryError("C0 artifact checksums do not bind the selected OPA bytes")
@@ -921,6 +1162,21 @@ def materialize_retained_opa_runtime_binary(
         raise OpaRuntimeBinaryError("C0 artifact checksums do not bind the selected Python bytes")
     if checksums.get(uv_lock_relative) != uv_lock_digest:
         raise OpaRuntimeBinaryError("C0 artifact checksums do not bind the selected uv lock")
+    supplemental_checksums = {
+        hnswlib_receipt_relative: hnswlib_receipt_digest,
+        hnswlib_wheel_relative: hnswlib_wheel_digest,
+        native_build_receipt_relative: native_build_receipt_digest,
+        opa_build_receipt_relative: opa_build_receipt_digest,
+        runtime_library_manifest_relative: runtime_library_manifest_digest,
+        sqlite_library_relative: sqlite_library_digest,
+        zlib_library_relative: zlib_library_digest,
+    }
+    for relative_path, expected_digest in supplemental_checksums.items():
+        if checksums.get(relative_path) != expected_digest:
+            raise OpaRuntimeBinaryError(
+                "C0 artifact checksums do not bind the selected "
+                f"{relative_path.rsplit('/', 1)[-1]} bytes"
+            )
 
     verification = _verify_plan_contracts(
         rows,
@@ -933,7 +1189,19 @@ def materialize_retained_opa_runtime_binary(
         if attestation_verifier is not None
         else GhC0ArtifactAttestationVerifier()
     )
-    for subject_path in (receipt_path, opa_path, python_path, uv_lock_path):
+    for subject_path in (
+        receipt_path,
+        opa_path,
+        python_path,
+        uv_lock_path,
+        hnswlib_receipt_path,
+        hnswlib_wheel_path,
+        native_build_receipt_path,
+        opa_build_receipt_path,
+        runtime_library_manifest_path,
+        sqlite_library_path,
+        zlib_library_path,
+    ):
         active.verify(
             subject_path=subject_path,
             bundle_path=bundle_path,
@@ -965,6 +1233,48 @@ def materialize_retained_opa_runtime_binary(
                 label="retained C0 uv lock",
             )
             != uv_lock_bytes
+            or read_secure_regular_file(
+                hnswlib_receipt_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="retained C0 hnswlib receipt",
+            )
+            != hnswlib_receipt_bytes
+            or read_secure_regular_file(
+                hnswlib_wheel_path,
+                max_bytes=_MAX_HNSW_WHEEL_BYTES,
+                label="retained C0 hnswlib wheel",
+            )
+            != hnswlib_wheel_bytes
+            or read_secure_regular_file(
+                native_build_receipt_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="retained C0 native-build receipt",
+            )
+            != native_build_receipt_bytes
+            or read_secure_regular_file(
+                opa_build_receipt_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="retained C0 OPA-build receipt",
+            )
+            != opa_build_receipt_bytes
+            or read_secure_regular_file(
+                runtime_library_manifest_path,
+                max_bytes=_MAX_RUNTIME_METADATA_BYTES,
+                label="retained C0 runtime-library manifest",
+            )
+            != runtime_library_manifest_bytes
+            or read_secure_regular_file(
+                sqlite_library_path,
+                max_bytes=_MAX_NATIVE_LIBRARY_BYTES,
+                label="retained C0 SQLite library",
+            )
+            != sqlite_library_bytes
+            or read_secure_regular_file(
+                zlib_library_path,
+                max_bytes=_MAX_NATIVE_LIBRARY_BYTES,
+                label="retained C0 zlib library",
+            )
+            != zlib_library_bytes
         ):
             raise OpaRuntimeBinaryError("retained C0 bytes changed during attestation review")
     except ArtifactIntegrityError as exc:

@@ -21,9 +21,85 @@ env:
   ACTIONS_RUNNER_VERSION: 2.335.1
   C0_REF: refs/tags/confirmatory-apparatus-c0
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
   REGISTERED_RUNTIME_IMAGE_ROLE: scientific
   REGISTERED_RUNTIME_INDEX_ROLE: main
   REGISTERED_RUNTIME_PLATFORM: linux/amd64
+  HOST_PYTHON_VERIFIED_LAUNCHER: |
+    import hashlib,json,os,runpy,stat,sys
+    from pathlib import Path
+    MARKER="fractal-host-python-verified-launcher-v1"
+    TREE_DERIVATION="sha256-fractal-host-tool-tree-v1"
+    CONTENT_DERIVATION="sha256-fractal-python-package-content-v1"
+    ALLOWED=frozenset({"fractal_ann_diagnostics.execution_claim","fractal_ann_diagnostics.provider_rehearsal","fractal_ann_diagnostics.provider_workflow_validation"})
+    def fail(message): raise SystemExit("verified host-Python launcher: "+message)
+    def canonical(value): return json.dumps(value,allow_nan=False,ensure_ascii=True,separators=(",",":"),sort_keys=True).encode("ascii")
+    def digest_file(path):
+        value=hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk:=handle.read(1024*1024): value.update(chunk)
+        return value.hexdigest()
+    def expected_digest(name):
+        value=os.environ.get(name,"")
+        if len(value)!=64 or any(character not in "0123456789abcdef" for character in value): fail(name+" is not one SHA-256 digest")
+        return value
+    def exact_root(name):
+        value=os.environ.get(name,"")
+        if not value or os.pathsep in value: fail(name+" is absent or contains multiple roots")
+        path=Path(value)
+        try: metadata=path.lstat(); resolved=path.resolve(strict=True)
+        except OSError: fail(name+" is unavailable")
+        if not path.is_absolute() or resolved!=path or stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode): fail(name+" is not one canonical real directory")
+        return path
+    def tree(root,controlled):
+        metadata=root.lstat()
+        entries=[{"kind":"directory","mode":f"{stat.S_IMODE(metadata.st_mode):04o}","path":"."}]
+        symlinks=[]
+        for directory,directory_names,file_names in os.walk(root,followlinks=False):
+            directory_names.sort(key=lambda value:value.encode("utf-8")); file_names.sort(key=lambda value:value.encode("utf-8")); current=Path(directory)
+            for name in (*directory_names,*file_names):
+                candidate=current/name; relative=candidate.relative_to(root).as_posix(); metadata=candidate.lstat(); mode=metadata.st_mode
+                if stat.S_ISLNK(mode):
+                    raw_target=os.readlink(candidate); resolved=candidate.resolve(strict=True)
+                    try: resolved.relative_to(controlled)
+                    except ValueError: fail("symlink escapes controlled root: "+relative)
+                    row={"path":relative,"resolved_path":str(resolved),"target":raw_target}; symlinks.append(row); entries.append({"kind":"symlink","mode":f"{stat.S_IMODE(mode):04o}",**row})
+                elif stat.S_ISDIR(mode): entries.append({"kind":"directory","mode":f"{stat.S_IMODE(mode):04o}","path":relative})
+                elif stat.S_ISREG(mode):
+                    if metadata.st_nlink!=1 or "__pycache__" in candidate.parts or candidate.suffix in {".pyc",".pyo"}: fail("unclosed regular file: "+relative)
+                    entries.append({"byte_count":metadata.st_size,"file_sha256":digest_file(candidate),"kind":"file","mode":f"{stat.S_IMODE(mode):04o}","path":relative})
+                else: fail("special file in import closure: "+relative)
+        entries.sort(key=lambda row:str(row["path"]).encode("utf-8")); symlinks.sort(key=lambda row:row["path"].encode("utf-8"))
+        return hashlib.sha256(canonical({"derivation":TREE_DERIVATION,"entries":entries})).hexdigest(),hashlib.sha256(canonical({"symlinks":symlinks})).hexdigest()
+    def content(root):
+        entries=[{"kind":"directory","path":"."}]
+        for directory,directory_names,file_names in os.walk(root,followlinks=False):
+            directory_names.sort(key=lambda value:value.encode("utf-8")); file_names.sort(key=lambda value:value.encode("utf-8")); current=Path(directory)
+            for name in (*directory_names,*file_names):
+                candidate=current/name; relative=candidate.relative_to(root).as_posix(); metadata=candidate.lstat()
+                if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode): entries.append({"kind":"directory","path":relative})
+                elif stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                    if metadata.st_nlink!=1 or "__pycache__" in candidate.parts or candidate.suffix in {".pyc",".pyo"}: fail("unclosed package file: "+relative)
+                    entries.append({"byte_count":metadata.st_size,"file_sha256":digest_file(candidate),"kind":"file","path":relative})
+                else: fail("special package entry: "+relative)
+        entries.sort(key=lambda row:str(row["path"]).encode("utf-8"))
+        return hashlib.sha256(canonical({"derivation":CONTENT_DERIVATION,"entries":entries})).hexdigest()
+    if hashlib.sha256(os.environ.get("HOST_PYTHON_VERIFIED_LAUNCHER","").encode("utf-8")).hexdigest()!=expected_digest("HOST_PYTHON_VERIFIED_LAUNCHER_SHA256"): fail("launcher source differs from C1")
+    if len(sys.argv)<3 or sys.argv[1]!=MARKER or sys.argv[2] not in ALLOWED: fail("marker or module differs")
+    controlled=exact_root("HOST_CONTROLLED_ROOT"); venv=exact_root("HOST_PYTHON_VENV_ROOT"); import_root=exact_root("HOST_PYTHON_IMPORT_ROOT")
+    try: venv.relative_to(controlled); relative_import=import_root.relative_to(venv)
+    except ValueError: fail("venv or import root escapes controlled root")
+    if relative_import.parts!=("lib","python3.12","site-packages"): fail("import root differs from the fixed site-packages root")
+    venv_tree,venv_symlinks=tree(venv,controlled); import_tree,import_symlinks=tree(import_root,controlled); package_root=import_root/"fractal_ann_diagnostics"; package_tree,package_symlinks=tree(package_root,controlled); empty_symlinks=hashlib.sha256(canonical({"symlinks":[]})).hexdigest()
+    if venv_tree!=expected_digest("HOST_PYTHON_VENV_TREE_SHA256") or venv_symlinks!=expected_digest("HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256") or import_tree!=expected_digest("HOST_PYTHON_IMPORT_TREE_SHA256") or package_tree!=expected_digest("HOST_PYTHON_PACKAGE_TREE_SHA256") or content(package_root)!=expected_digest("HOST_PYTHON_PACKAGE_CONTENT_SHA256") or import_symlinks!=empty_symlinks or package_symlinks!=empty_symlinks: fail("Python closure differs from C1")
+    for ancestor in (controlled,venv,venv/"lib",venv/"lib"/"python3.12",import_root):
+        metadata=ancestor.lstat()
+        if metadata.st_uid!=0 or stat.S_IMODE(metadata.st_mode)&0o222 or os.access(ancestor,os.W_OK): fail("import ancestor is not root-owned and effectively read-only")
+    for directory,directory_names,file_names in os.walk(import_root,followlinks=False):
+        for name in (*directory_names,*file_names):
+            candidate=Path(directory)/name; metadata=candidate.lstat()
+            if metadata.st_uid!=0 or stat.S_IMODE(metadata.st_mode)&0o222 or os.access(candidate,os.W_OK): fail("import closure is not root-owned and effectively read-only")
+    module=sys.argv[2]; arguments=sys.argv[3:]; stdlib_paths=tuple(value for value in sys.path if value and Path(value).is_absolute()); sys.dont_write_bytecode=True; sys.path[:]=[str(import_root),*stdlib_paths]; sys.argv=[module,*arguments]; runpy.run_module(module,run_name="__main__",alter_sys=False)
 
 jobs:
   claim:
@@ -51,8 +127,19 @@ jobs:
       gh_file_sha256: ${{ steps.prerequisites.outputs.gh_file_sha256 }}
       gh_path: ${{ steps.prerequisites.outputs.gh_path }}
       gh_version: ${{ steps.prerequisites.outputs.gh_version }}
+      host_controlled_root: ${{ steps.prerequisites.outputs.host_controlled_root }}
       host_python_file_sha256: ${{ steps.prerequisites.outputs.host_python_file_sha256 }}
+      host_python_import_root: ${{ steps.prerequisites.outputs.host_python_import_root }}
+      host_python_import_tree_sha256: ${{ steps.prerequisites.outputs.host_python_import_tree_sha256 }}
+      host_python_launcher_sha256: ${{ steps.prerequisites.outputs.host_python_launcher_sha256 }}
+      host_python_package_content_sha256: ${{ steps.prerequisites.outputs.host_python_package_content_sha256 }}
+      host_python_package_source_commit: ${{ steps.prerequisites.outputs.host_python_package_source_commit }}
+      host_python_package_source_tree: ${{ steps.prerequisites.outputs.host_python_package_source_tree }}
+      host_python_package_tree_sha256: ${{ steps.prerequisites.outputs.host_python_package_tree_sha256 }}
       host_python_path: ${{ steps.prerequisites.outputs.host_python_path }}
+      host_python_venv_root: ${{ steps.prerequisites.outputs.host_python_venv_root }}
+      host_python_venv_symlink_inventory_sha256: ${{ steps.prerequisites.outputs.host_python_venv_symlink_inventory_sha256 }}
+      host_python_venv_tree_sha256: ${{ steps.prerequisites.outputs.host_python_venv_tree_sha256 }}
       oci_index_digest: ${{ steps.prerequisites.outputs.oci_index_digest }}
       oci_platform_manifest_digest: ${{ steps.prerequisites.outputs.oci_platform_manifest_digest }}
       phase_evidence_root: ${{ steps.prerequisites.outputs.phase_evidence_root }}
@@ -308,6 +395,16 @@ jobs:
     permissions:
       actions: read
       contents: read
+    env:
+      HOST_CONTROLLED_ROOT: ${{ needs.claim.outputs.host_controlled_root }}
+      HOST_PYTHON_IMPORT_ROOT: ${{ needs.claim.outputs.host_python_import_root }}
+      HOST_PYTHON_IMPORT_TREE_SHA256: ${{ needs.claim.outputs.host_python_import_tree_sha256 }}
+      HOST_PYTHON_VERIFIED_LAUNCHER_SHA256: ${{ needs.claim.outputs.host_python_launcher_sha256 }}
+      HOST_PYTHON_PACKAGE_CONTENT_SHA256: ${{ needs.claim.outputs.host_python_package_content_sha256 }}
+      HOST_PYTHON_PACKAGE_TREE_SHA256: ${{ needs.claim.outputs.host_python_package_tree_sha256 }}
+      HOST_PYTHON_VENV_ROOT: ${{ needs.claim.outputs.host_python_venv_root }}
+      HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256: ${{ needs.claim.outputs.host_python_venv_symlink_inventory_sha256 }}
+      HOST_PYTHON_VENV_TREE_SHA256: ${{ needs.claim.outputs.host_python_venv_tree_sha256 }}
 
     steps:
       - name: Re-admit the fixed provider execution identity
@@ -415,7 +512,9 @@ jobs:
                 || test -e "$attempt_root" || test -L "$attempt_root"; then
               return 2
             fi
-            "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim \
+            "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER" \
+              fractal-host-python-verified-launcher-v1 \
+              fractal_ann_diagnostics.execution_claim \
               verify-prerequisites \
               --phase analysis \
               --suite-attempt-id "$SUITE_ATTEMPT_ID" \
@@ -467,6 +566,9 @@ jobs:
           HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           LIVE_EXECUTE_JOB_RECEIPT: ${{ steps.activate.outputs.live_execute_job_receipt_path }}
           LIVE_EXECUTE_JOB_RECEIPT_SHA256: ${{ steps.activate.outputs.live_execute_job_receipt_sha256 }}
+          PHASE_HOST_TOOL_RECEIPT: ${{ steps.activate.outputs.phase_host_tool_receipt_path }}
+          PHASE_HOST_TOOL_RECEIPT_FILE_SHA256: ${{ steps.activate.outputs.phase_host_tool_receipt_file_sha256 }}
+          PHASE_HOST_TOOL_RECEIPT_SHA256: ${{ steps.activate.outputs.phase_host_tool_receipt_sha256 }}
           PHASE_EXECUTION_RECEIPT: ${{ steps.activate.outputs.phase_execution_receipt_path }}
           PHASE_EXECUTION_RECEIPT_SHA256: ${{ steps.activate.outputs.phase_execution_receipt_sha256 }}
           RUNTIME_CLAIM_RECEIPT: ${{ steps.activate.outputs.runtime_claim_receipt_path }}
@@ -476,6 +578,8 @@ jobs:
           [[ "$EXECUTE_JOB_ID" =~ ^[1-9][0-9]*$ ]]
           test "$FIXED_CORPORA_COMPLETED" = 'true'
           test "$FIVE_CORPORA_ANALYZED" = 'true'
+          [[ "$PHASE_HOST_TOOL_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PHASE_HOST_TOOL_RECEIPT_FILE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$ANALYSIS_EXECUTION_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$(shasum -a 256 "$ANALYSIS_EXECUTION_RECEIPT" | awk '{print $1}')" = \
@@ -484,25 +588,19 @@ jobs:
             "$ANALYSIS_RESULT_SHA256"
           test "$(shasum -a 256 "$LIVE_EXECUTE_JOB_RECEIPT" | awk '{print $1}')" = \
             "$LIVE_EXECUTE_JOB_RECEIPT_SHA256"
+          test "$(shasum -a 256 "$PHASE_HOST_TOOL_RECEIPT" | awk '{print $1}')" = \
+            "$PHASE_HOST_TOOL_RECEIPT_FILE_SHA256"
           test "$(shasum -a 256 "$PHASE_EXECUTION_RECEIPT" | awk '{print $1}')" = \
             "$PHASE_EXECUTION_RECEIPT_SHA256"
           test "$(shasum -a 256 "$RUNTIME_CLAIM_RECEIPT" | awk '{print $1}')" = \
             "$RUNTIME_CLAIM_RECEIPT_SHA256"
-          "$HOST_PYTHON" - "$ANALYSIS_EXECUTION_RECEIPT" \
-            "$ANALYSIS_EXECUTION_RECEIPT_SHA256" \
-            "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256" <<'PY'
-          import sys
-
-          from fractal_ann_diagnostics.offline_analysis_contract import (
-              load_offline_analysis_execution_receipt,
-          )
-
-          load_offline_analysis_execution_receipt(
-              sys.argv[1],
-              expected_receipt_sha256=sys.argv[2],
-              expected_file_sha256=sys.argv[3],
-          )
-          PY
+          "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER" \
+            fractal-host-python-verified-launcher-v1 \
+            fractal_ann_diagnostics.provider_workflow_validation \
+            analysis-execution-receipt \
+            --receipt "$ANALYSIS_EXECUTION_RECEIPT" \
+            --receipt-sha256 "$ANALYSIS_EXECUTION_RECEIPT_SHA256" \
+            --file-sha256 "$ANALYSIS_EXECUTION_RECEIPT_FILE_SHA256"
 
       - name: Build the exact confirmatory result subject
         id: prepare
@@ -513,7 +611,9 @@ jobs:
           HOST_PYTHON: ${{ needs.claim.outputs.host_python_path }}
           SUITE_ATTEMPT_ID: ${{ inputs.suite_attempt_id }}
         run: >-
-          "$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim
+          "$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER"
+          fractal-host-python-verified-launcher-v1
+          fractal_ann_diagnostics.execution_claim
           complete
           --prepare
           --phase analysis

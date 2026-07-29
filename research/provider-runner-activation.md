@@ -78,6 +78,14 @@ The file must be owned by the current operator, singly linked, and mode `0600`. 
 runner named by the plan must still be present in the repository inventory. Leave its listener
 stopped.
 
+The plan's Python import closure must also remain byte- and mode-identical to the pre-C0
+host-tool contract. Its venv, `lib/python3.12` path, and site-packages tree are
+`root:wheel`, have no write bits or ACL grants for the runner, and contain no symlinks,
+hardlinks, or bytecode caches. The installed `fractal_ann_diagnostics` content equals the
+clean package subtree at P; the C0 rehearsal separately proves that the same package
+subtree is present at A. Replacing the venv or making its parent writable invalidates the
+provider plan.
+
 Create only the parent directory for the phase bundle. The activation writer creates the final
 nonce-label directory atomically:
 
@@ -140,6 +148,9 @@ The verifier opens the activation directory once, binds all reads to that inode,
 four-member set and private modes, parses the three typed records from the bytes it admitted, and
 rechecks them against the frozen plan. Start `run.sh` only after verification succeeds. Production
 phase runtime independently reloads `bootstrap-receipt.json` and requires byte equality with C1.
+Its first Python process uses the C0-fixed verified launcher; after that pre-import check,
+activation rehashes the full host-tool closure and retains the resulting receipt before any phase
+driver can open input.
 
 The activation inventory proves one repository API observation before listener start. It does not
 prove that GitHub will schedule the intended job. The claim job and live Jobs API verification

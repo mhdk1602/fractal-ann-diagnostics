@@ -191,6 +191,13 @@ more privileged administrator. Host kernel and launcher integrity, result-direct
 audit-head custody, and the independently administered completion anchor remain part of the trusted
 computing base.
 
+The provider launcher makes a related, explicit assumption. It rehashes the complete
+sealed venv and checks authority over the C1-bound site-packages import root, while the
+registered standalone Python standard library is part of the host-administrator trusted
+computing base. The evidence can expose ordinary drift or an unsealed import root. It is
+not an attestation against a root administrator capable of replacing the interpreter and
+falsifying host observations.
+
 A technical failure ends confirmatory v0.3. The receipt schema's `reserve` label may support
 engineering rehearsals, but it cannot rescue or replace the primary confirmatory attempt. Any later
 attempt needs an amended protocol version, a new frozen manifest, and a new external registration.

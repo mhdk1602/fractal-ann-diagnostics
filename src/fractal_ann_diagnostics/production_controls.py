@@ -949,7 +949,11 @@ class ProductionControlMaterializationConfig:
             "hardware_region",
             "hardware_operating_system",
         ):
-            _text(name, getattr(self, name))
+            value = _text(name, getattr(self, name))
+            if "<" in value or ">" in value:
+                raise ProductionControlError(
+                    f"{name} must not contain unresolved placeholder delimiters"
+                )
         _positive_integer("memory_limit_bytes", self.memory_limit_bytes)
         if self.memory_limit_bytes % _GIB:
             raise ProductionControlError(

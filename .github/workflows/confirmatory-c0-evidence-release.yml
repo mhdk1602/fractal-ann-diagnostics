@@ -263,7 +263,7 @@ jobs:
           PY
             jq -e \
               --arg c0 "$C0_SHA" '
-                .schema_version == "fractal-provider-rehearsal-aggregate-v1"
+                .schema_version == "fractal-provider-rehearsal-aggregate-v2"
                 and .repository == "mhdk1602/fractal-ann-diagnostics"
                 and .workflow_path == ".github/workflows/confirmatory-provider-rehearsal.yml"
                 and .workflow_sha == $c0
@@ -271,6 +271,18 @@ jobs:
                 and .run_attempt == 1
                 and (.run_id | type == "number" and . > 0)
                 and (.candidate_image_source_commit | test("^[0-9a-f]{40}$"))
+                and (.candidate_python_package_source_tree
+                  | test("^[0-9a-f]{40}$"))
+                and (.workflow_python_package_source_tree
+                  | test("^[0-9a-f]{40}$"))
+                and .candidate_python_package_source_tree
+                  == .workflow_python_package_source_tree
+                and (.host_python_launcher_sha256
+                  | test("^[0-9a-f]{64}$"))
+                and (.workflow_python_launcher_sha256
+                  | test("^[0-9a-f]{64}$"))
+                and .host_python_launcher_sha256
+                  == .workflow_python_launcher_sha256
                 and (.candidate_image_closure_file_sha256 | test("^[0-9a-f]{64}$"))
                 and (.candidate_bootstrap_closure_sha256 | test("^[0-9a-f]{64}$"))
                 and (.build_context_tree_sha256 | test("^[0-9a-f]{64}$"))

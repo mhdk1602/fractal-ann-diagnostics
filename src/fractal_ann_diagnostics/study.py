@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
 import ssl
 from collections.abc import Callable, Mapping, Sequence
@@ -67,6 +68,7 @@ from .provider_contract import (
     REGISTERED_DOCKER_CLIENT_BUILD,
     REGISTERED_DOCKER_CLIENT_SHA256,
     REGISTERED_DOCKER_CLIENT_VERSION,
+    REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
     SOURCE_BUILT_LINUX_ARM64_TLE_SHA256,
 )
 
@@ -246,7 +248,7 @@ _SEALED_EXECUTION_FIELDS = {
     "runner_image",
     "runner_network_access",
 }
-PROVIDER_PHASE_PLAN_TEMPLATE_SCHEMA = "fractal-provider-phase-plan-template-v2"
+PROVIDER_PHASE_PLAN_TEMPLATE_SCHEMA = "fractal-provider-phase-plan-template-v3"
 PROVIDER_APPROVAL_ENVIRONMENT = "confirmatory"
 PROVIDER_RUNNER_IDENTITY = f"github-actions:environment:{PROVIDER_APPROVAL_ENVIRONMENT}"
 PROVIDER_PLAN_MANIFEST_BINDING = "enclosing-canonical-study-manifest-sha256"
@@ -256,6 +258,9 @@ PROVIDER_PLAN_PREDECESSOR_BINDING = "protected-provider-ledger-tip-for-suite-att
 PROVIDER_PLAN_CLAIM_RECEIPT_BINDING = "provider-claim-receipt-for-suite-attempt"
 PROVIDER_PLAN_PHASE_INPUT_BINDING = "verified-predecessor-phase-inputs"
 PROVIDER_PLAN_PHASE_OUTPUT_BINDING = "fixed-phase-output-namespace-for-suite-attempt"
+PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING = "workflow-fixed-host-python-launcher-source"
+PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING = "private-provider-activation-output-root"
+PROVIDER_PLAN_GITHUB_OUTPUT_BINDING = "github-step-output-command-file"
 C0_COMMIT_SENTINEL = "containing-confirmatory-apparatus-c0-commit"
 PROVIDER_PHASES = ("online", "label-release", "analysis")
 PROVIDER_PHASE_JOB_NAMES = {
@@ -363,6 +368,7 @@ PROVIDER_PHASE_PLAN_TEMPLATE_FIELDS = frozenset(
     {
         "activation_argv_template",
         "activation_command_id",
+        "activation_environment",
         "approval_environment",
         "c1_commit_binding",
         "claim_job_name",
@@ -1475,6 +1481,7 @@ def _validate_provider_host_tools(value: object, *, path: str) -> Mapping[str, A
     for field in (
         "python_executable",
         "venv_root",
+        "python_import_root",
         "gh_executable",
         "runner_listener_executable",
         "runner_listener_dll",
@@ -1486,6 +1493,15 @@ def _validate_provider_host_tools(value: object, *, path: str) -> Mapping[str, A
             Path(candidate).relative_to(root)
         except ValueError as exc:
             raise StudyManifestError(f"{path}.{field} escapes controlled_root") from exc
+    import_root = str(tools["python_import_root"])
+    if os.pathsep in import_root:
+        raise StudyManifestError(f"{path}.python_import_root cannot contain multiple roots")
+    try:
+        import_relative = Path(import_root).relative_to(str(tools["venv_root"]))
+    except ValueError as exc:
+        raise StudyManifestError(f"{path}.python_import_root escapes venv_root") from exc
+    if import_relative.parts != ("lib", "python3.12", "site-packages"):
+        raise StudyManifestError(f"{path}.python_import_root is not the fixed site-packages root")
     docker_path = _provider_absolute_path(
         tools["docker_executable"], path=f"{path}.docker_executable"
     )
@@ -1501,6 +1517,7 @@ def _validate_provider_host_tools(value: object, *, path: str) -> Mapping[str, A
         "python_archive_byte_count": OFFICIAL_PYTHON_BUILD_STANDALONE_ARCHIVE_BYTE_COUNT,
         "python_version": OFFICIAL_PYTHON_BUILD_STANDALONE_VERSION,
         "python_executable_sha256": OFFICIAL_PYTHON_BUILD_STANDALONE_BINARY_SHA256,
+        "python_launcher_sha256": REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
         "gh_archive_uri": OFFICIAL_GH_OSX_ARM64_ARCHIVE_URI,
         "gh_archive_sha256": OFFICIAL_GH_OSX_ARM64_ARCHIVE_SHA256,
         "gh_archive_byte_count": OFFICIAL_GH_OSX_ARM64_ARCHIVE_BYTE_COUNT,
@@ -1533,11 +1550,18 @@ def _validate_provider_host_tools(value: object, *, path: str) -> Mapping[str, A
     for field in (
         "venv_tree_sha256",
         "venv_symlink_inventory_sha256",
+        "python_import_tree_sha256",
+        "python_launcher_sha256",
+        "python_package_content_sha256",
+        "python_package_tree_sha256",
         "host_probe_receipt_sha256",
         "docker_server_probe_receipt_sha256",
     ):
         if not isinstance(tools[field], str) or _SHA256.fullmatch(tools[field]) is None:
             raise StudyManifestError(f"{path}.{field} must be one SHA-256 digest")
+    for field in ("python_package_source_commit", "python_package_source_tree"):
+        if not isinstance(tools[field], str) or _GIT_COMMIT.fullmatch(tools[field]) is None:
+            raise StudyManifestError(f"{path}.{field} must be one full Git object ID")
     host_probe = _closed_object(
         tools["host_probe"], set(PHASE_HOST_PROBE_FIELDS), path=f"{path}.host_probe"
     )
@@ -1911,23 +1935,46 @@ def _validate_provider_phase_plans(
             raise StudyManifestError(f"{plan_path} cannot introduce a timelock binary")
         if plan["activation_command_id"] != PROVIDER_PHASE_COMMAND_IDS[phase]:
             raise StudyManifestError(f"{plan_path}.activation_command_id differs")
+        expected_environment = {
+            "HOST_CONTROLLED_ROOT": str(host_tools["controlled_root"]),
+            "HOST_PYTHON_IMPORT_ROOT": str(host_tools["python_import_root"]),
+            "HOST_PYTHON_IMPORT_TREE_SHA256": str(host_tools["python_import_tree_sha256"]),
+            "HOST_PYTHON_PACKAGE_CONTENT_SHA256": str(host_tools["python_package_content_sha256"]),
+            "HOST_PYTHON_PACKAGE_TREE_SHA256": str(host_tools["python_package_tree_sha256"]),
+            "HOST_PYTHON_VENV_ROOT": str(host_tools["venv_root"]),
+            "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256": str(
+                host_tools["venv_symlink_inventory_sha256"]
+            ),
+            "HOST_PYTHON_VENV_TREE_SHA256": str(host_tools["venv_tree_sha256"]),
+            "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256": str(host_tools["python_launcher_sha256"]),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        if plan["activation_environment"] != expected_environment:
+            raise StudyManifestError(f"{plan_path}.activation_environment differs")
         argv = plan["activation_argv_template"]
         python_path = host_tools.get("python_executable")
         expected_argv = [
             python_path,
-            "-m",
-            "fractal_ann_diagnostics.provider_phase_runtime",
-            PROVIDER_PHASE_COMMAND_IDS[phase],
-            "--provider-plan",
-            self_hosted_path,
+            "-I",
+            "-S",
+            "-P",
+            "-s",
+            "-c",
+            PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
+            "fractal-host-python-verified-launcher-v1",
+            "fractal_ann_diagnostics.execution_claim",
+            "verify-prerequisites",
+            "--phase",
+            phase,
             "--suite-attempt-id",
             PROVIDER_PLAN_SUITE_BINDING,
             "--claim-receipt",
             PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
-            "--phase-input-root",
-            PROVIDER_PLAN_PHASE_INPUT_BINDING,
-            "--phase-output-root",
-            PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
+            "--activate-and-execute",
+            "--output-dir",
+            PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
+            "--github-output",
+            PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
         ]
         if argv != expected_argv:
             raise StudyManifestError(f"{plan_path}.activation_argv_template differs")

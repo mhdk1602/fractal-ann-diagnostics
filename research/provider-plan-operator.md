@@ -31,14 +31,34 @@ inadmissible.
 
 `write-blueprint` admits the source manifest shell, production-control config and its
 write receipt, production-control blueprint, candidate-image closure, execution-beacon
-contract, factory design seed, fixed host tools, and three operator-selected runner names.
-The source manifest must have `provider_phase_plans: "tbd"`; hand-written plan JSON is
-rejected. The five workload specs must already authenticate their raw sentinel-bearing
-bytes.
+contract, factory design seed, one clean checkout at P, fixed host tools, and three
+operator-selected runner names. The source manifest must have
+`provider_phase_plans: "tbd"`; hand-written plan JSON is rejected. The five workload
+specs must already authenticate their raw sentinel-bearing bytes.
+
+The host package is not an editable install and it is not imported from the operator's
+checkout. Before blueprint construction, install only the locked runtime dependencies
+under the fixed Python 3.12 venv, copy `src/fractal_ann_diagnostics` byte-for-byte from a
+clean checkout at P into the fixed site-packages root, and remove every write bit from the
+venv, import root, and their intervening directories. The operator rejects symlinks,
+hardlinks, bytecode caches, dirty or ignored source bytes, a different Git tree at P, and
+any content difference between the source package and installed package. It records
+separate identities for:
+
+- the Git commit P and `P:src/fractal_ann_diagnostics` tree object;
+- the mode-independent package content;
+- the permission-sensitive package and complete import-root trees; and
+- the complete venv tree, symlink inventory, and verified-launcher source digest.
+
+On macOS, strip ACLs and extended attributes before making the venv `root:wheel` and
+read-only. Its parent chain must not be writable by the runner. Pre-create the separate
+phase output directories with their intended non-root owner; do not recursively change
+their ownership when sealing the venv.
 
 ```bash
 fractal-provider-plans write-blueprint \
   --candidate-manifest /absolute/control/candidate-source-shell.json \
+  --candidate-source-root /absolute/clean/worktree-at-P \
   --production-control-config /absolute/control/production-control-config.json \
   --production-control-config-write-receipt /absolute/control/production-control-config-write-receipt.json \
   --candidate-image-closure /absolute/control/candidate-image-closure.json \
@@ -47,6 +67,7 @@ fractal-provider-plans write-blueprint \
   --controlled-root /opt/fractal-confirmatory/host-tools \
   --python-executable /opt/fractal-confirmatory/host-tools/python/bin/python3.12 \
   --venv-root /opt/fractal-confirmatory/host-tools/venv \
+  --python-import-root /opt/fractal-confirmatory/host-tools/venv/lib/python3.12/site-packages \
   --gh-executable /opt/fractal-confirmatory/host-tools/gh/bin/gh \
   --runner-listener-executable /opt/fractal-confirmatory/host-tools/runner/bin/Runner.Listener \
   --runner-listener-dll /opt/fractal-confirmatory/host-tools/runner/bin/Runner.Listener.dll \
@@ -72,6 +93,12 @@ The claim nonce is derived from the source-shell digest, P, T, both D values, th
 candidate bootstrap closure, production-control config, host-tool contract, runner name,
 approval environment, runner identity, and fixed mutable roots. A and the final manifest
 digest are absent from the derivation.
+
+Commit A may differ from P, but its package subtree may not. The hosted rehearsal checks
+out A and requires
+`A:src/fractal_ann_diagnostics == P:src/fractal_ann_diagnostics` by Git tree object before
+any runner is admitted. The rehearsal receipt retains both identities. A can freeze the
+manifest and workflows without silently changing the P-bound host control package.
 
 ## Stage 2: registration evidence and raw templates
 
@@ -143,6 +170,16 @@ Each phase plan records the derived registration-bundle root, the canonical four
 digest, and the typed registration-evidence file digest. The finalization receipt repeats those
 maps for all phases, alongside the bootstrap-receipt path and digest. The operator re-admits every
 bundle immediately before publication and rejects any change to a path or digest.
+
+`activation_argv_template` and `activation_environment` describe the inner isolated
+Python activation, not the complete GitHub runner process. The argv template fixes the
+interpreter, isolation flags, launcher-source binding, allowlisted module, command, and
+argument order. The environment object is an exact ten-key subset: the nine C1 host
+closure bindings plus `PYTHONDONTWRITEBYTECODE=1`. The workflow's outer shell supplies
+job-scoped GitHub evidence, claim-artifact coordinates, dynamic output paths, and, for
+label release, the completion-anchor token descriptor. Those wrapper values are
+validated by their own typed contracts; they are not import-path authority and cannot
+replace a key in the inner isolation subset.
 
 The operator copies the registration identity into each embedded bootstrap template and replaces
 only its `workflow_sha` with the C0 sentinel. The plan stores the SHA-256 of those raw

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,9 @@ import yaml
 
 import fractal_ann_diagnostics.provider_rehearsal as rehearsal
 from fractal_ann_diagnostics.execution_claim import PhaseHostToolReceipt
+from fractal_ann_diagnostics.provider_contract import (
+    REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
+)
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "confirmatory-provider-rehearsal.yml"
@@ -24,6 +28,7 @@ COMMIT = "d" * 40
 SOURCE_COMMIT = "e" * 40
 BUILD_CONTEXT_TREE_SHA256 = "d" * 64
 UTC = "2026-07-17T00:00:00+00:00"
+FIXTURE_LAUNCHER = 'print("launcher fixed at A")\n'
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -49,6 +54,110 @@ _UniqueKeyLoader.add_constructor(
     yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
     _construct_unique_mapping,
 )
+
+
+def _git(root: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ("git", "-C", str(root), *arguments),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+@pytest.fixture
+def workflow_source_repository(tmp_path: Path) -> tuple[Path, str, str]:
+    root = (tmp_path / "workflow-source").resolve()
+    package = root / "src" / "fractal_ann_diagnostics"
+    workflow = root / rehearsal.REHEARSAL_WORKFLOW_PATH
+    package.mkdir(parents=True)
+    workflow.parent.mkdir(parents=True)
+    (package / "__init__.py").write_text('"""Fixture package."""\n')
+    workflow.write_text(
+        "name: fixture\n"
+        "env:\n"
+        "  HOST_PYTHON_VERIFIED_LAUNCHER: |\n"
+        f"    {FIXTURE_LAUNCHER.rstrip()}\n"
+    )
+    (root / ".gitignore").write_text("src/fractal_ann_diagnostics/ignored.py\n")
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(
+        root,
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "-qm",
+        "fixture",
+    )
+    head = _git(root, "rev-parse", "HEAD")
+    package_tree = _git(root, "rev-parse", "HEAD:src/fractal_ann_diagnostics")
+    return root, head, package_tree
+
+
+def test_workflow_package_tree_is_recovered_from_exact_clean_git_a(
+    workflow_source_repository: tuple[Path, str, str],
+) -> None:
+    root, head, package_tree = workflow_source_repository
+
+    observed_tree, launcher_sha256 = rehearsal._verify_workflow_package_tree(
+        root,
+        workflow_sha=head,
+    )
+
+    assert observed_tree == package_tree
+    assert launcher_sha256 == rehearsal._sha256(FIXTURE_LAUNCHER.encode())
+
+
+def test_workflow_launcher_is_recovered_from_git_a_not_dirty_worktree(
+    workflow_source_repository: tuple[Path, str, str],
+) -> None:
+    root, head, package_tree = workflow_source_repository
+    (root / rehearsal.REHEARSAL_WORKFLOW_PATH).write_text(
+        'env:\n  HOST_PYTHON_VERIFIED_LAUNCHER: |\n    print("uncommitted substitute")\n'
+    )
+
+    observed_tree, launcher_sha256 = rehearsal._verify_workflow_package_tree(
+        root,
+        workflow_sha=head,
+    )
+
+    assert observed_tree == package_tree
+    assert launcher_sha256 == rehearsal._sha256(FIXTURE_LAUNCHER.encode())
+
+
+def test_workflow_package_tree_rejects_checkout_other_than_a(
+    workflow_source_repository: tuple[Path, str, str],
+) -> None:
+    root, head, _package_tree = workflow_source_repository
+    other = ("0" if head[0] != "0" else "1") + head[1:]
+
+    with pytest.raises(rehearsal.ProviderRehearsalError, match="differs from A"):
+        rehearsal._verify_workflow_package_tree(root, workflow_sha=other)
+
+
+@pytest.mark.parametrize("mutation", ("tracked", "untracked", "ignored"))
+def test_workflow_package_tree_rejects_noncommitted_package_bytes(
+    mutation: str,
+    workflow_source_repository: tuple[Path, str, str],
+) -> None:
+    root, head, _package_tree = workflow_source_repository
+    package = root / "src" / "fractal_ann_diagnostics"
+    if mutation == "tracked":
+        (package / "__init__.py").write_text('"""Changed fixture package."""\n')
+    elif mutation == "untracked":
+        (package / "untracked.py").write_text("UNTRACKED = True\n")
+    else:
+        (package / "ignored.py").write_text("IGNORED = True\n")
+
+    with pytest.raises(
+        rehearsal.ProviderRehearsalError,
+        match="changed, untracked, or ignored",
+    ):
+        rehearsal._verify_workflow_package_tree(root, workflow_sha=head)
 
 
 def _closure(**changes: object) -> rehearsal.CandidateImageClosure:
@@ -124,8 +233,21 @@ def _admission(
         provider_plan_path=f"/controlled/provider-plans/{phase}/provider-plan.json",
         provider_plan_sha256=plan_sha,
         provider_plan_file_sha256=SHA_C,
+        host_controlled_root="/controlled",
         host_python_path="/controlled/python/bin/python3",
         host_python_file_sha256=SHA,
+        host_python_venv_root="/controlled/venv",
+        host_python_venv_tree_sha256=SHA,
+        host_python_venv_symlink_inventory_sha256=SHA_B,
+        host_python_import_root="/controlled/venv/lib/python3.12/site-packages",
+        host_python_import_tree_sha256=SHA_C,
+        host_python_launcher_sha256=REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
+        host_python_package_content_sha256=SHA,
+        host_python_package_tree_sha256=SHA_B,
+        host_python_package_source_commit=SOURCE_COMMIT,
+        host_python_package_source_tree=COMMIT,
+        workflow_python_package_source_tree=COMMIT,
+        workflow_python_launcher_sha256=REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
         host_gh_path="/controlled/gh/bin/gh",
         host_gh_file_sha256=SHA_B,
         host_docker_path="/controlled/docker/bin/docker",
@@ -148,6 +270,134 @@ def _admission(
         run_id=200,
         run_attempt=1,
     )
+
+
+def _fixed_plan(admission: rehearsal.RehearsalPhaseAdmission) -> SimpleNamespace:
+    host_tools = SimpleNamespace(
+        controlled_root=admission.host_controlled_root,
+        python_executable=admission.host_python_path,
+        python_executable_sha256=admission.host_python_file_sha256,
+        venv_root=admission.host_python_venv_root,
+        venv_tree_sha256=admission.host_python_venv_tree_sha256,
+        venv_symlink_inventory_sha256=(admission.host_python_venv_symlink_inventory_sha256),
+        python_import_root=admission.host_python_import_root,
+        python_import_tree_sha256=admission.host_python_import_tree_sha256,
+        python_launcher_sha256=admission.host_python_launcher_sha256,
+        python_package_content_sha256=admission.host_python_package_content_sha256,
+        python_package_tree_sha256=admission.host_python_package_tree_sha256,
+        python_package_source_commit=admission.host_python_package_source_commit,
+        python_package_source_tree=admission.host_python_package_source_tree,
+        gh_executable=admission.host_gh_path,
+        gh_executable_sha256=admission.host_gh_file_sha256,
+        docker_executable=admission.host_docker_path,
+        docker_executable_sha256=admission.host_docker_file_sha256,
+        contract_sha256=admission.host_tools_contract_sha256,
+    )
+    return SimpleNamespace(
+        phase=admission.phase,
+        c1_commit=admission.c0_commit,
+        manifest_sha256=admission.manifest_sha256,
+        provider_plan_path=admission.provider_plan_path,
+        runtime_platform=admission.runtime_platform,
+        runtime_image_role=admission.runtime_image_role,
+        runtime_index_role=admission.runtime_index_role,
+        runner_archive_sha256=admission.runner_archive_sha256,
+        runner_group_id=admission.runner_group_id,
+        runner_version=admission.runner_version,
+        oci_index_digest=admission.candidate_image_index_digest,
+        oci_platform_manifest_digest=admission.candidate_platform_manifest_digest,
+        runtime_probe_receipt_sha256=admission.candidate_runtime_probe_receipt_sha256,
+        plan_sha256=admission.provider_plan_sha256,
+        file_sha256=admission.provider_plan_file_sha256,
+        host_tools=host_tools,
+        to_dict=lambda: {},
+        canonical_file_bytes=lambda: b"{}\n",
+    )
+
+
+def test_fixed_plan_components_bind_the_complete_host_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission = _admission()
+    plan = _fixed_plan(admission)
+    monkeypatch.setattr(
+        rehearsal,
+        "load_materialized_provider_phase_plan",
+        lambda path: plan,
+    )
+
+    plan_dict, plan_bytes, host_tools = rehearsal._load_fixed_plan_components(admission)
+
+    assert plan_dict == {}
+    assert plan_bytes == b"{}\n"
+    assert host_tools is plan.host_tools
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    (
+        ({"host_tools_contract_sha256": SHA_B}, "contract digest differs"),
+        ({"host_controlled_root": "/"}, "controlled_root differs"),
+        (
+            {
+                "host_python_venv_root": "/controlled/other-venv",
+                "host_python_import_root": ("/controlled/other-venv/lib/python3.12/site-packages"),
+            },
+            "venv_root differs",
+        ),
+        ({"host_python_venv_tree_sha256": SHA_B}, "venv_tree_sha256 differs"),
+        (
+            {"host_python_venv_symlink_inventory_sha256": SHA_C},
+            "venv_symlink_inventory_sha256 differs",
+        ),
+        ({"host_python_import_tree_sha256": SHA_B}, "python_import_tree_sha256 differs"),
+        (
+            {
+                "host_python_launcher_sha256": SHA,
+                "workflow_python_launcher_sha256": SHA,
+            },
+            "python_launcher_sha256 differs",
+        ),
+        (
+            {"host_python_package_content_sha256": SHA_B},
+            "python_package_content_sha256 differs",
+        ),
+        (
+            {"host_python_package_tree_sha256": SHA_C},
+            "python_package_tree_sha256 differs",
+        ),
+        (
+            {
+                "candidate_image_source_commit": COMMIT,
+                "host_python_package_source_commit": COMMIT,
+            },
+            "python_package_source_commit differs",
+        ),
+        (
+            {
+                "host_python_package_source_tree": SOURCE_COMMIT,
+                "workflow_python_package_source_tree": SOURCE_COMMIT,
+            },
+            "python_package_source_tree differs",
+        ),
+    ),
+)
+def test_fixed_plan_components_reject_mutated_host_closure_or_provenance(
+    changes: dict[str, object],
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admission = _admission()
+    plan = _fixed_plan(admission)
+    mutated = replace(admission, **changes)
+    monkeypatch.setattr(
+        rehearsal,
+        "load_materialized_provider_phase_plan",
+        lambda path: plan,
+    )
+
+    with pytest.raises(rehearsal.ProviderRehearsalError, match=message):
+        rehearsal._load_fixed_plan_components(mutated)
 
 
 def _bootstrap(
@@ -368,6 +618,9 @@ def _host_tool_receipt() -> PhaseHostToolReceipt:
         python_executable_sha256=SHA,
         venv_tree_sha256=SHA,
         venv_symlink_inventory_sha256=SHA,
+        python_import_tree_sha256=SHA,
+        python_package_content_sha256=SHA,
+        python_package_tree_sha256=SHA,
         gh_executable_sha256=SHA,
         runner_listener_sha256=SHA,
         runner_listener_dll_sha256=SHA,
@@ -740,8 +993,19 @@ def test_plan_uses_production_loader_and_never_emits_hosted_materialization_path
             phase, closure
         )
         host_tools = SimpleNamespace(
+            controlled_root="/controlled",
             python_executable="/controlled/python/bin/python3",
             python_executable_sha256=SHA,
+            venv_root="/controlled/venv",
+            venv_tree_sha256=SHA,
+            venv_symlink_inventory_sha256=SHA,
+            python_import_root="/controlled/venv/lib/python3.12/site-packages",
+            python_import_tree_sha256=SHA,
+            python_launcher_sha256=REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
+            python_package_content_sha256=SHA,
+            python_package_tree_sha256=SHA,
+            python_package_source_commit=SOURCE_COMMIT,
+            python_package_source_tree=COMMIT,
             gh_executable="/controlled/gh/bin/gh",
             gh_executable_sha256=SHA_B,
             docker_executable="/controlled/docker/bin/docker",
@@ -801,6 +1065,14 @@ def test_plan_uses_production_loader_and_never_emits_hosted_materialization_path
         "provider_plan_template_closure_sha256",
         lambda path, *, c0_commit: SHA_B,
     )
+    monkeypatch.setattr(
+        rehearsal,
+        "_verify_workflow_package_tree",
+        lambda source_root, *, workflow_sha: (
+            COMMIT,
+            REGISTERED_HOST_PYTHON_LAUNCHER_SHA256,
+        ),
+    )
     admissions, copies = rehearsal.build_rehearsal_admissions(
         manifest_path=tmp_path / "manifest.json",
         c0_commit=COMMIT,
@@ -809,6 +1081,7 @@ def test_plan_uses_production_loader_and_never_emits_hosted_materialization_path
         run_id=200,
         run_attempt=1,
         materialization_root=tmp_path / "hosted",
+        workflow_source_root=tmp_path,
     )
     assert tuple(materialized) == copies
     assert len(admissions) == 3

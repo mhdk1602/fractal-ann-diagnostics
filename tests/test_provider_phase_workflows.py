@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import os
 import re
 import shlex
@@ -21,6 +22,26 @@ WORKFLOWS = {
     "label-release": WORKFLOW_ROOT / "confirmatory-label-release.yml",
     "analysis": WORKFLOW_ROOT / "confirmatory-analysis.yml",
 }
+REHEARSAL_WORKFLOW = WORKFLOW_ROOT / "confirmatory-provider-rehearsal.yml"
+VERIFIED_LAUNCHER_ENV = "HOST_PYTHON_VERIFIED_LAUNCHER"
+VERIFIED_LAUNCHER_MARKER = "fractal-host-python-verified-launcher-v1"
+VERIFIED_LAUNCHER_PREFIX = (
+    '"$HOST_PYTHON" -I -S -P -s -c "$HOST_PYTHON_VERIFIED_LAUNCHER" '
+    "fractal-host-python-verified-launcher-v1"
+)
+HOST_IMPORT_ENV = frozenset(
+    {
+        "HOST_CONTROLLED_ROOT",
+        "HOST_PYTHON_IMPORT_ROOT",
+        "HOST_PYTHON_IMPORT_TREE_SHA256",
+        "HOST_PYTHON_PACKAGE_CONTENT_SHA256",
+        "HOST_PYTHON_PACKAGE_TREE_SHA256",
+        "HOST_PYTHON_VENV_ROOT",
+        "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256",
+        "HOST_PYTHON_VENV_TREE_SHA256",
+        "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256",
+    }
+)
 JOB_NAMES = dict(claim_module.PHASE_JOB_NAMES)
 C0_REF = "refs/tags/confirmatory-apparatus-c0"
 PINNED_ACTIONS = {
@@ -112,6 +133,26 @@ def _workflow_document(phase: str, *, text: str | None = None) -> dict[str, Any]
     return document
 
 
+def _load_workflow(path: Path) -> dict[str, Any]:
+    document = yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+    assert isinstance(document, dict)
+    return document
+
+
+def _self_hosted_jobs() -> tuple[tuple[Path, str, dict[str, Any]], ...]:
+    rows: list[tuple[Path, str, dict[str, Any]]] = []
+    paths = (*WORKFLOWS.values(), REHEARSAL_WORKFLOW)
+    for path in paths:
+        document = _load_workflow(path)
+        jobs = document["jobs"]
+        for job_id, job in jobs.items():
+            assert isinstance(job_id, str) and isinstance(job, dict)
+            runs_on = job.get("runs-on")
+            if isinstance(runs_on, list) and "self-hosted" in runs_on:
+                rows.append((path, job_id, job))
+    return tuple(rows)
+
+
 def _cli_invocations(phase: str) -> dict[tuple[str, str], tuple[str, ...]]:
     document = _workflow_document(phase)
     jobs = document.get("jobs")
@@ -186,6 +227,10 @@ def _multiline_run_blocks(text: str) -> tuple[str, ...]:
             index += 1
         blocks.append("\n".join(body))
     return tuple(blocks)
+
+
+def _normalized_shell(value: str) -> str:
+    return re.sub(r"\s+", " ", value.replace("\\\n", " ")).strip()
 
 
 def _core_output_contracts() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
@@ -539,6 +584,35 @@ def test_all_seven_invocations_equal_the_live_core_cli_and_output_contract(phase
         assert emitted - consumed == intentionally_internal
 
 
+@pytest.mark.parametrize(
+    ("phase", "output_root", "github_output"),
+    (
+        ("online", "${RUNNER_TEMP}/online-activation", "$GITHUB_OUTPUT"),
+        ("label-release", "$attempt_root", "$attempt_output"),
+        ("analysis", "$attempt_root", "$attempt_output"),
+    ),
+)
+def test_activation_invocation_exactly_materializes_the_registered_inner_argv(
+    phase: str,
+    output_root: str,
+    github_output: str,
+) -> None:
+    assert _cli_invocations(phase)[("execute", "activate")] == (
+        "verify-prerequisites",
+        "--phase",
+        phase,
+        "--suite-attempt-id",
+        "$SUITE_ATTEMPT_ID",
+        "--claim-receipt",
+        "$CLAIM_RECEIPT",
+        "--activate-and-execute",
+        "--output-dir",
+        output_root,
+        "--github-output",
+        github_output,
+    )
+
+
 def test_workflow_parser_rejects_duplicate_keys_and_unregistered_cli_options() -> None:
     duplicate = _text("online").replace(
         "permissions: {}\n",
@@ -607,8 +681,12 @@ def test_guarded_execution_proves_the_fixed_suite_and_phase_receipt(phase: str) 
     assert "runtime_claim_receipt_path" in execute
     assert "runtime_claim_receipt_sha256" in execute
     assert "execute_job_id" in execute
+    assert "phase_host_tool_receipt_path" in execute
+    assert "phase_host_tool_receipt_sha256" in execute
+    assert "phase_host_tool_receipt_file_sha256" in execute
     assert "phase_execution_receipt_path" in execute
     assert "phase_execution_receipt_sha256" in execute
+    assert 'shasum -a 256 "$PHASE_HOST_TOOL_RECEIPT"' in execute
     assert 'shasum -a 256 "$PHASE_EXECUTION_RECEIPT"' in execute
 
 
@@ -629,8 +707,8 @@ def test_label_release_claim_and_provider_time_gate_precede_every_decrypt() -> N
     assert "label_release_inventory_path" in workflow
     assert "label_release_inventory_sha256" in workflow
     assert 'shasum -a 256 "$LABEL_RELEASE_INVENTORY"' in workflow
-    assert "ProviderPhaseExecutionReceipt.from_bytes" in workflow
-    assert "label_release_authority" in workflow
+    assert "fractal_ann_diagnostics.provider_workflow_validation" in workflow
+    assert "label-release-inventory" in workflow
     assert '--claim-receipt "$CLAIM_RECEIPT"' in workflow
     assert "Publish LABELS_RELEASED" in workflow
 
@@ -739,7 +817,17 @@ printf 'fake_attempt=%s\\n' "$count" > "$output"
         "EXPECT_TOKEN_FD": "true" if phase == "label-release" else "false",
         "GH_TOKEN": "test-token",
         "GITHUB_OUTPUT": str(github_output),
+        "HOST_CONTROLLED_ROOT": str(tmp_path / "controlled"),
         "HOST_PYTHON": str(fake_python),
+        "HOST_PYTHON_IMPORT_ROOT": str(tmp_path / "controlled/venv/lib/python3.12/site-packages"),
+        "HOST_PYTHON_IMPORT_TREE_SHA256": "d" * 64,
+        "HOST_PYTHON_PACKAGE_CONTENT_SHA256": "e" * 64,
+        "HOST_PYTHON_PACKAGE_TREE_SHA256": "f" * 64,
+        "HOST_PYTHON_VERIFIED_LAUNCHER": "pass",
+        "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256": "3" * 64,
+        "HOST_PYTHON_VENV_ROOT": str(tmp_path / "controlled/venv"),
+        "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256": "1" * 64,
+        "HOST_PYTHON_VENV_TREE_SHA256": "2" * 64,
         "RUNNER_TEMP": str(tmp_path),
         "SUITE_ATTEMPT_ID": "c" * 64,
         "ZENODO_TOKEN": "A" * 32,
@@ -781,7 +869,8 @@ def test_analysis_claim_precedes_input_and_result_attestation() -> None:
     assert "analysis_execution_receipt_sha256" in workflow
     assert "analysis_execution_receipt_file_sha256" in workflow
     assert 'shasum -a 256 "$ANALYSIS_EXECUTION_RECEIPT"' in workflow
-    assert "load_offline_analysis_execution_receipt" in workflow
+    assert "fractal_ann_diagnostics.provider_workflow_validation" in workflow
+    assert "analysis-execution-receipt" in workflow
     assert "verify-prerequisites" in workflow[bind:guarded_analysis]
     assert '--claim-receipt "$CLAIM_RECEIPT"' in workflow[bind:prepare]
     assert "Publish ANALYSIS_COMPLETE" in workflow
@@ -932,7 +1021,10 @@ def test_hosted_materialization_paths_never_cross_to_the_self_hosted_job(phase: 
         "docker_path",
         "docker_resolved_path",
         "gh_path",
+        "host_controlled_root",
+        "host_python_import_root",
         "host_python_path",
+        "host_python_venv_root",
         "phase_evidence_root",
         "provider_plan_path",
         "runner_bootstrap_receipt_path",
@@ -941,7 +1033,7 @@ def test_hosted_materialization_paths_never_cross_to_the_self_hosted_job(phase: 
     for value in outputs.values():
         match = re.fullmatch(r"\$\{\{ steps\.prerequisites\.outputs\.([a-z0-9_]+) }}", str(value))
         if match is not None and (
-            match.group(1).endswith("_path") or match.group(1) == "phase_evidence_root"
+            match.group(1).endswith(("_path", "_root")) or match.group(1) == "phase_evidence_root"
         ):
             assert match.group(1) in registered_self_host_paths
 
@@ -990,7 +1082,9 @@ def test_self_hosted_execution_uses_only_c1_pinned_host_tools(phase: str) -> Non
         "\n      - name:", maxsplit=1
     )[1]
     assert "GH_TOKEN: ${{ github.token }}" in preparation
-    assert '"$HOST_PYTHON" -m fractal_ann_diagnostics.execution_claim' in execute
+    assert VERIFIED_LAUNCHER_PREFIX in _normalized_shell(execute)
+    assert '"$HOST_PYTHON" -m ' not in execute
+    assert '"$HOST_PYTHON" - ' not in execute
     assert '"$DOCKER_PATH" version' in execute
     assert "docker version" not in execute
     for token in (
@@ -1003,6 +1097,7 @@ def test_self_hosted_execution_uses_only_c1_pinned_host_tools(phase: str) -> Non
         "GH_FILE_SHA256",
         "RUNNER_LISTENER_SHA256",
         "RUNNER_BOOTSTRAP_RECEIPT_SHA256",
+        *sorted(HOST_IMPORT_ENV),
     ):
         assert token in execute
     semantic_gh_version_check = (
@@ -1010,6 +1105,100 @@ def test_self_hosted_execution_uses_only_c1_pinned_host_tools(phase: str) -> Non
     )
     assert semantic_gh_version_check in execute
     assert 'test "$(head -n 1 "${RUNNER_TEMP}/gh-version.txt")" = "$GH_VERSION"' not in execute
+
+
+def test_all_eleven_self_hosted_python_calls_use_one_verified_launcher() -> None:
+    jobs = _self_hosted_jobs()
+    assert len(jobs) == 6
+    observed_calls: list[str] = []
+    launcher_sources: set[str] = set()
+    expected_by_file = {
+        "confirmatory-online-execution.yml": 2,
+        "confirmatory-label-release.yml": 3,
+        "confirmatory-analysis.yml": 3,
+        "confirmatory-provider-rehearsal.yml": 3,
+    }
+    observed_by_file: dict[str, int] = {}
+
+    for path, _job_id, job in jobs:
+        document = _load_workflow(path)
+        workflow_env = document.get("env", {})
+        assert isinstance(workflow_env, dict)
+        launcher = workflow_env.get(VERIFIED_LAUNCHER_ENV)
+        assert isinstance(launcher, str) and launcher.strip()
+        assert "${{" not in launcher
+        assert "vars." not in launcher
+        launcher_sources.add(launcher)
+
+        job_env = job.get("env", {})
+        assert isinstance(job_env, dict)
+        assert VERIFIED_LAUNCHER_ENV not in job_env
+        merged_env = {**workflow_env, **job_env}
+        assert "PYTHONPATH" not in merged_env
+        for step in job["steps"]:
+            run = step.get("run")
+            if not isinstance(run, str):
+                continue
+            executable_calls = re.findall(
+                r'(?m)^\s*"\$HOST_PYTHON"\s+-I\s+-S\s+-P\s+-s\s+-c\s+'
+                r'"\$HOST_PYTHON_VERIFIED_LAUNCHER"',
+                run,
+            )
+            if not executable_calls:
+                continue
+            normalized = _normalized_shell(run)
+            call_count = len(executable_calls)
+            for _ in range(call_count):
+                observed_calls.append(normalized)
+                observed_by_file[path.name] = observed_by_file.get(path.name, 0) + 1
+            assert call_count == 1
+            assert VERIFIED_LAUNCHER_PREFIX in normalized
+            assert '"$HOST_PYTHON" -m ' not in normalized
+            assert re.search(r'"\$HOST_PYTHON"\s+-\s', normalized) is None
+            step_env = step.get("env", {})
+            assert isinstance(step_env, dict)
+            assert VERIFIED_LAUNCHER_ENV not in step_env
+            effective_env = {**merged_env, **step_env}
+            assert HOST_IMPORT_ENV <= set(effective_env)
+
+    assert len(launcher_sources) == 1
+    assert len(observed_calls) == 11
+    assert observed_by_file == expected_by_file
+
+
+def test_verified_launcher_closes_startup_and_allows_only_registered_modules() -> None:
+    documents = [_load_workflow(path) for path in (*WORKFLOWS.values(), REHEARSAL_WORKFLOW)]
+    launchers = {document["env"][VERIFIED_LAUNCHER_ENV] for document in documents}
+    assert len(launchers) == 1
+    launcher = launchers.pop()
+    assert VERIFIED_LAUNCHER_MARKER in launcher
+    assert hashlib.sha256(launcher.encode("utf-8")).hexdigest() == (
+        claim_module.REGISTERED_HOST_PYTHON_LAUNCHER_SHA256
+    )
+    assert "runpy.run_module" in launcher
+    assert launcher.index("runpy.run_module") > launcher.index("HOST_PYTHON_IMPORT_TREE_SHA256")
+    for module in (
+        "fractal_ann_diagnostics.execution_claim",
+        "fractal_ann_diagnostics.provider_rehearsal",
+        "fractal_ann_diagnostics.provider_workflow_validation",
+    ):
+        assert module in launcher
+    for forbidden in (
+        "sitecustomize",
+        "usercustomize",
+        "exec(",
+        "eval(",
+        "subprocess",
+    ):
+        assert forbidden not in launcher
+
+    for path, _job_id, job in _self_hosted_jobs():
+        for step in job["steps"]:
+            run = step.get("run")
+            if not isinstance(run, str):
+                continue
+            assert '"$HOST_PYTHON" -m ' not in run, path
+            assert re.search(r'"\$HOST_PYTHON"\s+-\s', run) is None, path
 
 
 @pytest.mark.parametrize("phase", tuple(WORKFLOWS))

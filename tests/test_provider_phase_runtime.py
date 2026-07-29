@@ -23,6 +23,7 @@ from fractal_ann_diagnostics.execution_claim import (
     ExecutionBeaconContract,
     ExecutionClaimError,
     ExecutionClaimInputs,
+    PhaseHostToolReceipt,
     PhaseRuntimeClaimReceipt,
     ProviderPhasePlan,
     ProviderRunnerBootstrapReceipt,
@@ -55,7 +56,10 @@ from fractal_ann_diagnostics.study import (
     PROVIDER_PHASE_COMMAND_IDS,
     PROVIDER_PHASE_RUNTIME_CEILINGS,
     PROVIDER_PHASE_WORKFLOWS,
+    PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
     PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
+    PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
+    PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
     PROVIDER_PLAN_PHASE_INPUT_BINDING,
     PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
     PROVIDER_PLAN_PREDECESSOR_BINDING,
@@ -262,23 +266,66 @@ def _plan(tmp_path: Path, *, phase: str = "online") -> ProviderPhasePlan:
         tle_interoperability_receipt_sha256=_digest("tle-interop") if tle else None,
         maximum_runtime_seconds=PROVIDER_PHASE_RUNTIME_CEILINGS[phase],
         activation_command_id=PROVIDER_PHASE_COMMAND_IDS[phase],
+        activation_environment={
+            "HOST_CONTROLLED_ROOT": host_tools.controlled_root,
+            "HOST_PYTHON_IMPORT_ROOT": host_tools.python_import_root,
+            "HOST_PYTHON_IMPORT_TREE_SHA256": host_tools.python_import_tree_sha256,
+            "HOST_PYTHON_PACKAGE_CONTENT_SHA256": (host_tools.python_package_content_sha256),
+            "HOST_PYTHON_PACKAGE_TREE_SHA256": host_tools.python_package_tree_sha256,
+            "HOST_PYTHON_VENV_ROOT": host_tools.venv_root,
+            "HOST_PYTHON_VENV_SYMLINK_INVENTORY_SHA256": (host_tools.venv_symlink_inventory_sha256),
+            "HOST_PYTHON_VENV_TREE_SHA256": host_tools.venv_tree_sha256,
+            "HOST_PYTHON_VERIFIED_LAUNCHER_SHA256": (host_tools.python_launcher_sha256),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        },
         activation_argv_template=(
             host_tools.python_executable,
-            "-m",
-            "fractal_ann_diagnostics.provider_phase_runtime",
-            PROVIDER_PHASE_COMMAND_IDS[phase],
-            "--provider-plan",
-            str(provider_path),
+            "-I",
+            "-S",
+            "-P",
+            "-s",
+            "-c",
+            PROVIDER_PLAN_LAUNCHER_SOURCE_BINDING,
+            "fractal-host-python-verified-launcher-v1",
+            "fractal_ann_diagnostics.execution_claim",
+            "verify-prerequisites",
+            "--phase",
+            phase,
             "--suite-attempt-id",
             PROVIDER_PLAN_SUITE_BINDING,
             "--claim-receipt",
             PROVIDER_PLAN_CLAIM_RECEIPT_BINDING,
-            "--phase-input-root",
-            PROVIDER_PLAN_PHASE_INPUT_BINDING,
-            "--phase-output-root",
-            PROVIDER_PLAN_PHASE_OUTPUT_BINDING,
+            "--activate-and-execute",
+            "--output-dir",
+            PROVIDER_PLAN_ACTIVATION_OUTPUT_BINDING,
+            "--github-output",
+            PROVIDER_PLAN_GITHUB_OUTPUT_BINDING,
         ),
         schema_version=PROVIDER_PHASE_PLAN_SCHEMA,
+    )
+
+
+def _phase_host_tool_receipt(plan: ProviderPhasePlan) -> PhaseHostToolReceipt:
+    contract = plan.host_tools
+    return PhaseHostToolReceipt(
+        contract_sha256=contract.contract_sha256,
+        controlled_root_realpath=contract.controlled_root,
+        python_executable_sha256=contract.python_executable_sha256,
+        venv_tree_sha256=contract.venv_tree_sha256,
+        venv_symlink_inventory_sha256=contract.venv_symlink_inventory_sha256,
+        python_import_tree_sha256=contract.python_import_tree_sha256,
+        python_package_content_sha256=contract.python_package_content_sha256,
+        python_package_tree_sha256=contract.python_package_tree_sha256,
+        gh_executable_sha256=contract.gh_executable_sha256,
+        runner_listener_sha256=contract.runner_listener_sha256,
+        runner_listener_dll_sha256=contract.runner_listener_dll_sha256,
+        runner_config_sha256=contract.runner_config_sha256,
+        runner_run_sha256=contract.runner_run_sha256,
+        docker_resolved_executable=contract.docker_resolved_executable,
+        docker_executable_sha256=contract.docker_executable_sha256,
+        host_probe_receipt_file_sha256=contract.host_probe_receipt_sha256,
+        docker_server_probe_receipt_file_sha256=(contract.docker_server_probe_receipt_sha256),
+        verified_at_utc="2026-07-17T12:00:00+00:00",
     )
 
 
@@ -296,6 +343,19 @@ def _request_fixture(
     claim_path = Path(plan.claim_receipt_path(plan.suite_attempt_id))
     claim_bytes = b'{"claim":"fixed"}\n'
     _write(claim_path, claim_bytes)
+    host_receipt = _phase_host_tool_receipt(plan)
+    host_receipt_path = tmp_path / "activation" / "phase-host-tool-receipt.json"
+    host_receipt_bytes = (
+        json.dumps(
+            host_receipt.to_dict(),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        + b"\n"
+    )
+    _write(host_receipt_path, host_receipt_bytes)
     input_root = tmp_path / "phase-input"
     output_root = Path(plan.phase_evidence_root(plan.suite_attempt_id))
     rows: list[ProviderDriverRequest] = []
@@ -341,6 +401,9 @@ def _request_fixture(
         provider_plan_file_sha256=plan.file_sha256,
         claim_receipt_path=str(claim_path),
         claim_receipt_file_sha256=hashlib.sha256(claim_bytes).hexdigest(),
+        phase_host_tool_receipt_path=str(host_receipt_path),
+        phase_host_tool_receipt_sha256=host_receipt.receipt_sha256,
+        phase_host_tool_receipt_file_sha256=hashlib.sha256(host_receipt_bytes).hexdigest(),
         phase_input_root=str(input_root),
         phase_output_root=str(output_root),
         drivers=tuple(rows),
@@ -681,6 +744,9 @@ def test_analysis_retry_reuses_only_the_same_closed_phase_receipt(
         provider_plan_sha256=_digest("plan"),
         provider_plan_file_sha256=_digest("plan-file"),
         claim_receipt_file_sha256=_digest("claim-file"),
+        phase_host_tool_receipt_path=str(tmp_path / "activation" / "phase-host-tool-receipt.json"),
+        phase_host_tool_receipt_sha256=_digest("host-tool-receipt"),
+        phase_host_tool_receipt_file_sha256=_digest("host-tool-receipt-file"),
         runtime_request_sha256=_digest("attempt-one-request"),
         runtime_request_file_sha256=_digest("attempt-one-request-file"),
         outputs=(output,),
@@ -738,6 +804,38 @@ def test_execution_rehashes_every_bound_byte_and_writes_one_receipt(
     receipt_path = Path(request.phase_output_root) / PROVIDER_PHASE_EXECUTION_RECEIPT_FILENAME
     assert receipt_path.read_bytes() == receipt.canonical_file_bytes()
     assert len(receipt.outputs) == len(FIXED_CORPORA)
+
+
+def test_execution_rejects_self_consistent_host_receipt_from_another_contract(
+    tmp_path: Path,
+) -> None:
+    plan, request, _ = _request_fixture(tmp_path)
+    hostile = replace(
+        _phase_host_tool_receipt(plan),
+        contract_sha256=_digest("another-host-tool-contract"),
+    )
+    hostile_bytes = (
+        json.dumps(
+            hostile.to_dict(),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("ascii")
+        + b"\n"
+    )
+    Path(request.phase_host_tool_receipt_path).write_bytes(hostile_bytes)
+    request = replace(
+        request,
+        phase_host_tool_receipt_sha256=hostile.receipt_sha256,
+        phase_host_tool_receipt_file_sha256=hashlib.sha256(hostile_bytes).hexdigest(),
+    )
+
+    with pytest.raises(
+        ProviderPhaseRuntimeError,
+        match="differs from the resolved C1 plan",
+    ):
+        execute_provider_phase_request(plan=plan, request=request)
 
 
 def test_online_supplier_mints_immediately_before_each_delayed_launch(
