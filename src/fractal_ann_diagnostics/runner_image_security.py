@@ -279,20 +279,23 @@ def adjudicate_runner_security(
     if serious:
         raise RunnerSecurityError("raw scan contains a HIGH or CRITICAL vulnerability")
     if image_role == "timelock-release":
-        expected_unknown = Finding(
-            result_class="lang-pkgs",
-            result_type="gobinary",
-            vulnerability_id="GO-2026-5932",
-            package_id="golang.org/x/crypto@v0.54.0",
-            package_name="golang.org/x/crypto",
-            installed_version="v0.54.0",
-            fixed_version="",
-            severity="UNKNOWN",
-            status="affected",
+        expected_unknowns = tuple(
+            Finding(
+                result_class="lang-pkgs",
+                result_type="gobinary",
+                vulnerability_id="GO-2026-5932",
+                package_id=f"golang.org/x/crypto@{version}",
+                package_name="golang.org/x/crypto",
+                installed_version=version,
+                fixed_version="",
+                severity="UNKNOWN",
+                status="affected",
+            )
+            for version in ("v0.53.0", "v0.54.0")
         )
-        if direct.findings != (expected_unknown,):
+        if direct.findings != expected_unknowns:
             raise RunnerSecurityError(
-                "timelock-release scan differs from the sole admitted UNKNOWN finding"
+                "timelock-release scan differs from the exact admitted UNKNOWN findings"
             )
     counts = Counter(finding.severity for finding in direct.findings)
     receipt: dict[str, object] = {

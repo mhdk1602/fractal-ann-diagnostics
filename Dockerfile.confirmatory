@@ -327,16 +327,24 @@ ARG OPA_COMMIT=e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297
 ARG OPA_SOURCE_SHA256=a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637
 ARG OPA_VERSION=1.18.2
 ARG OPA_RELEASE_TIMESTAMP=2026-07-02T13:14:00Z
+ARG GRPC_VERSION=1.82.1
+ARG KLAUSPOST_COMPRESS_VERSION=1.18.7
 ARG ORAS_VERSION=2.6.2
+ARG X_CRYPTO_VERSION=0.53.0
+ARG X_MOD_VERSION=0.37.0
+ARG X_NET_VERSION=0.56.0
 ARG X_SYNC_VERSION=0.22.0
+ARG X_SYS_VERSION=0.46.0
+ARG X_TEXT_VERSION=0.40.0
+ARG X_TOOLS_VERSION=0.47.0
 ARG GO_VERSION=1.26.5
 ARG GO_TARBALL_SHA256_AMD64=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
 ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
 ARG OPA_ORIGINAL_GO_MOD_SHA256=59b4beeea1af5d33ce1c22579e24ab4b0002a3638d0aadeb82a5a4500eb8a175
 ARG OPA_ORIGINAL_GO_SUM_SHA256=be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f
-ARG OPA_PATCHED_GO_MOD_SHA256=049c4ae3f1d58e8dd8885249873f358b4abbab1ece8f910a3549521dffd026e5
-ARG OPA_PATCHED_GO_SUM_SHA256=594c9098656b4b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903
-ARG OPA_DEPENDENCY_DELTA_SHA256=2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524
+ARG OPA_PATCHED_GO_MOD_SHA256=7a4e0b0a05ad266401896008bff46c6dd822e647c1ddcda26de44ccdb781fdb3
+ARG OPA_PATCHED_GO_SUM_SHA256=6b6d66e548bce5eb3b4613daed39d87e563b99fcda36f286dabf1694b93195e1
+ARG OPA_DEPENDENCY_DELTA_SHA256=400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0
 ARG SOURCE_DATE_EPOCH
 
 ENV LANG=C.UTF-8 \
@@ -372,15 +380,39 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
     && test "$(sed -n 's/^go //p' go.mod)" = '1.25.0' \
     && test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = 'v2.6.1' \
     && test "$(go list -m -f '{{.Version}}' golang.org/x/sync)" = 'v0.21.0' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = 'v0.38.0' \
+    && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = 'v1.81.1' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/crypto)" = 'v0.52.0' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/mod)" = 'v0.36.0' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = 'v0.55.0' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/sys)" = 'v0.45.0' \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/tools)" = 'v0.45.0' \
+    && test "$(go list -m -f '{{.Version}}' github.com/klauspost/compress)" = 'v1.18.5' \
     && printf '%s  %s\n' "${OPA_ORIGINAL_GO_MOD_SHA256}" go.mod | sha256sum -c - \
     && printf '%s  %s\n' "${OPA_ORIGINAL_GO_SUM_SHA256}" go.sum | sha256sum -c - \
     && cp go.mod /tmp/go.mod.original \
     && cp go.sum /tmp/go.sum.original \
-    && go mod edit -require="oras.land/oras-go/v2@v${ORAS_VERSION}" \
-    && go mod download "oras.land/oras-go/v2@v${ORAS_VERSION}" \
+    && go mod edit \
+        -require="oras.land/oras-go/v2@v${ORAS_VERSION}" \
+        -require="golang.org/x/text@v${X_TEXT_VERSION}" \
+        -require="google.golang.org/grpc@v${GRPC_VERSION}" \
+        -require="github.com/klauspost/compress@v${KLAUSPOST_COMPRESS_VERSION}" \
+    && go mod download \
+        "oras.land/oras-go/v2@v${ORAS_VERSION}" \
+        "golang.org/x/text@v${X_TEXT_VERSION}" \
+        "google.golang.org/grpc@v${GRPC_VERSION}" \
+        "github.com/klauspost/compress@v${KLAUSPOST_COMPRESS_VERSION}" \
     && go mod tidy -go=1.25.0 -compat=1.25 \
     && test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "v${ORAS_VERSION}" \
     && test "$(go list -m -f '{{.Version}}' golang.org/x/sync)" = "v${X_SYNC_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${X_TEXT_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' google.golang.org/grpc)" = "v${GRPC_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/crypto)" = "v${X_CRYPTO_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/mod)" = "v${X_MOD_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/net)" = "v${X_NET_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/sys)" = "v${X_SYS_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' golang.org/x/tools)" = "v${X_TOOLS_VERSION}" \
+    && test "$(go list -m -f '{{.Version}}' github.com/klauspost/compress)" = "v${KLAUSPOST_COMPRESS_VERSION}" \
     && go mod verify \
     && printf '%s  %s\n' "${OPA_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \
     && printf '%s  %s\n' "${OPA_PATCHED_GO_SUM_SHA256}" go.sum | sha256sum -c - \
@@ -388,13 +420,13 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
     && cp go.sum /out/artifacts/go.sum.patched \
     && diff -u \
         --label go.mod@opa-v1.18.2 \
-        --label go.mod@opa-v1.18.2+oras-v2.6.2 \
+        --label go.mod@opa-v1.18.2+c0-security-overlay-v3 \
         /tmp/go.mod.original go.mod \
         > /out/artifacts/opa-go-mod.patch \
         || test "$?" -eq 1 \
     && diff -u \
         --label go.sum@opa-v1.18.2 \
-        --label go.sum@opa-v1.18.2+oras-v2.6.2 \
+        --label go.sum@opa-v1.18.2+c0-security-overlay-v3 \
         /tmp/go.sum.original go.sum \
         > /out/artifacts/opa-go-sum.patch \
         || test "$?" -eq 1 \
@@ -420,29 +452,49 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sync[[:space:]]+v0\.22\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.40\.0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.82\.1' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/crypto[[:space:]]+v0\.53\.0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.56\.0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sys[[:space:]]+v0\.46\.0' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
+    && grep -E '^[[:space:]]+dep[[:space:]]+github.com/klauspost/compress[[:space:]]+v1\.18\.7' \
+        /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+build[[:space:]]+CGO_ENABLED=0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && opa_sha256="$(sha256sum /out/opa | cut -d ' ' -f 1)" \
-    && printf '{"dependency_delta_sha256":"%s","go_builder_image":"%s","go_tarball_sha256":"%s","go_version":"%s","opa_commit":"%s","opa_release_timestamp":"%s","opa_sha256":"%s","opa_source_sha256":"%s","opa_version":"%s","oras_original_version":"2.6.1","oras_patched_version":"%s","original_go_mod_sha256":"%s","original_go_sum_sha256":"%s","patched_go_mod_sha256":"%s","patched_go_sum_sha256":"%s","schema_version":"fractal-opa-build-receipt-v1","source_date_epoch":%s,"target_arch":"%s","x_sync_original_version":"0.21.0","x_sync_patched_version":"%s"}\n' \
+    && printf '{"dependency_delta_sha256":"%s","go_builder_image":"%s","go_tarball_sha256":"%s","go_version":"%s","module_versions":{"github.com/klauspost/compress":{"original":"1.18.5","patched":"%s"},"golang.org/x/crypto":{"original":"0.52.0","patched":"%s"},"golang.org/x/mod":{"original":"0.36.0","patched":"%s"},"golang.org/x/net":{"original":"0.55.0","patched":"%s"},"golang.org/x/sync":{"original":"0.21.0","patched":"%s"},"golang.org/x/sys":{"original":"0.45.0","patched":"%s"},"golang.org/x/text":{"original":"0.38.0","patched":"%s"},"golang.org/x/tools":{"original":"0.45.0","patched":"%s"},"google.golang.org/grpc":{"original":"1.81.1","patched":"%s"},"oras.land/oras-go/v2":{"original":"2.6.1","patched":"%s"}},"opa_commit":"%s","opa_release_timestamp":"%s","opa_sha256":"%s","opa_source_sha256":"%s","opa_version":"%s","original_go_mod_sha256":"%s","original_go_sum_sha256":"%s","patched_go_mod_sha256":"%s","patched_go_sum_sha256":"%s","schema_version":"fractal-opa-build-receipt-v2","source_date_epoch":%s,"target_arch":"%s"}\n' \
         "${dependency_delta_sha256}" \
         "${GO_IMAGE}" \
         "${go_tarball_sha256}" \
         "${GO_VERSION}" \
+        "${KLAUSPOST_COMPRESS_VERSION}" \
+        "${X_CRYPTO_VERSION}" \
+        "${X_MOD_VERSION}" \
+        "${X_NET_VERSION}" \
+        "${X_SYNC_VERSION}" \
+        "${X_SYS_VERSION}" \
+        "${X_TEXT_VERSION}" \
+        "${X_TOOLS_VERSION}" \
+        "${GRPC_VERSION}" \
+        "${ORAS_VERSION}" \
         "${OPA_COMMIT}" \
         "${OPA_RELEASE_TIMESTAMP}" \
         "${opa_sha256}" \
         "${OPA_SOURCE_SHA256}" \
         "${OPA_VERSION}" \
-        "${ORAS_VERSION}" \
         "${OPA_ORIGINAL_GO_MOD_SHA256}" \
         "${OPA_ORIGINAL_GO_SUM_SHA256}" \
         "${OPA_PATCHED_GO_MOD_SHA256}" \
         "${OPA_PATCHED_GO_SUM_SHA256}" \
         "${SOURCE_DATE_EPOCH}" \
         "${TARGETARCH}" \
-        "${X_SYNC_VERSION}" \
         > /out/artifacts/opa-build-receipt.json \
-    && test "$(/out/opa eval --format raw --stdin-input 'input.schema_version' < /out/artifacts/opa-build-receipt.json)" = 'fractal-opa-build-receipt-v1' \
+    && test "$(/out/opa eval --format raw --stdin-input 'input.schema_version' < /out/artifacts/opa-build-receipt.json)" = 'fractal-opa-build-receipt-v2' \
     && chmod 0555 /out/opa \
     && chmod 0444 /out/artifacts/*
 
@@ -1192,7 +1244,7 @@ LABEL org.opencontainers.image.title="Fractal ANN confirmatory runner" \
       io.fractal-ann.confirmatory.debian-keyring-sha256="506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017" \
       io.fractal-ann.confirmatory.go-builder-image="docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651" \
       io.fractal-ann.confirmatory.opa-commit="e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297" \
-      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524" \
+      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0" \
       io.fractal-ann.confirmatory.opa-rego-sha256="${OPA_REGO_SHA256}" \
       io.fractal-ann.confirmatory.opa-rego-test-sha256="${OPA_REGO_TEST_SHA256}" \
       io.fractal-ann.confirmatory.opa-source-sha256="a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637" \

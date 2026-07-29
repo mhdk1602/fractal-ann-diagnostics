@@ -36,6 +36,18 @@ def _finding(*, severity: str = "MEDIUM", vulnerability_id: str = "CVE-2026-1234
     }
 
 
+def _unknown_x_crypto(version: str) -> dict[str, object]:
+    return {
+        "FixedVersion": None,
+        "InstalledVersion": version,
+        "PkgID": f"golang.org/x/crypto@{version}",
+        "PkgName": "golang.org/x/crypto",
+        "Severity": "UNKNOWN",
+        "Status": "affected",
+        "VulnerabilityID": "GO-2026-5932",
+    }
+
+
 def _trivy(
     *,
     artifact_type: str,
@@ -282,22 +294,14 @@ def test_existing_output_is_never_overwritten(tmp_path: Path) -> None:
     assert paths[-1].read_text() == "custodied\n"
 
 
-def test_timelock_release_admits_only_the_measured_unknown_go_finding(
+def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
     tmp_path: Path,
 ) -> None:
-    unknown = {
-        "FixedVersion": None,
-        "InstalledVersion": "v0.54.0",
-        "PkgID": "golang.org/x/crypto@v0.54.0",
-        "PkgName": "golang.org/x/crypto",
-        "Severity": "UNKNOWN",
-        "Status": "affected",
-        "VulnerabilityID": "GO-2026-5932",
-    }
+    unknowns = [_unknown_x_crypto("v0.53.0"), _unknown_x_crypto("v0.54.0")]
     direct, sbom, cyclonedx, output = _write_evidence(
         tmp_path,
-        direct_findings=[unknown],
-        sbom_findings=[unknown],
+        direct_findings=unknowns,
+        sbom_findings=unknowns,
         result_type="gobinary",
     )
 
@@ -310,25 +314,24 @@ def test_timelock_release_admits_only_the_measured_unknown_go_finding(
         output_path=output,
     )
 
-    assert receipt["finding_count"] == 1
-    assert receipt["severity_counts"]["UNKNOWN"] == 1
-    assert receipt["findings"][0]["vulnerability_id"] == "GO-2026-5932"
-    assert receipt["findings"][0]["fixed_version"] == ""
+    assert receipt["finding_count"] == 2
+    assert receipt["severity_counts"]["UNKNOWN"] == 2
+    assert [row["installed_version"] for row in receipt["findings"]] == [
+        "v0.53.0",
+        "v0.54.0",
+    ]
+    assert {row["vulnerability_id"] for row in receipt["findings"]} == {"GO-2026-5932"}
+    assert {row["fixed_version"] for row in receipt["findings"]} == {""}
     assert receipt["vex_documents"] == []
     assert receipt["vex_required"] is False
 
 
-def test_timelock_release_rejects_a_second_nonserious_finding(tmp_path: Path) -> None:
-    unknown = {
-        "FixedVersion": None,
-        "InstalledVersion": "v0.54.0",
-        "PkgID": "golang.org/x/crypto@v0.54.0",
-        "PkgName": "golang.org/x/crypto",
-        "Severity": "UNKNOWN",
-        "Status": "affected",
-        "VulnerabilityID": "GO-2026-5932",
-    }
-    findings = [unknown, _finding(severity="LOW")]
+def test_timelock_release_rejects_an_extra_nonserious_finding(tmp_path: Path) -> None:
+    findings = [
+        _unknown_x_crypto("v0.53.0"),
+        _unknown_x_crypto("v0.54.0"),
+        _finding(severity="LOW"),
+    ]
     direct, sbom, cyclonedx, output = _write_evidence(
         tmp_path,
         direct_findings=findings,
@@ -336,7 +339,7 @@ def test_timelock_release_rejects_a_second_nonserious_finding(tmp_path: Path) ->
         result_type="gobinary",
     )
 
-    with pytest.raises(RunnerSecurityError, match="sole admitted UNKNOWN"):
+    with pytest.raises(RunnerSecurityError, match="exact admitted UNKNOWN"):
         adjudicate_runner_security(
             platform="linux/arm64",
             image_role="timelock-release",

@@ -2082,7 +2082,7 @@ jobs:
           for path in \
               "$output/safe-to-official.age" \
               "$output/official-to-safe.age"; do
-            test "$(stat -c '%s' "$path")" -eq 609
+            test "$(stat -c '%s' "$path")" -eq 397
           done
           for path in \
               "$output/official-decrypted.txt" \
@@ -2113,14 +2113,14 @@ jobs:
             --arg official_ciphertext_sha256 "$official_ciphertext_sha256" '
               {chain_hash: $chain_hash,
                directions: [
-                 {ciphertext_byte_count: 609,
+                 {ciphertext_byte_count: 397,
                   ciphertext_sha256: $safe_ciphertext_sha256,
                   decrypted_plaintext_sha256:
                     "447c313c4c836c52f2fa29afdbcb2d9ab47637e6596892b4b1f0401eddfd4f4d",
                   decryptor: "official-v1.2.0",
                   encryptor: "source-built-safe-v1.2.0",
                   plaintext_equal: true},
-                 {ciphertext_byte_count: 609,
+                 {ciphertext_byte_count: 397,
                   ciphertext_sha256: $official_ciphertext_sha256,
                   decrypted_plaintext_sha256:
                     "447c313c4c836c52f2fa29afdbcb2d9ab47637e6596892b4b1f0401eddfd4f4d",
@@ -2581,19 +2581,32 @@ jobs:
             and .raw_high_critical_count == 0
             and .severity_counts.HIGH == 0
             and .severity_counts.CRITICAL == 0
-            and .severity_counts.UNKNOWN == 1
-            and .finding_count == 1
-            and .findings == [{
-              fixed_version: "",
-              installed_version: "v0.54.0",
-              package_id: "golang.org/x/crypto@v0.54.0",
-              package_name: "golang.org/x/crypto",
-              result_class: "lang-pkgs",
-              result_type: "gobinary",
-              severity: "UNKNOWN",
-              status: "affected",
-              vulnerability_id: "GO-2026-5932"
-            }]
+            and .severity_counts.UNKNOWN == 2
+            and .finding_count == 2
+            and .findings == [
+              {
+                fixed_version: "",
+                installed_version: "v0.53.0",
+                package_id: "golang.org/x/crypto@v0.53.0",
+                package_name: "golang.org/x/crypto",
+                result_class: "lang-pkgs",
+                result_type: "gobinary",
+                severity: "UNKNOWN",
+                status: "affected",
+                vulnerability_id: "GO-2026-5932"
+              },
+              {
+                fixed_version: "",
+                installed_version: "v0.54.0",
+                package_id: "golang.org/x/crypto@v0.54.0",
+                package_name: "golang.org/x/crypto",
+                result_class: "lang-pkgs",
+                result_type: "gobinary",
+                severity: "UNKNOWN",
+                status: "affected",
+                vulnerability_id: "GO-2026-5932"
+              }
+            ]
             and .vex_required == false
             and .vex_documents == []
           ' "$release_adjudication" >/dev/null
@@ -2716,6 +2729,7 @@ jobs:
             /work/source-packages.txt | sha256sum -c -
           test "$(wc -l < /work/source-packages.txt)" -eq 403
           ! grep -i openpgp /work/source-packages.txt
+          export CGO_ENABLED=0
           GOCACHE=/work/tle-symbol-cache \
             go build \
               -trimpath \
@@ -3249,13 +3263,26 @@ jobs:
           architecture = sys.argv[7]
           source_epoch = int(sys.argv[8])
 
-          assert opa_receipt["schema_version"] == "fractal-opa-build-receipt-v1"
+          assert opa_receipt["schema_version"] == "fractal-opa-build-receipt-v2"
           assert opa_receipt["target_arch"] == architecture
           assert opa_receipt["source_date_epoch"] == source_epoch
           assert opa_receipt["go_version"] == "1.26.5"
           assert opa_receipt["opa_version"] == "1.18.2"
-          assert opa_receipt["oras_patched_version"] == "2.6.2"
-          assert opa_receipt["x_sync_patched_version"] == "0.22.0"
+          assert opa_receipt["module_versions"] == {
+              "github.com/klauspost/compress": {
+                  "original": "1.18.5",
+                  "patched": "1.18.7",
+              },
+              "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.53.0"},
+              "golang.org/x/mod": {"original": "0.36.0", "patched": "0.37.0"},
+              "golang.org/x/net": {"original": "0.55.0", "patched": "0.56.0"},
+              "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
+              "golang.org/x/sys": {"original": "0.45.0", "patched": "0.46.0"},
+              "golang.org/x/text": {"original": "0.38.0", "patched": "0.40.0"},
+              "golang.org/x/tools": {"original": "0.45.0", "patched": "0.47.0"},
+              "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.82.1"},
+              "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
+          }
           assert opa_receipt["opa_sha256"] == hashlib.sha256(opa_path.read_bytes()).hexdigest()
           assert native_receipt["schema_version"] == "fractal-native-build-receipt-v1"
           assert native_receipt["source_date_epoch"] == source_epoch

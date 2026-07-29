@@ -33,8 +33,8 @@ UV_LOCK_SHA256 = "a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57
 HNSWLIB_SHA256 = "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
 OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c"
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
-OPA_PATCHED_GO_SUM_SHA256 = "594c9098656b4b4b4a41f11093ff95babda2d0333077f8a7ad42528466da0903"
-OPA_DEPENDENCY_DELTA_SHA256 = "2b66370c2620bea30ed5ed776a807ea9ac83ca7aef9b2214a2f444cbcf7a7524"
+OPA_PATCHED_GO_SUM_SHA256 = "6b6d66e548bce5eb3b4613daed39d87e563b99fcda36f286dabf1694b93195e1"
+OPA_DEPENDENCY_DELTA_SHA256 = "400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0"
 TLE_PATCHED_GO_SUM_SHA256 = "988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c"
 BUILDX_SHA256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b"
 BUILDKIT_DIGEST = "sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
@@ -109,6 +109,20 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert f"ARG OPA_REGO_TEST_SHA256={OPA_REGO_TEST_SHA256}" in dockerfile
     assert f"ARG OPA_PATCHED_GO_SUM_SHA256={OPA_PATCHED_GO_SUM_SHA256}" in dockerfile
     assert f"ARG OPA_DEPENDENCY_DELTA_SHA256={OPA_DEPENDENCY_DELTA_SHA256}" in dockerfile
+    assert "fractal-opa-build-receipt-v2" in dockerfile
+    for module, original, patched in (
+        ("github.com/klauspost/compress", "1.18.5", "1.18.7"),
+        ("golang.org/x/crypto", "0.52.0", "0.53.0"),
+        ("golang.org/x/mod", "0.36.0", "0.37.0"),
+        ("golang.org/x/net", "0.55.0", "0.56.0"),
+        ("golang.org/x/sync", "0.21.0", "0.22.0"),
+        ("golang.org/x/sys", "0.45.0", "0.46.0"),
+        ("golang.org/x/text", "0.38.0", "0.40.0"),
+        ("golang.org/x/tools", "0.45.0", "0.47.0"),
+        ("google.golang.org/grpc", "1.81.1", "1.82.1"),
+        ("oras.land/oras-go/v2", "2.6.1", "2.6.2"),
+    ):
+        assert f'"{module}":{{"original":"{original}","patched":"%s"}}' in dockerfile
     assert dockerfile.count(f"ARG TLE_PATCHED_GO_SUM_SHA256={TLE_PATCHED_GO_SUM_SHA256}") == 2
     digest_arguments = re.findall(
         r"^ARG ([A-Z0-9_]*SHA256[A-Z0-9_]*)=([^\s]+)$",
@@ -612,10 +626,26 @@ def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
     assert "release-linux-arm64-trivy.cdx.json" in workflow
     assert "release-linux-arm64-trivy-sbom-rescan.json" in workflow
     assert "--image-role timelock-release" in workflow
-    assert ".severity_counts.UNKNOWN == 1" in workflow
-    assert 'vulnerability_id: "GO-2026-5932"' in workflow
+    assert ".severity_counts.UNKNOWN == 2" in workflow
+    assert ".finding_count == 2" in workflow
+    assert workflow.count('vulnerability_id: "GO-2026-5932"') >= 2
+    assert 'installed_version: "v0.53.0"' in workflow
+    assert 'installed_version: "v0.54.0"' in workflow
     assert ".vex_required == false" in workflow
     assert ".vex_documents == []" in workflow
+
+
+def test_tlock_interoperability_receipt_matches_the_pinned_ciphertext_size() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    step = workflow[
+        workflow.index(
+            "- name: Prove safe and official tlock v1.2.0 Quicknet interoperability"
+        ) : workflow.index("- name: Require public anonymous digest access")
+    ]
+
+    assert """test "$(stat -c '%s' "$path")" -eq 397""" in step
+    assert step.count("ciphertext_byte_count: 397") == 2
+    assert "609" not in step
 
 
 def test_offline_trivy_image_scans_use_memory_cache_with_read_only_db() -> None:
@@ -827,6 +857,9 @@ def test_workflow_retains_versioned_govulncheck_reachability_without_vex() -> No
     assert "d37ef9b9e10d3b3b17569653d5d3be68f5dba50f72d6494fcf63a360c952936b" in step
     assert "go list -deps ./cmd/tle" in step
     assert "! grep -i openpgp" in step
+    assert step.index("go list -deps ./cmd/tle") < step.index("export CGO_ENABLED=0")
+    assert step.index("export CGO_ENABLED=0") < step.index("go build")
+    assert step.index("export CGO_ENABLED=0") < step.index("go install")
     assert "-mode=binary" in step
     assert "tlock_reachability.py" in step
     assert 'finding_trace_level == "module"' in step
