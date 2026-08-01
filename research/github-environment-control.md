@@ -18,6 +18,12 @@ Both environments must set `protected_branches=false` and `custom_branch_policie
 environment, rule, reviewer, branch, or tag fails admission. The confirmatory rule is recorded
 sole-operator self-approval. It is not independent review or independent custody.
 
+GitHub's environment detail response also emits one transport marker with
+`type="branch_policy"` whenever custom deployment policies are enabled. The verifier requires
+exactly one closed `{id, node_id, type}` marker in each environment, accepts it only alongside
+`custom_branch_policies=true`, and does not promote it into a second semantic protection rule.
+The separate deployment-policy response remains authoritative for the exact branch and tag list.
+
 The GitHub environments REST response does not provide admissible evidence of the repository's
 administrator-bypass configuration. The receipt therefore fixes
 `admin_bypass_rest_attestation` to

@@ -44,6 +44,15 @@ API_RESPONSE_ROLES = (
     "deployment-policies-confirmatory-rehearsal",
 )
 
+_DEPLOYMENT_BRANCH_POLICY_FIELDS = frozenset({"custom_branch_policies", "protected_branches"})
+_BRANCH_POLICY_MARKER_FIELDS = frozenset({"id", "node_id", "type"})
+_REQUIRED_REVIEWERS_RULE_FIELDS = frozenset(
+    {"id", "node_id", "prevent_self_review", "reviewers", "type"}
+)
+_REVIEWER_BINDING_FIELDS = frozenset({"reviewer", "type"})
+_DEPLOYMENT_POLICY_RESPONSE_FIELDS = frozenset({"branch_policies", "total_count"})
+_DEPLOYMENT_POLICY_FIELDS = frozenset({"id", "name", "node_id", "type"})
+
 
 class GitHubEnvironmentControlError(ValueError):
     """The retained API evidence or canonical receipt is inadmissible."""
@@ -560,8 +569,9 @@ def _environment_from_api(
         raise GitHubEnvironmentControlError(
             f"{name} environment identity differs from the fixed repository"
         )
-    branch_policy = _object(
+    branch_policy = _closed_object(
         detail.get("deployment_branch_policy"),
+        _DEPLOYMENT_BRANCH_POLICY_FIELDS,
         label=f"{name} deployment_branch_policy",
     )
     protected_branches = branch_policy.get("protected_branches")
@@ -573,21 +583,76 @@ def _environment_from_api(
         detail.get("protection_rules"),
         label=f"{name} protection_rules",
     )
+    branch_policy_markers: list[Mapping[str, Any]] = []
+    reviewer_rules: list[Mapping[str, Any]] = []
+    protection_rule_ids: set[int] = set()
+    protection_rule_node_ids: set[str] = set()
+    for position, value in enumerate(protection_values):
+        rule = _object(value, label=f"{name} protection rule {position}")
+        rule_type = rule.get("type")
+        if type(rule_type) is not str:
+            raise GitHubEnvironmentControlError(
+                f"{name} protection rule {position} type must be a string"
+            )
+        if rule_type == "branch_policy":
+            rule = _closed_object(
+                rule,
+                _BRANCH_POLICY_MARKER_FIELDS,
+                label=f"{name} branch_policy marker",
+            )
+            branch_policy_markers.append(rule)
+        elif rule_type == "required_reviewers":
+            rule = _closed_object(
+                rule,
+                _REQUIRED_REVIEWERS_RULE_FIELDS,
+                label=f"{name} required-reviewers rule",
+            )
+            reviewer_rules.append(rule)
+        else:
+            raise GitHubEnvironmentControlError(
+                f"{name} protection rules contain unknown type {rule_type!r}"
+            )
+        rule_id = _positive_integer(
+            rule.get("id"),
+            label=f"{name} protection rule ID",
+        )
+        node_id = _text(
+            rule.get("node_id"),
+            label=f"{name} protection rule node_id",
+        )
+        if rule_id in protection_rule_ids:
+            raise GitHubEnvironmentControlError(f"{name} repeats a protection rule ID")
+        if node_id in protection_rule_node_ids:
+            raise GitHubEnvironmentControlError(f"{name} repeats a protection rule node_id")
+        protection_rule_ids.add(rule_id)
+        protection_rule_node_ids.add(node_id)
+
+    if branch_policy_markers and custom_branch_policies is not True:
+        raise GitHubEnvironmentControlError(
+            f"{name} branch_policy marker contradicts custom_branch_policies"
+        )
+    if len(branch_policy_markers) != 1:
+        raise GitHubEnvironmentControlError(f"{name} must contain exactly one branch_policy marker")
+
     protection_rules: tuple[ProtectionRule, ...] = ()
     if name == "confirmatory":
-        if len(protection_values) != 1:
+        if len(reviewer_rules) != 1:
             raise GitHubEnvironmentControlError(
                 "confirmatory must have exactly one required-reviewers rule"
             )
-        rule = _object(protection_values[0], label="confirmatory protection rule")
-        if rule.get("type") != "required_reviewers" or rule.get("prevent_self_review") is not False:
+        rule = reviewer_rules[0]
+        if rule.get("prevent_self_review") is not False:
             raise GitHubEnvironmentControlError(
                 "confirmatory must permit sole-operator self-review"
             )
         reviewer_values = _array(rule.get("reviewers"), label="confirmatory reviewers")
         if len(reviewer_values) != 1:
             raise GitHubEnvironmentControlError("confirmatory must have exactly one reviewer")
-        reviewer_binding = _object(reviewer_values[0], label="confirmatory reviewer binding")
+        reviewer_binding = _closed_object(
+            reviewer_values[0],
+            _REVIEWER_BINDING_FIELDS,
+            label="confirmatory reviewer binding",
+        )
         reviewer = _object(
             reviewer_binding.get("reviewer"),
             label="confirmatory reviewer",
@@ -605,25 +670,36 @@ def _environment_from_api(
                 ),
             ),
         )
-    elif protection_values:
-        raise GitHubEnvironmentControlError("confirmatory-rehearsal must have no protection rules")
+    elif reviewer_rules:
+        raise GitHubEnvironmentControlError(
+            "confirmatory-rehearsal cannot contain a required-reviewers rule"
+        )
 
-    total_count = policy_response.get("total_count")
+    policy_payload = _closed_object(
+        policy_response,
+        _DEPLOYMENT_POLICY_RESPONSE_FIELDS,
+        label=f"{name} deployment policy response",
+    )
+    total_count = policy_payload.get("total_count")
     policy_values = _array(
-        policy_response.get("branch_policies"),
+        policy_payload.get("branch_policies"),
         label=f"{name} branch_policies",
     )
     if type(total_count) is not int or total_count != len(policy_values):
         raise GitHubEnvironmentControlError(f"{name} deployment policy count is incomplete")
     policies: list[DeploymentPolicy] = []
+    policy_node_ids: set[str] = set()
     for value in policy_values:
-        policy = _object(value, label=f"{name} deployment policy")
+        policy = _closed_object(
+            value,
+            _DEPLOYMENT_POLICY_FIELDS,
+            label=f"{name} deployment policy",
+        )
         policy_id = _positive_integer(policy.get("id"), label=f"{name} deployment policy ID")
-        expected_policy_url = f"{expected_url}/deployment-branch-policies/{policy_id}"
-        if policy.get("url") != expected_policy_url:
-            raise GitHubEnvironmentControlError(
-                f"{name} deployment policy URL differs from the fixed repository"
-            )
+        node_id = _text(policy.get("node_id"), label=f"{name} deployment policy node_id")
+        if node_id in policy_node_ids:
+            raise GitHubEnvironmentControlError(f"{name} repeats a deployment policy node_id")
+        policy_node_ids.add(node_id)
         policies.append(
             DeploymentPolicy(
                 policy_id=policy_id,

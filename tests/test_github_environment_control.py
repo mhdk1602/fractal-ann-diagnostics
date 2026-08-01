@@ -42,12 +42,20 @@ def _environment(
     *,
     protection_rules: list[object],
 ) -> dict[str, object]:
+    marker_id = environment_id + 10_000
     return {
         "id": environment_id,
         "name": name,
         "url": f"{REPOSITORY_API_URL}/environments/{name}",
         "html_url": f"https://github.com/{REPOSITORY}/deployments/activity_log?environments_filter={name}",
-        "protection_rules": protection_rules,
+        "protection_rules": [
+            *protection_rules,
+            {
+                "id": marker_id,
+                "node_id": f"branch-policy-node-{marker_id}",
+                "type": "branch_policy",
+            },
+        ],
         "deployment_branch_policy": {
             "protected_branches": False,
             "custom_branch_policies": True,
@@ -57,15 +65,31 @@ def _environment(
     }
 
 
-def _policy(name: str, environment: str, policy_id: int, policy_type: str) -> dict[str, object]:
+def _policy(name: str, policy_id: int, policy_type: str) -> dict[str, object]:
     return {
         "id": policy_id,
+        "node_id": f"deployment-policy-node-{policy_id}",
         "name": name,
         "type": policy_type,
-        "url": (
-            f"{REPOSITORY_API_URL}/environments/{environment}/"
-            f"deployment-branch-policies/{policy_id}"
-        ),
+    }
+
+
+def _reviewer_rule(rule_id: int) -> dict[str, object]:
+    return {
+        "id": rule_id,
+        "node_id": f"required-reviewers-node-{rule_id}",
+        "type": "required_reviewers",
+        "prevent_self_review": False,
+        "reviewers": [
+            {
+                "type": "User",
+                "reviewer": {
+                    "id": REVIEWER_USER_ID,
+                    "login": REVIEWER_LOGIN,
+                    "node_id": "MDQ6VXNlcjE0MjA4NTQx",
+                },
+            }
+        ],
     }
 
 
@@ -73,19 +97,7 @@ def _payloads() -> dict[str, dict[str, object]]:
     confirmatory = _environment(
         "confirmatory",
         101,
-        protection_rules=[
-            {
-                "id": 701,
-                "type": "required_reviewers",
-                "prevent_self_review": False,
-                "reviewers": [
-                    {
-                        "type": "User",
-                        "reviewer": {"id": REVIEWER_USER_ID, "login": REVIEWER_LOGIN},
-                    }
-                ],
-            }
-        ],
+        protection_rules=[_reviewer_rule(701)],
     )
     rehearsal = _environment("confirmatory-rehearsal", 102, protection_rules=[])
     return {
@@ -108,14 +120,14 @@ def _payloads() -> dict[str, dict[str, object]]:
         "deployment-policies-confirmatory": {
             "total_count": 2,
             "branch_policies": [
-                _policy("confirmatory-freeze-c1", "confirmatory", 202, "tag"),
-                _policy("confirmatory-apparatus-c0", "confirmatory", 201, "tag"),
+                _policy("confirmatory-freeze-c1", 202, "tag"),
+                _policy("confirmatory-apparatus-c0", 201, "tag"),
             ],
         },
         "environment-confirmatory-rehearsal": rehearsal,
         "deployment-policies-confirmatory-rehearsal": {
             "total_count": 1,
-            "branch_policies": [_policy("c0-candidate/*", "confirmatory-rehearsal", 203, "branch")],
+            "branch_policies": [_policy("c0-candidate/*", 203, "branch")],
         },
     }
 
@@ -263,7 +275,7 @@ def test_rejects_repository_and_environment_identity_mutations(
             "environment-confirmatory-rehearsal",
             ("protection_rules",),
             [{"type": "wait_timer", "wait_timer": 1}],
-            "must have no protection rules",
+            "unknown type",
         ),
     ),
 )
@@ -307,7 +319,7 @@ def test_rejects_missing_or_multiple_confirmatory_reviewers(tmp_path: Path) -> N
             "environment-confirmatory-rehearsal",
             ("deployment_branch_policy", "custom_branch_policies"),
             False,
-            "explicit custom",
+            "contradicts custom_branch_policies",
         ),
         (
             "deployment-policies-confirmatory",
@@ -323,9 +335,9 @@ def test_rejects_missing_or_multiple_confirmatory_reviewers(tmp_path: Path) -> N
         ),
         (
             "deployment-policies-confirmatory-rehearsal",
-            ("branch_policies", 0, "url"),
-            "https://api.github.com/repos/other/repo/policy/203",
-            "fixed repository",
+            ("branch_policies", 0, "node_id"),
+            203,
+            "canonical non-empty string",
         ),
         (
             "deployment-policies-confirmatory-rehearsal",
@@ -350,13 +362,13 @@ def test_rejects_deployment_policy_mutations(
 
 def test_rejects_extra_or_missing_deployment_policy(tmp_path: Path) -> None:
     for suffix, policies in (
-        ("missing", [_policy("confirmatory-apparatus-c0", "confirmatory", 201, "tag")]),
+        ("missing", [_policy("confirmatory-apparatus-c0", 201, "tag")]),
         (
             "extra",
             [
-                _policy("confirmatory-apparatus-c0", "confirmatory", 201, "tag"),
-                _policy("confirmatory-freeze-c1", "confirmatory", 202, "tag"),
-                _policy("confirmatory-extra", "confirmatory", 204, "tag"),
+                _policy("confirmatory-apparatus-c0", 201, "tag"),
+                _policy("confirmatory-freeze-c1", 202, "tag"),
+                _policy("confirmatory-extra", 204, "tag"),
             ],
         ),
     ):
@@ -369,6 +381,155 @@ def test_rejects_extra_or_missing_deployment_policy(tmp_path: Path) -> None:
         root.mkdir()
         with pytest.raises(GitHubEnvironmentControlError, match="deployment policies differ"):
             _verify(root, payloads)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("missing", "exactly one branch_policy marker"),
+        ("duplicate", "exactly one branch_policy marker"),
+        ("unknown-field", "closed schema"),
+        ("noninteger-id", "positive integer"),
+        ("empty-node", "canonical non-empty string"),
+        ("unknown-type", "unknown type"),
+        ("duplicate-id", "repeats a protection rule ID"),
+        ("duplicate-node", "repeats a protection rule node_id"),
+    ),
+)
+def test_branch_policy_marker_is_exact_and_unique(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    payloads = _payloads()
+    rules = payloads["environment-confirmatory"]["protection_rules"]
+    assert isinstance(rules, list)
+    marker = rules[1]
+    assert isinstance(marker, dict)
+    reviewer = rules[0]
+    assert isinstance(reviewer, dict)
+
+    if mutation == "missing":
+        rules.pop()
+    elif mutation == "duplicate":
+        rules.append(
+            {
+                "id": 10_102,
+                "node_id": "branch-policy-node-10102",
+                "type": "branch_policy",
+            }
+        )
+    elif mutation == "unknown-field":
+        marker["unexpected"] = True
+    elif mutation == "noninteger-id":
+        marker["id"] = True
+    elif mutation == "empty-node":
+        marker["node_id"] = ""
+    elif mutation == "unknown-type":
+        marker["type"] = "wait_timer"
+    elif mutation == "duplicate-id":
+        marker["id"] = reviewer["id"]
+    else:
+        marker["node_id"] = reviewer["node_id"]
+
+    with pytest.raises(GitHubEnvironmentControlError, match=message):
+        _verify(tmp_path, payloads)
+
+
+@pytest.mark.parametrize(
+    ("role", "rule_id", "message"),
+    (
+        (
+            "environment-confirmatory",
+            702,
+            "exactly one required-reviewers rule",
+        ),
+        (
+            "environment-confirmatory-rehearsal",
+            703,
+            "cannot contain a required-reviewers rule",
+        ),
+    ),
+)
+def test_required_reviewer_rule_partition_is_exact(
+    tmp_path: Path,
+    role: str,
+    rule_id: int,
+    message: str,
+) -> None:
+    payloads = _payloads()
+    rules = payloads[role]["protection_rules"]
+    assert isinstance(rules, list)
+    rules.append(_reviewer_rule(rule_id))
+
+    with pytest.raises(GitHubEnvironmentControlError, match=message):
+        _verify(tmp_path, payloads)
+
+
+@pytest.mark.parametrize(
+    ("path", "message"),
+    (
+        (("protection_rules", 0, "unexpected"), "closed schema"),
+        (("protection_rules", 0, "reviewers", 0, "unexpected"), "closed schema"),
+    ),
+)
+def test_required_reviewer_transport_objects_reject_unknown_fields(
+    tmp_path: Path,
+    path: tuple[str | int, ...],
+    message: str,
+) -> None:
+    payloads = _payloads()
+    _set_path(payloads["environment-confirmatory"], path, True)
+    with pytest.raises(GitHubEnvironmentControlError, match=message):
+        _verify(tmp_path, payloads)
+
+
+@pytest.mark.parametrize(
+    ("role", "path", "replacement", "message"),
+    (
+        (
+            "environment-confirmatory",
+            ("deployment_branch_policy", "unexpected"),
+            True,
+            "closed schema",
+        ),
+        (
+            "deployment-policies-confirmatory",
+            ("unexpected",),
+            True,
+            "closed schema",
+        ),
+        (
+            "deployment-policies-confirmatory",
+            ("branch_policies", 0, "url"),
+            "https://api.github.com/unregistered",
+            "closed schema",
+        ),
+        (
+            "deployment-policies-confirmatory",
+            ("branch_policies", 1, "id"),
+            202,
+            "repeats a deployment policy ID",
+        ),
+        (
+            "deployment-policies-confirmatory",
+            ("branch_policies", 1, "node_id"),
+            "deployment-policy-node-202",
+            "repeats a deployment policy node_id",
+        ),
+    ),
+)
+def test_deployment_policy_transport_is_closed_and_unambiguous(
+    tmp_path: Path,
+    role: str,
+    path: tuple[str | int, ...],
+    replacement: object,
+    message: str,
+) -> None:
+    payloads = _payloads()
+    _set_path(payloads[role], path, replacement)
+    with pytest.raises(GitHubEnvironmentControlError, match=message):
+        _verify(tmp_path, payloads)
 
 
 def test_rejects_duplicate_keys_and_nonfinite_numbers(tmp_path: Path) -> None:
