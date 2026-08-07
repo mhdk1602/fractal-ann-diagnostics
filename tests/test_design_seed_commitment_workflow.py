@@ -8,6 +8,7 @@ from operators import design_seed_commitment as operator
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / operator.ATTESTATION_WORKFLOW
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
 def _workflow() -> tuple[str, dict[str, object]]:
@@ -81,6 +82,15 @@ def test_checkout_fetches_source_p_for_exact_tree_verification() -> None:
     assert checkout["with"]["ref"] == "design-seed-apparatus-v1"
     assert checkout["with"]["fetch-depth"] == 0
     assert checkout["with"]["fetch-tags"] is True
+
+
+def test_ci_test_matrix_fetches_source_p_for_exact_tree_verification() -> None:
+    parsed = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    steps = parsed["jobs"]["test"]["steps"]
+    checkout = next(step for step in steps if step["name"] == "Check out repository")
+
+    assert checkout["with"]["fetch-depth"] == 0
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_every_dispatch_must_create_the_unique_scope_release() -> None:
