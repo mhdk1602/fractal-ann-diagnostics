@@ -355,7 +355,7 @@ def _stage(
                 "fit_queries": 2,
                 "qrels": 5,
                 "sealed_queries": 1,
-                "structural_excluded_queries": (4 if structural_exclusions else 0),
+                "partition_excluded_queries": (4 if structural_exclusions else 0),
             }
         },
         "hotpotqa_fullwiki_scope": {},
@@ -703,7 +703,7 @@ def test_shared_positive_content_across_corpora_and_stages_is_rejected(
         "fit_queries": 0,
         "qrels": 1,
         "sealed_queries": 1,
-        "structural_excluded_queries": 0,
+        "partition_excluded_queries": 0,
     }
     _repin_inventory(staged, inventory)
 

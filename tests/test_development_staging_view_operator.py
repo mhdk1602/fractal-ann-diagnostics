@@ -187,7 +187,7 @@ def _fixture(
             "fit_queries": fit_count,
             "qrels": fit_count + calibration_count + sealed_count,
             "sealed_queries": sealed_count,
-            "structural_excluded_queries": 0,
+            "partition_excluded_queries": 0,
         }
         for stage in operator.REGISTERED_STAGES:
             queries: list[dict[str, object]] = []
@@ -909,6 +909,64 @@ def test_binds_inventory_counts_to_partition_strata(tmp_path: Path) -> None:
         operator.DevelopmentStagingViewError,
         match="inventory and audit query counts differ",
     ):
+        _build(fixture)
+
+    assert not fixture.output_root.exists()
+    assert not _hidden_work_paths(fixture)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            "missing-canonical",
+            "inventory and audit partition_excluded_queries counts differ for scifact",
+        ),
+        (
+            "legacy-alias",
+            "inventory count row for scifact contains forbidden structural_excluded_queries",
+        ),
+    ),
+)
+def test_requires_canonical_partition_exclusion_count_spelling(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    fixture = _fixture(tmp_path)
+    _thaw_projection(fixture.projection_root)
+    inventory_path = fixture.projection_root / "inventory.json"
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    scifact_counts = inventory["counts"]["scifact"]
+    if mutation == "missing-canonical":
+        scifact_counts.pop("partition_excluded_queries")
+    else:
+        scifact_counts["structural_excluded_queries"] = scifact_counts["partition_excluded_queries"]
+    inventory_bytes = _canonical(inventory)
+    inventory_sha256 = _digest(inventory_bytes)
+    _write(inventory_path, inventory_bytes)
+    _write(
+        fixture.projection_root / "inventory.sha256",
+        f"{inventory_sha256}  inventory.json\n".encode("ascii"),
+    )
+    projection_path = fixture.projection_root / operator.PROJECTION_RECEIPT_FILENAME
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    projection["source_inventory_sha256"] = inventory_sha256
+    projection_bytes = _canonical(projection)
+    _write(projection_path, projection_bytes)
+    _freeze_projection(fixture.projection_root)
+
+    os.chmod(fixture.partition_audit, 0o600)
+    audit = json.loads(fixture.partition_audit.read_text(encoding="utf-8"))
+    audit["staged_inventory_sha256"] = inventory_sha256
+    audit_bytes = _canonical(audit)
+    _write(fixture.partition_audit, audit_bytes)
+    os.chmod(fixture.partition_audit, 0o400)
+
+    fixture.inventory_sha256 = inventory_sha256
+    fixture.projection_receipt_sha256 = _digest(projection_bytes)
+    fixture.partition_audit_sha256 = _digest(audit_bytes)
+    with pytest.raises(operator.DevelopmentStagingViewError, match=message):
         _build(fixture)
 
     assert not fixture.output_root.exists()

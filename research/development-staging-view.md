@@ -61,6 +61,9 @@ counts, structural exclusions, query coverage, and membership digests. It then b
 assignment seed, staging configuration, fifteen corpus/stage strata, source visibility, and count
 rows to the inventory.
 
+For every corpus, the audit's structural-exclusion query count must equal the inventory v2
+`partition_excluded_queries` field. No alternate count-field spelling is admitted.
+
 For `assignments.jsonl` and every fit/calibration query file, the inventory row, projection row,
 and partition-audit source row must be identical. Query record counts must also equal the audit
 stratum counts. The receipt binds:

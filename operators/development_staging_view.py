@@ -2035,6 +2035,10 @@ def _validate_partition_bindings(
         count_row = counts_value[corpus]
         if not isinstance(count_row, Mapping) or not all(isinstance(key, str) for key in count_row):
             raise DevelopmentStagingViewError(f"inventory count row for {corpus} must be an object")
+        if "structural_excluded_queries" in count_row:
+            raise DevelopmentStagingViewError(
+                f"inventory count row for {corpus} contains forbidden structural_excluded_queries"
+            )
         for stage in REGISTERED_STAGES:
             field = f"{stage}_queries"
             if (
@@ -2056,7 +2060,7 @@ def _validate_partition_bindings(
             ("qrels", expected_qrels),
             ("documents", expected_documents),
             (
-                "structural_excluded_queries",
+                "partition_excluded_queries",
                 exclusion_by_corpus.get(corpus, 0),
             ),
         ):
