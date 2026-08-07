@@ -1,9 +1,9 @@
 # Post-embedding development operator
 
 The post-embedding operator closes the gap between the five verified paired-Qwen stores and the
-production artifact factory. It performs the full development sequence under one typed receipt:
-cohort selection, development-label materialization, policy compilation, authorized HNSW builds,
-paired execution, model freeze, and joint-power design.
+production artifact factory. It accepts and reproduces the independently committed cohort
+selection, then performs development-label materialization, policy compilation, authorized HNSW
+builds, paired execution, model freeze, and joint-power design under one typed receipt.
 
 The implementation is
 [`post_embedding_development.py`](../src/fractal_ann_diagnostics/post_embedding_development.py).
@@ -17,7 +17,7 @@ The canonical config contains exactly eight operator-controlled values:
 | --- | --- |
 | `production_embedding_config_path` | Exact canonical config used to build all five embedding stores |
 | `production_embedding_config_sha256` | File SHA-256 for that config |
-| `full_staged_root` | Full staged-data root used for development selection and labels |
+| `full_staged_root` | Fixed `view/` inside the verified phase-two development package |
 | `full_staged_inventory_sha256` | Exact `inventory.json` SHA-256 |
 | `partition_audit_path` | Canonical query-partition audit path |
 | `partition_audit_file_sha256` | Exact canonical audit-file SHA-256 |
@@ -35,7 +35,9 @@ package that holds sealed qrels. The label-free selection receipt is reproduced 
 before the materializer resolves or opens development label sources. Sealed qrels remain outside
 every development type and mounted path admitted downstream.
 
-The phase-1 selection can be prepared under a smaller mount. The standalone
+A verified [complete NFC custody successor](nfc-custody-successor.md) is the source for the fresh
+partition audit; neither artifact enters the phase-one selection process as a label payload. The
+phase-one selection is prepared under a smaller mount. The standalone
 [`development_staging_view.py`](../operators/development_staging_view.py) host operator copies only
 the inventory controls, complete assignment-control ledger, and ten fit/calibration query files
 from the read-only online projection. Its
@@ -43,7 +45,12 @@ from the read-only online projection. Its
 and partition-audit receipts. Its POSIX lease contract assumes every producer follows the same
 file-and-parent advisory-lock protocol. Use a separate producer UID or a read-only immutable
 snapshot when same-UID noncooperation is in scope. It does not construct the later label-bearing
-materialization view.
+materialization view. After phase-one selection, the
+[design-seed commitment](design-seed-commitment.md) fixes the scope and derives its seed from a
+future Quicknet round. The host-side [phase-two operator](development-phase-two-view.md) then
+verifies that chain and publishes the only admissible development-label view. Its
+`bootstrap-post-resume` command copies the independent selection into the post-embedding root as
+an already completed boundary.
 
 ## Fixed derivation
 
@@ -145,8 +152,10 @@ do not publish a second report or alter the exclusive invocation marker.
 
 ## Resume contract
 
-`run` requires an absent output root. `resume` requires an existing private root and the exact
-operator-config copy. Resume crosses only a completed immutable boundary:
+`run` exists for development rehearsals with an absent output root, but it is inadmissible in the
+registered exact-P path because it would create a new selection internally. The host bootstrap
+creates the existing private root and exact operator-config copy. The candidate must call
+`resume`, which crosses only a completed immutable boundary:
 
 1. selection receipt;
 2. embedding-binding config;
@@ -181,10 +190,10 @@ inputs come from the verified operator receipt rather than repeated operator cho
 ## Commands
 
 Run the post-embedding operator from the digest-pinned candidate image. The compute principal
-receives a label-bearing development view at `FULL_STAGED_ROOT`, not the custody-complete source
-package. This is the phase-2 view. It is distinct from the label-payload-excluded host view used to
-commit the selection receipt. The custodian creates the phase-2 view at the exact recorded path
-with only:
+receives the read-only `$PHASE2_ROOT/view` at `FULL_STAGED_ROOT`, not the custody-complete source
+package. This phase-two view is distinct from the label-payload-excluded phase-one view used to
+commit the selection receipt. The host-side phase-two operator creates it at the exact recorded
+path with only:
 
 - `inventory.json`, `inventory.sha256`, and `assignments.jsonl`;
 - `datasets/<corpus>/{fit,calibration}/queries.jsonl`;
@@ -195,9 +204,11 @@ No `sealed/` directory or sealed qrel is present. The unchanged inventory and pa
 let the operator verify every file it actually opens against the custody-complete cohort while the
 sealed payloads remain outside its mount namespace.
 
-The host-side view operator never creates this phase-2 tree and never receives any qrel or evidence
-payload. Its independently produced selection must reproduce byte for byte when the all-in-one
-operator selects again from `FULL_STAGED_ROOT`, before materialization opens development labels.
+The phase-two operator opens that custody-complete NFC successor only after it verifies the fresh
+partition audit, phase-one view and selection, and future-beacon seed chain. It copies only the
+registered fit/calibration qrels and evidence into `view/`; sealed qrels never enter that tree. The
+exact-P materializer must reproduce the independently committed selection byte for byte from
+`FULL_STAGED_ROOT` before it resolves or opens those development-label sources.
 
 Set paths and externally recorded digests explicitly. Do not derive mount sources from an
 unverified config:
@@ -210,7 +221,9 @@ EMBEDDING_CONFIG='/absolute/producer/path/production-embedding-config.json'
 EMBEDDING_CONFIG_SHA256='replace-with-production-embedding-config-sha256'
 ONLINE_STAGING='/absolute/producer/path/online-staging-projection'
 EMBEDDING_SOURCE='/absolute/producer/path/production-embedding-suite'
-FULL_STAGED_ROOT='/absolute/controlled/path/development-staging-view'
+PHASE2_ROOT='/absolute/controlled/path/development-phase-two-v1'
+PHASE2_RECEIPT_SHA256='replace-with-phase-two-receipt-sha256'
+FULL_STAGED_ROOT="$PHASE2_ROOT/view"
 FULL_STAGED_INVENTORY_SHA256='replace-with-full-staged-inventory-sha256'
 PARTITION_AUDIT='/absolute/controlled/path/query-partition-audit.json'
 PARTITION_AUDIT_SHA256='replace-with-partition-audit-file-sha256'
@@ -220,7 +233,8 @@ OPERATOR_CONFIG="$OPERATOR_CONTROL_ROOT/operator-config.json"
 OPERATOR_CONFIG_SHA256='replace-after-write-config'
 OPERATOR_OUTPUT_PARENT='/absolute/host/path/post-embedding-output'
 OPERATOR_OUTPUT="$OPERATOR_OUTPUT_PARENT/operator-v1"
-OPERATOR_RECEIPT_SHA256='replace-after-run'
+BOOTSTRAP_RECEIPT="$OPERATOR_CONTROL_ROOT/post-resume-bootstrap-receipt.json"
+OPERATOR_RECEIPT_SHA256='replace-after-resume'
 HOST_UID="$(id -u)"
 HOST_GID="$(id -g)"
 
@@ -229,6 +243,7 @@ test "$HOST_UID" -ne 0
 mkdir -m 0700 "$OPERATOR_CONTROL_ROOT" "$OPERATOR_OUTPUT_PARENT"
 test ! -e "$OPERATOR_CONFIG"
 test ! -e "$OPERATOR_OUTPUT"
+test ! -e "$BOOTSTRAP_RECEIPT"
 
 POST_CONTAINER_GUARDS=(
   --network none
@@ -248,7 +263,8 @@ POST_INPUT_MOUNTS=(
 )
 ```
 
-Write the canonical config after the five embedding stores are final:
+While `OPERATOR_OUTPUT` is absent, use the candidate image to write the canonical config after the
+five embedding stores and phase-two package are final:
 
 ```bash
 docker run --rm \
@@ -273,7 +289,22 @@ docker run --rm \
   --output "$OPERATOR_CONFIG"
 ```
 
-Record the emitted config digest in `OPERATOR_CONFIG_SHA256`, then run:
+Record the emitted config digest in `OPERATOR_CONFIG_SHA256`. On the host, verify the complete
+phase-two package and seed chain, then publish the exact two-file resume prefix:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python -m operators.development_phase2_view \
+  bootstrap-post-resume \
+  --root "$PHASE2_ROOT" \
+  --receipt-sha256 "$PHASE2_RECEIPT_SHA256" \
+  --post-config "$OPERATOR_CONFIG" \
+  --post-config-sha256 "$OPERATOR_CONFIG_SHA256" \
+  --post-output-root "$OPERATOR_OUTPUT" \
+  --bootstrap-receipt-output "$BOOTSTRAP_RECEIPT"
+```
+
+Record and independently retain the bootstrap receipt digest. The prefix now contains exactly
+`operator-config.json` and `selection-receipt.json`. Invoke only `resume` in the candidate image:
 
 ```bash
 docker run --rm \
@@ -286,13 +317,13 @@ docker run --rm \
   --mount "type=bind,src=$OPERATOR_OUTPUT_PARENT,dst=$OPERATOR_OUTPUT_PARENT" \
   "$IMAGE" \
   -m fractal_ann_diagnostics.post_embedding_development \
-  run \
+  resume \
   --config "$OPERATOR_CONFIG" \
   --config-sha256 "$OPERATOR_CONFIG_SHA256"
 ```
 
-After a clean stop at a completed boundary, use the same mounts and replace `run` with `resume`.
-Record the terminal receipt digest emitted by either successful command in
+After a clean stop at a completed boundary, use the same `resume` command. Never call `run` for
+this package. Record the terminal receipt digest emitted by the successful `resume` command in
 `OPERATOR_RECEIPT_SHA256`.
 
 Reverify the terminal package and deterministic power report with the input and output mounts

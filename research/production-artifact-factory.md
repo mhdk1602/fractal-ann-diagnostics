@@ -239,12 +239,24 @@ projection excludes vector preparation, artifact copies, hashing, admission pass
 caused by the real embedding geometry, so it does not turn the 12–36 hour planning interval into a
 guarantee. Terminal receipts remain the authority for elapsed time and resource use.
 
-The same measurement serialized between 1,172.551 and 1,172.663 bytes per indexed row. Even if all
-authorized stages contained every document and all sixteen retained HNSW files per corpus reached
-that size, the indexes would occupy about 113.9 GiB. The original and factory-copied paired
-float32 embedding stores add about 24.9 GiB. This synthetic calculation is a capacity check, not a
-claim about production bytes; the operator must still measure free space and retain a material
-margin before construction.
+The same measurement serialized between 1,172.551 and 1,172.663 bytes per indexed row. The retained
+topology contains 40 HNSW files per corpus: three policy stages times four copies (three
+reproducibility replicas and one selected authorized-index copy) times three policy masks produce
+36 files, while three full-active reproducibility replicas and the selected online copy produce
+four more. The masks admit `0.25N`, `0.50N`, and `0.75N` rows. Retained authorized-index files
+therefore account for `18N` indexed rows and full-active files for another `4N`, or `22N` in total.
+Across the current five-corpus receipts, `N = 6,518,389`; applying the measured 1,172.663-byte
+ceiling gives 168,165,219,198 bytes, or 156.616 GiB, of retained HNSW payloads.
+
+The current factory capacity snapshot adds 0.874 GiB of `int64` row maps, a 13.618-GiB exact copy
+of the embedding tree, 12.433 GiB of online paired document vectors, and at most 2.780 GiB of
+copied online-projection data. Those known components total 186.321 GiB; bounded controls and query
+artifacts raise the operational planning figure to about 186.5 GiB. The preceding post-embedding
+development stage retains another `3N` HNSW rows and `3N` row-map entries, or 21.502 GiB at the
+same ceiling. A 260-GiB free-space start gate leaves 52.176 GiB above those two planning figures for
+filesystem allocation, unpublished staging, custody views, and other bounded outputs. These are
+capacity calculations, not claims about final production bytes. The operator must measure free
+space again immediately before construction and retain that margin throughout the build.
 
 If a process is killed during an authorized-index build, the kernel releases its advisory lock but
 the exclusive lock file and tokenized staging directory may remain. `resume` or `resume-shard`

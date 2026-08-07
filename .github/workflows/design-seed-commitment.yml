@@ -1,0 +1,317 @@
+name: Burn and attest one design-seed scope
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitment_base64:
+        description: Canonical commitment file encoded as one RFC 4648 base64 string
+        required: true
+        type: string
+      commitment_sha256:
+        description: SHA-256 of the canonical commitment file
+        required: true
+        type: string
+      scope_sha256:
+        description: Four-input scientific scope SHA-256
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  attestations: write
+  contents: write
+  id-token: write
+
+concurrency:
+  group: design-seed-scope-${{ inputs.scope_sha256 }}
+  cancel-in-progress: false
+
+env:
+  APPARATUS_REF: refs/tags/design-seed-apparatus-v1
+  GH_TOKEN: ${{ github.token }}
+  REPOSITORY: mhdk1602/fractal-ann-diagnostics
+  SOURCE_P: 9061f09777b1af2346eebe3fb1ae21e6325cdf75
+  SOURCE_TREE: 33e7aa05527042bdba301310c62eb3dbaffde941
+  WORKFLOW_PATH: .github/workflows/design-seed-commitment.yml
+
+jobs:
+  burn-and-attest:
+    name: Publish the immutable scope burn before attestation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Admit the fixed hosted-runner identity and immutable apparatus tag
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMITMENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SCOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "$APPARATUS_REF"
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${REPOSITORY}/${WORKFLOW_PATH}@${APPARATUS_REF}"
+          test "$RUNNER_ENVIRONMENT" = 'github-hosted'
+
+      - name: Check out the immutable apparatus tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: design-seed-apparatus-v1
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install the pinned verifier environment
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Verify the exact commitment and exact-P package closure
+        id: commitment
+        shell: bash
+        env:
+          COMMITMENT_BASE64: ${{ inputs.commitment_base64 }}
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          uv sync --frozen --no-install-project
+          subject="${RUNNER_TEMP}/design-seed-commitment-${SCOPE_SHA256}.json"
+          SUBJECT="$subject" uv run --frozen --no-sync python - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import pathlib
+
+          encoded = os.environ["COMMITMENT_BASE64"]
+          if not encoded or len(encoded) > 131072 or any(character.isspace() for character in encoded):
+              raise SystemExit("commitment base64 is empty, oversized, or noncanonical")
+          try:
+              payload = base64.b64decode(encoded.encode("ascii"), validate=True)
+          except (UnicodeError, ValueError) as exc:
+              raise SystemExit("commitment base64 is invalid") from exc
+          if base64.b64encode(payload).decode("ascii") != encoded:
+              raise SystemExit("commitment base64 is not canonical")
+          if hashlib.sha256(payload).hexdigest() != os.environ["COMMITMENT_SHA256"]:
+              raise SystemExit("commitment digest differs from dispatch input")
+          target = pathlib.Path(os.environ["SUBJECT"])
+          target.write_bytes(payload)
+          target.chmod(0o400)
+          PY
+          PYTHONPATH=src uv run --frozen --no-sync python \
+            operators/design_seed_commitment.py verify-commitment \
+            --commitment "$subject" \
+            --expected-sha256 "$COMMITMENT_SHA256" \
+            > "${RUNNER_TEMP}/commitment-verification.json"
+          jq -e \
+            --arg ref "$APPARATUS_REF" \
+            --arg repository "$REPOSITORY" \
+            --arg scope "$SCOPE_SHA256" \
+            --arg sha "$GITHUB_SHA" \
+            --arg source_p "$SOURCE_P" \
+            --arg source_tree "$SOURCE_TREE" \
+            --arg workflow "$WORKFLOW_PATH" '
+              .scope_sha256 == $scope
+              and .source_p == $source_p
+              and .source_tree == $source_tree
+              and .attestation_workflow == $workflow
+              and .attestation_workflow_sha == $sha
+              and .attestation_git_ref == $ref
+              and .attestation_workflow_ref == ($repository + "/" + $workflow + "@" + $ref)
+            ' "$subject" >/dev/null
+          printf 'subject=%s\n' "$subject" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the one-shot assetless scope release
+        id: release
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          tag="design-seed-scope-${SCOPE_SHA256}"
+          encoded_tag="$(jq -rn --arg value "$tag" '$value|@uri')"
+          if gh api "/repos/${REPOSITORY}/releases/tags/${encoded_tag}" >/dev/null 2>&1; then
+            echo 'scope release already exists; this scope is permanently burned' >&2
+            exit 65
+          fi
+          if gh api "/repos/${REPOSITORY}/git/ref/tags/${encoded_tag}" >/dev/null 2>&1; then
+            echo 'scope tag already exists; this scope is permanently burned' >&2
+            exit 65
+          fi
+          body="Design-seed scope burn for commitment ${COMMITMENT_SHA256}; run ${GITHUB_RUN_ID}."
+          request="${RUNNER_TEMP}/scope-release-request.json"
+          response="${RUNNER_TEMP}/scope-release-create.json"
+          jq -S -c -n \
+            --arg body "$body" \
+            --arg tag "$tag" \
+            --arg target "$GITHUB_SHA" '
+              {body: $body,
+               draft: false,
+               make_latest: "false",
+               name: $tag,
+               prerelease: false,
+               tag_name: $tag,
+               target_commitish: $target}
+            ' > "$request"
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases" --input "$request" \
+            | jq -S -c . > "$response"
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' "$response")"
+          published="${RUNNER_TEMP}/scope-release-published.json"
+          immutable=false
+          for _attempt in $(seq 1 60); do
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/${REPOSITORY}/releases/${release_id}" \
+              | jq -S -c . > "$published"
+            if jq -e '.immutable == true' "$published" >/dev/null; then
+              immutable=true
+              break
+            fi
+            sleep 2
+          done
+          test "$immutable" = true
+          jq -e \
+            --arg author 'github-actions[bot]' \
+            --arg tag "$tag" \
+            --arg target "$GITHUB_SHA" \
+            --argjson release_id "$release_id" '
+              .id == $release_id
+              and .draft == false
+              and .immutable == true
+              and .prerelease == false
+              and .tag_name == $tag
+              and .name == $tag
+              and .target_commitish == $target
+              and .author.login == $author
+              and (.published_at | type == "string" and test("Z$"))
+              and (.assets | type == "array" and length == 0)
+            ' "$published" >/dev/null
+          tag_api="${RUNNER_TEMP}/scope-release-tag.json"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/git/ref/tags/${encoded_tag}" \
+            | jq -S -c . > "$tag_api"
+          jq -e \
+            --arg ref "refs/tags/${tag}" \
+            --arg target "$GITHUB_SHA" '
+              .ref == $ref and .object.type == "commit" and .object.sha == $target
+            ' "$tag_api" >/dev/null
+          {
+            printf 'release_id=%s\n' "$release_id"
+            printf 'release_name=%s\n' "$tag"
+            printf 'release_published_at=%s\n' "$(jq -r .published_at "$published")"
+            printf 'release_tag=%s\n' "$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the closed API-verifiable predicate
+        id: predicate
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          RELEASE_NAME: ${{ steps.release.outputs.release_name }}
+          RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.release_published_at }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          predicate="${RUNNER_TEMP}/design-seed-predicate.json"
+          jq -S -c -n \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg commitment "$COMMITMENT_SHA256" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg git_ref "$GITHUB_REF" \
+            --arg release_name "$RELEASE_NAME" \
+            --arg release_published "$RELEASE_PUBLISHED_AT" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg scope "$SCOPE_SHA256" \
+            --arg source_p "$SOURCE_P" \
+            --arg source_tree "$SOURCE_TREE" \
+            --arg triggering_actor "$GITHUB_TRIGGERING_ACTOR" \
+            --arg workflow "$WORKFLOW_PATH" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" \
+            --arg workflow_sha "$GITHUB_WORKFLOW_SHA" \
+            --argjson release_id "$RELEASE_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson run_id "$GITHUB_RUN_ID" '
+              {actor: $actor,
+               commitment_sha256: $commitment,
+               event: $event,
+               git_ref: $git_ref,
+               release_id: $release_id,
+               release_name: $release_name,
+               release_published_at_utc: $release_published,
+               release_tag: $release_tag,
+               repository: $repository,
+               run_attempt: $run_attempt,
+               run_id: $run_id,
+               schema_version: "fractal-design-seed-attestation-predicate-v1",
+               scope_sha256: $scope,
+               source_p: $source_p,
+               source_tree: $source_tree,
+               triggering_actor: $triggering_actor,
+               workflow: $workflow,
+               workflow_ref: $workflow_ref,
+               workflow_sha: $workflow_sha}
+            ' > "$predicate"
+          printf 'path=%s\n' "$predicate" >> "$GITHUB_OUTPUT"
+
+      - name: Attest only after the immutable burn is visible
+        id: attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.commitment.outputs.subject }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/design-seed-commitment/v1
+          predicate-path: ${{ steps.predicate.outputs.path }}
+          create-storage-record: false
+
+      - name: Retain the commitment, bundle, and remote burn readbacks
+        id: evidence
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attestation.outputs.bundle-path }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+          SUBJECT: ${{ steps.commitment.outputs.subject }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/design-seed-evidence"
+          install -d -m 0700 "$evidence"
+          cp -- "$SUBJECT" "$evidence/$(basename "$SUBJECT")"
+          cp -- "$ATTESTATION_BUNDLE" \
+            "$evidence/design-seed-attestation-${SCOPE_SHA256}.sigstore.bundle.json"
+          cp -- "${RUNNER_TEMP}/scope-release-published.json" \
+            "$evidence/scope-release-api.json"
+          cp -- "${RUNNER_TEMP}/scope-release-tag.json" \
+            "$evidence/scope-release-tag-api.json"
+          cp -- "${RUNNER_TEMP}/design-seed-predicate.json" \
+            "$evidence/design-seed-predicate.json"
+          (cd "$evidence" && sha256sum -- * > SHA256SUMS)
+          printf 'path=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the closed design-seed evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: design-seed-evidence-${{ inputs.scope_sha256 }}
+          path: ${{ steps.evidence.outputs.path }}
+          if-no-files-found: error
+          include-hidden-files: false
+          compression-level: 0
+          overwrite: false
+          retention-days: 90

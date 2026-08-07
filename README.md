@@ -118,10 +118,14 @@ hiding it:
 - pin five timelock ciphertexts, the exact drand chain and round, Linux ARM64 `tle`, separate
   release-image digest, custody builder, and custody-seal receipt; disclose common administrative
   control and public label availability;
-- publish the
-  [label-payload-excluded development selection receipt](research/development-cohort.md), which
-  ranks qrel-derived assignment components without opening qrel or evidence payloads, then pin its
-  fit/calibration materialization, the connected query-partition audit, and the power report;
+- assemble and verify the
+  [complete NFC custody successor](research/nfc-custody-successor.md), then run a fresh
+  query-partition audit against that byte-exact namespace;
+- publish the [label-free phase-one view](research/development-staging-view.md) and
+  [development selection receipt](research/development-cohort.md), commit its scope to the
+  [future-beacon design seed](research/design-seed-commitment.md), and admit development labels
+  only through the [phase-two view](research/development-phase-two-view.md); then pin the paired
+  execution, fit/calibration materialization, and power report;
 - pin the embedding, backends, OPA bundle, controller, comparator, fitted models, and analysis
   runner;
 - estimate nuisance parameters on development data, run the event-yield sensitivity grid and the
@@ -155,8 +159,13 @@ label-independent.
 flowchart LR
     C0["C0 apparatus commit"] --> IMG["Digest-pinned OCI image"]
     C0 --> EMB["Pinned paired-Qwen embedding build"]
-    EMB --> DEV["Development selection and paired execution"]
-    DEV --> ART["Policies, indexes, models, and power evidence"]
+    EMB --> NFC["Complete NFC custody successor"]
+    NFC --> AUDIT["Fresh query-partition audit"]
+    AUDIT --> DEV1["Phase one: label-free selection"]
+    DEV1 --> SEED["Future-beacon design seed"]
+    SEED --> DEV2["Phase two: development-label view"]
+    DEV2 --> POST["Exact-P post-embedding resume"]
+    POST --> ART["Policies, indexes, models, and power evidence"]
     IMG --> C0REL["Immutable C0 evidence release"]
     C0REL --> C1["C1 witnessed freeze"]
     EMB --> C1
@@ -174,7 +183,10 @@ The operator contracts are split by responsibility:
 
 | Boundary | Primary specification |
 |---|---|
-| Development-family selection and paired measurements | [development cohort](research/development-cohort.md), [development execution](research/development-execution.md) |
+| Complete NFC custody and fresh partition proof | [NFC custody successor](research/nfc-custody-successor.md), [scalable partition audit](research/scalable-partition-audit.md) |
+| Label-free phase-one selection | [development staging view](research/development-staging-view.md), [development cohort](research/development-cohort.md) |
+| Future-beacon seed and phase-two label admission | [design-seed commitment](research/design-seed-commitment.md), [development phase-two view](research/development-phase-two-view.md) |
+| Paired development execution and frozen handoff | [post-embedding development](research/post-embedding-development.md), [development execution](research/development-execution.md) |
 | Embedding, policy, index, model, and power artifacts | [embedding store](research/embedding-store.md), [artifact pipeline](research/artifact-pipeline.md), [freeze package](research/freeze-package.md) |
 | Outcome-blind candidate source composition | [candidate source composer](research/candidate-study-manifest-composer.md), [candidate manifest assembly](research/candidate-manifest-assembly.md) |
 | Image and process identity | [runner image](research/runner-image.md), [runtime attestation](research/runtime-attestation.md) |

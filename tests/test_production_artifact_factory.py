@@ -2004,3 +2004,40 @@ def test_factory_manual_uses_the_c0_python_module_contract() -> None:
     assert "--development-materialization-root" not in text
     assert "--joint-power-report" not in text
     assert "--design-seed-sha256" not in text
+
+
+def test_factory_manual_capacity_matches_retained_index_topology() -> None:
+    text = (
+        Path(__file__).resolve().parents[1] / "research" / "production-artifact-factory.md"
+    ).read_text(encoding="utf-8")
+    policy = factory.derive_production_policy_config(
+        _digest("capacity-seed"),
+        "scifact",
+        "fit",
+    )
+    retained_hnsw_files = (
+        len(factory.ARTIFACT_STAGE_ORDER)
+        * (INDEX_REPLICATE_COUNT + 1)
+        * len(policy.allow_rate_strata)
+        + INDEX_REPLICATE_COUNT
+        + 1
+    )
+    retained_row_equivalents = (
+        len(factory.ARTIFACT_STAGE_ORDER)
+        * (INDEX_REPLICATE_COUNT + 1)
+        * sum(policy.allow_rate_strata)
+        + INDEX_REPLICATE_COUNT
+        + 1
+    )
+    document_count = 6_518_389
+    hnsw_gib = retained_row_equivalents * document_count * 1_172.663 / 2**30
+
+    assert retained_hnsw_files == 40
+    assert retained_row_equivalents == 22
+    assert "40 HNSW files per corpus" in text
+    assert f"{hnsw_gib:.3f} GiB" in text
+    assert "186.5 GiB" in text
+    assert "21.502 GiB" in text
+    assert "260-GiB free-space start gate" in text
+    assert "sixteen retained HNSW files" not in text
+    assert "113.9 GiB" not in text
