@@ -143,6 +143,65 @@ jobs:
           "${RUNNER_TEMP}/package-smoke/bin/python" -c "import fractal_ann_diagnostics"
           "${RUNNER_TEMP}/package-smoke/bin/fractal-retrieval-governance" --help
 
+  design-seed-runtime-closure:
+    name: Design-seed clean runtime closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository with exact-P history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Export the exact locked core runtime closure
+        run: >-
+          uv export --frozen --no-dev --no-emit-project
+          --format requirements.txt
+          --output-file "${RUNNER_TEMP}/design-seed-runtime-requirements.txt"
+
+      - name: Install only the exported runtime closure
+        run: |
+          python -m venv "${RUNNER_TEMP}/design-seed-runtime"
+          "${RUNNER_TEMP}/design-seed-runtime/bin/python" -m pip install \
+            --require-hashes \
+            --requirement "${RUNNER_TEMP}/design-seed-runtime-requirements.txt"
+
+      - name: Exercise the host operator in the clean runtime closure
+        run: |
+          install -d -m 0700 "${RUNNER_TEMP}/design-seed-runtime-home"
+          env -i \
+            HOME="${RUNNER_TEMP}/design-seed-runtime-home" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH="${RUNNER_TEMP}/design-seed-runtime/bin:/usr/bin:/bin" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONPATH="${GITHUB_WORKSPACE}/src" \
+            PYTHONSAFEPATH=1 \
+            "${RUNNER_TEMP}/design-seed-runtime/bin/python" \
+            "${GITHUB_WORKSPACE}/operators/design_seed_commitment.py" --help
+          env -i \
+            HOME="${RUNNER_TEMP}/design-seed-runtime-home" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH="${RUNNER_TEMP}/design-seed-runtime/bin:/usr/bin:/bin" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONSAFEPATH=1 \
+            "${RUNNER_TEMP}/design-seed-runtime/bin/python" -c \
+            'import yaml; assert yaml.__version__ == "6.0.3"'
+
   governance-contracts:
     name: Study manifest and OPA policy
     runs-on: ubuntu-24.04

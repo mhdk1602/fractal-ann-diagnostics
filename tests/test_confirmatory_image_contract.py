@@ -36,7 +36,7 @@ DOCKERFILE_FRONTEND_DIGEST = (
 )
 OPA_COMMIT = "e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297"
 OPA_SOURCE_SHA256 = "a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637"
-UV_LOCK_SHA256 = "a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6"
+UV_LOCK_SHA256 = "4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337e5"
 HNSWLIB_SHA256 = "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
 OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c"
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
@@ -74,6 +74,7 @@ CONFIRMATORY_RUNTIME_DISTRIBUTIONS = {
     "py-ecc": "8.0.0",
     "pydantic": "2.13.4",
     "pydantic-core": "2.46.4",
+    "pyyaml": "6.0.3",
     "scikit-learn": "1.9.0",
     "scipy": "1.18.0",
     "threadpoolctl": "3.6.0",
@@ -211,6 +212,7 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert "import transformers" not in dockerfile
     assert "fractal_ann_diagnostics.drand_beacon" in dockerfile
     assert "fractal_ann_diagnostics.provider_activation_factory" in dockerfile
+    assert "import hnswlib, narwhals, numpy, scipy, sklearn, yaml" in dockerfile
     assert (
         'importlib.util.find_spec(name) is None for name in ("torch", "transformers")' in dockerfile
     )

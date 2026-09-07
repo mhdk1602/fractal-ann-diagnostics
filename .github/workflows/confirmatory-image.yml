@@ -66,7 +66,7 @@ env:
   PUBLICATION_MODE: ${{ inputs.mode }}
   OPA_REGO_SHA256: 18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c
   TRIVY_IMAGE: docker.io/aquasec/trivy:0.72.0@sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f
-  UV_LOCK_SHA256: a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6
+  UV_LOCK_SHA256: 4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337e5
 
 jobs:
   instantiate_production_controls:

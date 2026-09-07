@@ -49,6 +49,7 @@ dependencies = [
     "scikit-learn>=1.3",
     "tqdm>=4.65",
     "py-ecc==8.0.0",
+    "PyYAML==6.0.3",
     "truststore==0.10.4",
 ]
 

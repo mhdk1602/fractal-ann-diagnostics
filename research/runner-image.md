@@ -35,7 +35,7 @@ layers.
 | Official TLE interoperability fixture | ARM64 archive SHA-256 `3b724032620587c2551ee857c98dc02690076f4972a4fe4389b0f6e0911a6a92`; binary SHA-256 `e153cfa8539e871f50143d1bde10fec7ec3fe82630f717c3c1bf166eb4975059` | [tlock v1.2.0 assets](https://github.com/drand/tlock/releases/tag/v1.2.0) |
 | Compiled Rego | `examples/opa_compiled_masks.rego` SHA-256 `18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c` | This C0 source tree |
 | Rego contract tests | `examples/opa_compiled_masks_test.rego` SHA-256 `67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00` | This C0 source tree |
-| Python resolution | `uv.lock` SHA-256 `a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6` | [uv lock format](https://docs.astral.sh/uv/concepts/projects/layout/#the-lockfile) |
+| Python resolution | `uv.lock` SHA-256 `4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337e5` | [uv lock format](https://docs.astral.sh/uv/concepts/projects/layout/#the-lockfile) |
 | hnswlib source | 0.8.0 sdist SHA-256 `cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c` | [PyPI release record](https://pypi.org/project/hnswlib/0.8.0/#files) |
 | Native toolchain repository | Debian snapshot `20260714T000000Z`, Bookworm main | [Debian Snapshot](https://snapshot.debian.org/archive/debian/20260714T000000Z/) |
 | hnswlib build wheels | `requirements.confirmatory-build.txt`, exact versions and SHA-256 hashes | [PyPI JSON API](https://docs.pypi.org/api/json/) |
@@ -51,8 +51,8 @@ intermediate file.
 The lock also resolves the `production-embedding` optional set for the separate macOS arm64 MPS
 builder. `Dockerfile.confirmatory` does not select that extra, does not install PyTorch or
 Transformers, and calls `uv pip check` after removing every build-only distribution. It then
-requires the installed set to equal hnswlib 0.8.0, joblib 1.5.3, NumPy 2.5.1, scikit-learn 1.9.0,
-SciPy 1.18.0, narwhals 2.24.0, threadpoolctl 3.6.0, and tqdm 4.68.4. The final nonroot,
+requires the installed set to equal the closed runtime inventory, including hnswlib 0.8.0,
+NumPy 2.5.1, scikit-learn 1.9.0, SciPy 1.18.0, and PyYAML 6.0.3. The final nonroot,
 networkless build gate also
 proves that the `torch` and `transformers` module specifications are absent. C0 cannot claim to
 have produced the pre-C1 embedding matrices. The exact MPS builder receipt and commands are
@@ -187,7 +187,7 @@ python -m fractal_ann_diagnostics.c0_reproducibility \
   --archive-b /controlled/c0-proof/arm64-build-b.oci.tar \
   --expected-build-context-tree-sha256 "$(sha256sum build-context-git-tree.z | cut -d ' ' -f 1)" \
   --expected-source-date-epoch "$(<confirmatory-source-date-epoch.txt)" \
-  --expected-uv-lock-sha256 a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6 \
+  --expected-uv-lock-sha256 4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337e5 \
   --expected-opa-policy-sha256 18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c \
   --output /controlled/c0-proof/arm64-executable-reproducibility.json
 ```
