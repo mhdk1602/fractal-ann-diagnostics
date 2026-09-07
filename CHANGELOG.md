@@ -2,6 +2,25 @@
 
 All material changes to this research codebase are recorded here.
 
+## Apparatus protocol 0.3.1 — 2026-09-07
+
+The scientific study manifest remains `0.3.0-draft`. This section records only
+the host-control and runtime-packaging repairs required after two pre-burn
+failures.
+
+### Design-seed apparatus v2
+
+- Recorded failed GitHub Actions run `34164023864`, which stopped before the
+  immutable scope burn because PyYAML was absent from the locked core runtime.
+- Added pinned PyYAML to the core package closure and moved the ceremony to the
+  new protected `design-seed-apparatus-v2` tag. Apparatus v1 remains immutable
+  and is not retried.
+- Retained candidate-image run `34164359645`, which independently exposed the
+  same missing runtime declaration before publication. The corrected image
+  closure at packaging commit `25e60c4bd9319b38acb1675bd664edccf8dc50f0`
+  pins PyYAML 6.0.3, updates the lock digest, and checks its import in the
+  nonroot, network-disabled runtime stage. Its `src` tree is unchanged.
+
 ## 0.3.0 — 2026-07-13
 
 ### Prospective freeze closure — 2026-07-14

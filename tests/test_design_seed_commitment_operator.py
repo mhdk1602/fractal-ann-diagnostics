@@ -22,6 +22,7 @@ ROUND_1_BYTES = (
     b'b721611ad96f165a","signature":"b55e7cb2d5c613ee0b2e28d6750aabbb78c39dcc96bd9d38'
     b'c2c2e12198df95571de8e8e402a0cc48871c7089a2b3af4b"}'
 )
+REAL_VERIFY_RECOVERY_AMENDMENT = operator._verify_recovery_amendment
 
 
 def _digest(value: bytes | str) -> str:
@@ -55,6 +56,16 @@ def _rewrite_json(path: Path, mutate: Any) -> None:
     os.chmod(path, 0o600)
     path.write_bytes(_canonical(value))
     os.chmod(path, 0o400)
+
+
+@pytest.fixture(autouse=True)
+def _admit_closed_recovery_amendment(monkeypatch: pytest.MonkeyPatch) -> None:
+    def verify(*, path: object, expected_sha256: object, workflow_sha: object) -> None:
+        assert path == operator.RECOVERY_AMENDMENT_PATH
+        assert expected_sha256 == operator.RECOVERY_AMENDMENT_SHA256
+        assert isinstance(workflow_sha, str) and len(workflow_sha) == 40
+
+    monkeypatch.setattr(operator, "_verify_recovery_amendment", verify)
 
 
 def _fake_verifier(**kwargs: object) -> None:
@@ -92,6 +103,7 @@ def _fake_remote_verifier(**kwargs: object) -> dict[str, bytes]:
         "path": operator.ATTESTATION_WORKFLOW,
         "repository": operator.REPOSITORY,
         "run_attempt": 1,
+        "run_number": operator.ATTESTATION_RUN_NUMBER,
         "run_started_at": published,
         "status": "completed",
         "triggering_actor": operator.OWNER_LOGIN,
@@ -114,8 +126,26 @@ def _fake_remote_verifier(**kwargs: object) -> dict[str, bytes]:
         "object_type": "commit",
         "ref": f"refs/tags/{predicate['release_tag']}",
     }
+    recovery_run = {
+        "conclusion": "failure",
+        "head_sha": operator.RECOVERY_WORKFLOW_SHA,
+        "id": operator.RECOVERY_RUN_ID,
+        "path": operator.RECOVERY_WORKFLOW,
+        "run_attempt": operator.RECOVERY_RUN_ATTEMPT,
+        "run_number": operator.RECOVERY_RUN_NUMBER,
+        "status": "completed",
+    }
+    recovery_job = {
+        "failed_step_conclusion": "failure",
+        "failed_step_number": 5,
+        "id": operator.RECOVERY_JOB_ID,
+    }
     return {
         "actions_run": operator._projection_bytes(run),
+        "recovery_actions_job": operator._projection_bytes(recovery_job),
+        "recovery_actions_run": operator._projection_bytes(recovery_run),
+        "recovery_release_absence": operator._projection_bytes({"status": 404}),
+        "recovery_release_tag_absence": operator._projection_bytes({"status": 404}),
         "release": operator._projection_bytes(release),
         "release_tag": operator._projection_bytes(tag),
     }
@@ -137,9 +167,12 @@ def _predicate(
         "release_name": release_tag,
         "release_published_at_utc": _github_timestamp(integrated_time - 60),
         "release_tag": release_tag,
+        "recovery_amendment_path": commitment.recovery_amendment_path,
+        "recovery_amendment_sha256": commitment.recovery_amendment_sha256,
         "repository": operator.REPOSITORY,
         "run_attempt": 1,
         "run_id": 987654,
+        "run_number": operator.ATTESTATION_RUN_NUMBER,
         "schema_version": operator.ATTESTATION_PREDICATE_SCHEMA,
         "scope_sha256": commitment.scope_sha256,
         "source_p": operator.SOURCE_P,
@@ -217,6 +250,8 @@ def _base(tmp_path: Path, *, suffix: str = "") -> tuple[Path, operator.DesignSee
         attestation_workflow=operator.ATTESTATION_WORKFLOW,
         attestation_workflow_sha="a" * 40,
         attestation_git_ref=operator.ATTESTATION_GIT_REF,
+        recovery_amendment=operator.RECOVERY_AMENDMENT_PATH,
+        recovery_amendment_sha256=operator.RECOVERY_AMENDMENT_SHA256,
         output_directory=output,
     )
     commitment_path, commitment = operator.build_design_seed_commitment(
@@ -284,7 +319,7 @@ def test_end_to_end_derives_first_future_round_and_bls_verified_seed(tmp_path: P
     assert observed.quicknet_signature == ROUND_1_SIGNATURE
     assert observed.quicknet_randomness == ROUND_1_RANDOMNESS
     assert observed.design_seed_sha256 == (
-        "1c2576f9fed42ba68252d95a90fe858cccc3bbcbf4f9dee02dbd7024d8362dc6"
+        "b9570886ef871033ffdd31b46caa1037d9ac8a989f4059909f33f95b371b2761"
     )
     assert observed.design_seed_sha256 == reveal.design_seed_sha256
     assert observed.attestation_admission_path == str(admission_path.resolve())
@@ -293,6 +328,16 @@ def test_end_to_end_derives_first_future_round_and_bls_verified_seed(tmp_path: P
     assert observed.partition_audit_file_sha256 == commitment.partition_audit_file_sha256
     assert observed.phase1_view_receipt_sha256 == commitment.phase1_view_receipt_sha256
     assert observed.selection_receipt_sha256 == commitment.selection_receipt_sha256
+    assert commitment.schema_version == "fractal-design-seed-commitment-v2"
+    assert commitment.run_number == operator.ATTESTATION_RUN_NUMBER == 1
+    assert commitment.attestation_subject_name.startswith("design-seed-commitment-v2-")
+    assert admission.schema_version == "fractal-design-seed-attestation-admission-v2"
+    assert admission.run_number == operator.ATTESTATION_RUN_NUMBER
+    assert admission_path.name.startswith("design-seed-attestation-v2-")
+    assert observed.schema_version == "fractal-design-seed-reveal-v2"
+    assert reveal_path.name.startswith("design-seed-reveal-v2-")
+    assert observed.recovery_amendment_path == operator.RECOVERY_AMENDMENT_PATH
+    assert observed.recovery_amendment_sha256 == operator.RECOVERY_AMENDMENT_SHA256
 
 
 def test_target_round_is_first_round_at_least_900_seconds_after_rekor_time() -> None:
@@ -304,6 +349,59 @@ def test_target_round_is_first_round_at_least_900_seconds_after_rekor_time() -> 
     )
     assert lead in {900, 901, 902}
     assert publication - operator.QUICKNET_PERIOD_SECONDS - integrated < 900
+
+
+def test_v2_recovery_receipt_is_canonical_and_preserves_the_v1_scope_derivation() -> None:
+    root = Path(operator.__file__).resolve().parents[1]
+    encoded = (root / operator.RECOVERY_AMENDMENT_PATH).read_bytes()
+
+    assert _digest(encoded) == operator.RECOVERY_AMENDMENT_SHA256
+    assert encoded == _canonical(operator._RECOVERY_AMENDMENT)
+    assert operator.SCOPE_DERIVATION.endswith("scope-v1-lp-u64be")
+    assert operator.SEED_DERIVATION.endswith("seed-v1-lp-u64be")
+    pins = {
+        "staged_inventory_sha256": "1" * 64,
+        "partition_audit_file_sha256": "2" * 64,
+        "phase1_view_receipt_sha256": "3" * 64,
+        "selection_receipt_sha256": "4" * 64,
+    }
+    assert operator._derive_scope(**pins) == operator._lp_sha256(
+        b"fractal-ann-diagnostics/v0.3/design-seed-scope/v1",
+        (
+            ("staged_inventory_sha256", bytes.fromhex(pins["staged_inventory_sha256"])),
+            (
+                "partition_audit_file_sha256",
+                bytes.fromhex(pins["partition_audit_file_sha256"]),
+            ),
+            (
+                "phase1_view_receipt_sha256",
+                bytes.fromhex(pins["phase1_view_receipt_sha256"]),
+            ),
+            ("selection_receipt_sha256", bytes.fromhex(pins["selection_receipt_sha256"])),
+        ),
+    )
+
+
+def test_recovery_receipt_must_be_the_exact_bytes_tracked_by_apparatus_h(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded = _canonical(operator._RECOVERY_AMENDMENT)
+    monkeypatch.setattr(operator, "_read_control", lambda *_args, **_kwargs: encoded)
+    monkeypatch.setattr(operator, "_git_output", lambda _root, _arguments: encoded)
+
+    REAL_VERIFY_RECOVERY_AMENDMENT(
+        path=operator.RECOVERY_AMENDMENT_PATH,
+        expected_sha256=operator.RECOVERY_AMENDMENT_SHA256,
+        workflow_sha="a" * 40,
+    )
+
+    monkeypatch.setattr(operator, "_git_output", lambda _root, _arguments: encoded + b" ")
+    with pytest.raises(operator.DesignSeedCommitmentError, match="does not track"):
+        REAL_VERIFY_RECOVERY_AMENDMENT(
+            path=operator.RECOVERY_AMENDMENT_PATH,
+            expected_sha256=operator.RECOVERY_AMENDMENT_SHA256,
+            workflow_sha="a" * 40,
+        )
 
 
 def test_commitment_publication_is_no_replace_with_non_authoritative_local_marker(
@@ -319,14 +417,18 @@ def test_commitment_publication_is_no_replace_with_non_authoritative_local_marke
         attestation_workflow=operator.ATTESTATION_WORKFLOW,
         attestation_workflow_sha="a" * 40,
         attestation_git_ref=operator.ATTESTATION_GIT_REF,
+        recovery_amendment=operator.RECOVERY_AMENDMENT_PATH,
+        recovery_amendment_sha256=operator.RECOVERY_AMENDMENT_SHA256,
         output_directory=output,
     )
+    assert request.run_number == operator.ATTESTATION_RUN_NUMBER == 1
+    assert json.loads(request_path.read_text(encoding="ascii"))["run_number"] == 1
     operator.build_design_seed_commitment(request_path, output_directory=output)
 
     with pytest.raises(operator.DesignSeedCommitmentError, match="existing output"):
         operator.build_design_seed_commitment(request_path, output_directory=output)
 
-    marker = output / f".design-seed-scope-{request.scope_sha256}.local-attempt.json"
+    marker = output / f".design-seed-scope-v2-{request.scope_sha256}.local-attempt.json"
     assert json.loads(marker.read_text(encoding="ascii")) == {
         "authority": "LOCAL_DEFENSE_ONLY",
         "request_sha256": request.request_sha256,
@@ -334,9 +436,9 @@ def test_commitment_publication_is_no_replace_with_non_authoritative_local_marke
         "scope_sha256": request.scope_sha256,
         "state": "ATTEMPTED",
     }
-    assert (output / f"design-seed-commitment-{request.scope_sha256}.json").read_bytes() == (
+    assert (output / f"design-seed-commitment-v2-{request.scope_sha256}.json").read_bytes() == (
         operator.verify_design_seed_commitment(
-            output / f"design-seed-commitment-{request.scope_sha256}.json"
+            output / f"design-seed-commitment-v2-{request.scope_sha256}.json"
         ).canonical_file_bytes()
     )
 
@@ -345,6 +447,7 @@ def test_commitment_publication_is_no_replace_with_non_authoritative_local_marke
     ("changes", "message"),
     (
         ({"run_attempt": 2}, "run_attempt"),
+        ({"run_number": 2}, "run_number"),
         ({"actor": "someone-else"}, "actor"),
         ({"triggering_actor": "someone-else"}, "triggering_actor"),
         ({"event": "push"}, "event"),
@@ -402,6 +505,16 @@ def test_attestation_rejects_wrong_subject_before_external_verifier(tmp_path: Pa
     assert called is False
 
 
+def test_commitment_subject_closes_the_first_workflow_run(tmp_path: Path) -> None:
+    output, commitment = _base(tmp_path)
+    path = output / commitment.attestation_subject_name
+    assert json.loads(path.read_text(encoding="ascii"))["run_number"] == 1
+    _rewrite_json(path, lambda row: row.__setitem__("run_number", 2))
+
+    with pytest.raises(operator.DesignSeedCommitmentError, match="run_number"):
+        operator.verify_design_seed_commitment(path)
+
+
 def test_attestation_rejects_failed_cryptographic_verifier(tmp_path: Path) -> None:
     output, commitment = _base(tmp_path)
     bundle_path = output / "bundle.json"
@@ -432,6 +545,21 @@ def test_mutated_derived_round_is_rejected_structurally(tmp_path: Path) -> None:
     _rewrite_json(admission_path, lambda row: row.__setitem__("target_round", 2))
 
     with pytest.raises(operator.DesignSeedCommitmentError, match="mechanically derived"):
+        operator.verify_design_seed_attestation(
+            admission_path,
+            commitment=commitment,
+            verifier=_fake_verifier,
+            remote_verifier=_fake_remote_verifier,
+        )
+
+
+def test_attestation_admission_closes_the_first_workflow_run(tmp_path: Path) -> None:
+    output, commitment = _base(tmp_path)
+    admission_path, admission = _admit(output, commitment)
+    assert admission.run_number == operator.ATTESTATION_RUN_NUMBER == 1
+    _rewrite_json(admission_path, lambda row: row.__setitem__("run_number", 2))
+
+    with pytest.raises(operator.DesignSeedCommitmentError, match="run_number"):
         operator.verify_design_seed_attestation(
             admission_path,
             commitment=commitment,
@@ -504,7 +632,7 @@ def test_closed_schemas_and_canonical_bytes_reject_extension_and_duplicate_key(
     with pytest.raises(operator.DesignSeedCommitmentError, match="unknown"):
         operator.verify_design_seed_commitment(path)
 
-    duplicate_path = output / f"design-seed-request-{'0' * 64}.json"
+    duplicate_path = output / f"design-seed-request-v2-{'0' * 64}.json"
     _write(
         duplicate_path,
         b'{"schema_version":"x","schema_version":"x"}\n',
@@ -534,6 +662,10 @@ def test_cli_has_no_round_or_design_seed_override() -> None:
                 "a" * 40,
                 "--attestation-git-ref",
                 operator.ATTESTATION_GIT_REF,
+                "--recovery-amendment",
+                operator.RECOVERY_AMENDMENT_PATH,
+                "--recovery-amendment-sha256",
+                operator.RECOVERY_AMENDMENT_SHA256,
                 "--output-directory",
                 "/tmp/control",
                 "--target-round",
@@ -577,6 +709,47 @@ def _raw_remote_api(
     run_started = _github_timestamp(integrated_time - 120)
     commit_created = _github_timestamp(integrated_time - 3_600)
     return {
+        "recovery_run": {
+            "actor": {"login": operator.OWNER_LOGIN},
+            "conclusion": "failure",
+            "event": operator.EVENT,
+            "head_branch": operator._ref_name(operator.RECOVERY_GIT_REF),
+            "head_repository": {"full_name": operator.REPOSITORY},
+            "head_sha": operator.RECOVERY_WORKFLOW_SHA,
+            "id": operator.RECOVERY_RUN_ID,
+            "path": operator.RECOVERY_WORKFLOW,
+            "repository": {"full_name": operator.REPOSITORY},
+            "run_attempt": operator.RECOVERY_RUN_ATTEMPT,
+            "run_number": operator.RECOVERY_RUN_NUMBER,
+            "status": "completed",
+            "triggering_actor": {"login": operator.OWNER_LOGIN},
+        },
+        "recovery_job": {
+            "conclusion": "failure",
+            "id": operator.RECOVERY_JOB_ID,
+            "run_attempt": operator.RECOVERY_RUN_ATTEMPT,
+            "run_id": operator.RECOVERY_RUN_ID,
+            "status": "completed",
+            "steps": [
+                {"conclusion": conclusion, "name": name, "number": number, "status": "completed"}
+                for number, name, conclusion in (
+                    (1, "Set up job", "success"),
+                    (
+                        2,
+                        "Admit the fixed hosted-runner identity and immutable apparatus tag",
+                        "success",
+                    ),
+                    (3, "Check out the immutable apparatus tag", "success"),
+                    (4, "Install the pinned verifier environment", "success"),
+                    (5, "Verify the exact commitment and exact-P package closure", "failure"),
+                    (6, "Publish the one-shot assetless scope release", "skipped"),
+                    (7, "Build the closed API-verifiable predicate", "skipped"),
+                    (8, "Attest only after the immutable burn is visible", "skipped"),
+                    (9, "Retain the commitment, bundle, and remote burn readbacks", "skipped"),
+                    (10, "Upload the closed design-seed evidence", "skipped"),
+                )
+            ],
+        },
         "run": {
             "actor": {"login": operator.OWNER_LOGIN},
             "conclusion": "success",
@@ -588,6 +761,7 @@ def _raw_remote_api(
             "path": operator.ATTESTATION_WORKFLOW,
             "repository": {"full_name": operator.REPOSITORY},
             "run_attempt": 1,
+            "run_number": operator.ATTESTATION_RUN_NUMBER,
             "run_started_at": run_started,
             "status": "completed",
             "triggering_actor": {"login": operator.OWNER_LOGIN},
@@ -622,9 +796,14 @@ def test_public_api_verifier_closes_run_release_and_tag_when_commit_predates_run
     predicate = _predicate(commitment, integrated_time=integrated)
     responses = _raw_remote_api(commitment, predicate, integrated)
     paths: list[str] = []
+    absence_paths: list[str] = []
 
     def read(path: str) -> dict[str, object]:
         paths.append(path)
+        if f"/actions/runs/{operator.RECOVERY_RUN_ID}/" in path:
+            return responses["recovery_run"]
+        if f"/actions/jobs/{operator.RECOVERY_JOB_ID}" in path:
+            return responses["recovery_job"]
         if "/actions/runs/" in path:
             return responses["run"]
         if "/releases/" in path:
@@ -632,6 +811,12 @@ def test_public_api_verifier_closes_run_release_and_tag_when_commit_predates_run
         return responses["tag"]
 
     monkeypatch.setattr(operator, "_read_github_api", read)
+
+    def absent(path: str) -> dict[str, object]:
+        absence_paths.append(path)
+        return {"path": path, "status": 404}
+
+    monkeypatch.setattr(operator, "_read_github_api_absence", absent)
     evidence = operator._default_remote_admission_verifier(
         commitment=commitment,
         predicate=predicate,
@@ -641,10 +826,54 @@ def test_public_api_verifier_closes_run_release_and_tag_when_commit_predates_run
     assert set(evidence) == operator._REMOTE_EVIDENCE_NAMES
     assert any(path.endswith("/attempts/1") for path in paths)
     assert any(f"/releases/{predicate['release_id']}" in path for path in paths)
-    assert any("/git/ref/tags/design-seed-scope-" in path for path in paths)
+    assert any("/git/ref/tags/design-seed-scope-v2-" in path for path in paths)
+    assert absence_paths == [
+        f"/repos/{operator.REPOSITORY}/releases/tags/{operator.RECOVERY_RELEASE_TAG}",
+        f"/repos/{operator.REPOSITORY}/git/ref/tags/{operator.RECOVERY_RELEASE_TAG}",
+    ]
     release_projection = json.loads(evidence["release"])
+    run_projection = json.loads(evidence["actions_run"])
+    recovery_run_projection = json.loads(evidence["recovery_actions_run"])
+    assert run_projection["run_number"] == operator.ATTESTATION_RUN_NUMBER
+    assert recovery_run_projection["run_number"] == operator.RECOVERY_RUN_NUMBER
     assert "created_at" not in release_projection
     assert release_projection["published_at"] == predicate["release_published_at_utc"]
+
+
+def test_public_api_verifier_rejects_a_changed_v1_pre_burn_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, commitment = _base(tmp_path)
+    integrated = operator.QUICKNET_GENESIS_UNIX_SECONDS - 900
+    predicate = _predicate(commitment, integrated_time=integrated)
+    responses = _raw_remote_api(commitment, predicate, integrated)
+    recovery_steps = responses["recovery_job"]["steps"]
+    assert isinstance(recovery_steps, list)
+    recovery_steps[5]["conclusion"] = "success"
+
+    def read(path: str) -> dict[str, object]:
+        if f"/actions/runs/{operator.RECOVERY_RUN_ID}/" in path:
+            return responses["recovery_run"]
+        if f"/actions/jobs/{operator.RECOVERY_JOB_ID}" in path:
+            return responses["recovery_job"]
+        if "/actions/runs/" in path:
+            return responses["run"]
+        if "/releases/" in path:
+            return responses["release"]
+        return responses["tag"]
+
+    monkeypatch.setattr(operator, "_read_github_api", read)
+    monkeypatch.setattr(
+        operator,
+        "_read_github_api_absence",
+        lambda path: {"path": path, "status": 404},
+    )
+    with pytest.raises(operator.DesignSeedCommitmentError, match="step boundary"):
+        operator._default_remote_admission_verifier(
+            commitment=commitment,
+            predicate=predicate,
+            rekor_integrated_at_utc=_github_timestamp(integrated).replace("Z", "+00:00"),
+        )
 
 
 @pytest.mark.parametrize(
@@ -655,6 +884,12 @@ def test_public_api_verifier_closes_run_release_and_tag_when_commit_predates_run
             "run",
             lambda row: row.__setitem__("actor", {"login": "someone-else"}),
             "run actor",
+        ),
+        ("run", lambda row: row.__setitem__("run_number", 2), "run_number"),
+        (
+            "recovery_run",
+            lambda row: row.__setitem__("run_number", 2),
+            "recovery GitHub Actions run run_number",
         ),
         ("release", lambda row: row.__setitem__("immutable", False), "immutable"),
     ),
@@ -673,6 +908,10 @@ def test_public_api_verifier_rejects_self_asserted_or_reusable_remote_state(
     mutation(responses[target])
 
     def read(path: str) -> dict[str, object]:
+        if f"/actions/runs/{operator.RECOVERY_RUN_ID}/" in path:
+            return responses["recovery_run"]
+        if f"/actions/jobs/{operator.RECOVERY_JOB_ID}" in path:
+            return responses["recovery_job"]
         if "/actions/runs/" in path:
             return responses["run"]
         if "/releases/" in path:
@@ -680,6 +919,11 @@ def test_public_api_verifier_rejects_self_asserted_or_reusable_remote_state(
         return responses["tag"]
 
     monkeypatch.setattr(operator, "_read_github_api", read)
+    monkeypatch.setattr(
+        operator,
+        "_read_github_api_absence",
+        lambda path: {"path": path, "status": 404},
+    )
     with pytest.raises(operator.DesignSeedCommitmentError, match=message):
         operator._default_remote_admission_verifier(
             commitment=commitment,

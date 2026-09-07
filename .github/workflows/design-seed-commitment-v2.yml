@@ -1,0 +1,635 @@
+name: Burn and attest one design-seed scope v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      commitment_base64:
+        description: Canonical commitment file encoded as one RFC 4648 base64 string
+        required: true
+        type: string
+      commitment_sha256:
+        description: SHA-256 of the canonical commitment file
+        required: true
+        type: string
+      scope_sha256:
+        description: Four-input scientific scope SHA-256
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  attestations: write
+  contents: write
+  id-token: write
+
+concurrency:
+  group: design-seed-scope-v2-${{ inputs.scope_sha256 }}
+  cancel-in-progress: false
+
+env:
+  APPARATUS_REF: refs/tags/design-seed-apparatus-v2
+  GH_TOKEN: ${{ github.token }}
+  RECOVERY_AMENDMENT_PATH: research/design-seed-v1-failure-receipt.json
+  RECOVERY_AMENDMENT_SHA256: afb4abf60c2e53318908f0dd1ad81d14f4e845d0dbd3f4b1c6c77cf769e9296d
+  REPOSITORY: mhdk1602/fractal-ann-diagnostics
+  SOURCE_P: 9061f09777b1af2346eebe3fb1ae21e6325cdf75
+  SOURCE_TREE: 33e7aa05527042bdba301310c62eb3dbaffde941
+  SUPERSEDED_COMMITMENT_SHA256: f68debe8a7193c0a8cc834779083af2bf1467bcd756127c5bc55822c3113614e
+  SUPERSEDED_JOB_ID: "101871404028"
+  SUPERSEDED_REF: refs/tags/design-seed-apparatus-v1
+  SUPERSEDED_RELEASE_TAG: design-seed-scope-f49526d2d18ff5978b030c95e4b622b4e9691bd19f9b99947a2ad60ce9dc9e58
+  SUPERSEDED_RUN_ID: "34164023864"
+  SUPERSEDED_SCOPE: f49526d2d18ff5978b030c95e4b622b4e9691bd19f9b99947a2ad60ce9dc9e58
+  SUPERSEDED_WORKFLOW_PATH: .github/workflows/design-seed-commitment.yml
+  SUPERSEDED_WORKFLOW_SHA: 2e5bc10eb38d4d65fed84d20fa4fe7293c4c061e
+  WORKFLOW_PATH: .github/workflows/design-seed-commitment-v2.yml
+
+jobs:
+  burn-and-attest:
+    name: Publish the immutable scope burn before attestation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Admit the fixed hosted-runner identity and immutable apparatus tag
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_RUN_NUMBER" = '1'
+          [[ "$COMMITMENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SCOPE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$SCOPE_SHA256" = "$SUPERSEDED_SCOPE"
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_ACTOR" = 'mhdk1602'
+          test "$GITHUB_TRIGGERING_ACTOR" = 'mhdk1602'
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch'
+          test "$GITHUB_RUN_ATTEMPT" = '1'
+          test "$GITHUB_REF" = "$APPARATUS_REF"
+          test "$GITHUB_SHA" = "$GITHUB_WORKFLOW_SHA"
+          test "$GITHUB_WORKFLOW_REF" = \
+            "${REPOSITORY}/${WORKFLOW_PATH}@${APPARATUS_REF}"
+          test "$RUNNER_ENVIRONMENT" = 'github-hosted'
+
+      - name: Check out the immutable apparatus tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: design-seed-apparatus-v2
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+
+      - name: Install the pinned verifier environment
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.29"
+          enable-cache: false
+
+      - name: Verify the exact commitment and exact-P package closure
+        id: commitment
+        shell: bash
+        env:
+          COMMITMENT_BASE64: ${{ inputs.commitment_base64 }}
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          uv sync --frozen --no-install-project
+          subject="${RUNNER_TEMP}/design-seed-commitment-v2-${SCOPE_SHA256}.json"
+          SUBJECT="$subject" uv run --frozen --no-sync python - <<'PY'
+          import base64
+          import hashlib
+          import os
+          import pathlib
+
+          encoded = os.environ["COMMITMENT_BASE64"]
+          if not encoded or len(encoded) > 131072 or any(character.isspace() for character in encoded):
+              raise SystemExit("commitment base64 is empty, oversized, or noncanonical")
+          try:
+              payload = base64.b64decode(encoded.encode("ascii"), validate=True)
+          except (UnicodeError, ValueError) as exc:
+              raise SystemExit("commitment base64 is invalid") from exc
+          if base64.b64encode(payload).decode("ascii") != encoded:
+              raise SystemExit("commitment base64 is not canonical")
+          if hashlib.sha256(payload).hexdigest() != os.environ["COMMITMENT_SHA256"]:
+              raise SystemExit("commitment digest differs from dispatch input")
+          target = pathlib.Path(os.environ["SUBJECT"])
+          target.write_bytes(payload)
+          target.chmod(0o400)
+          PY
+          PYTHONPATH=src uv run --frozen --no-sync python \
+            operators/design_seed_commitment.py verify-commitment \
+            --commitment "$subject" \
+            --expected-sha256 "$COMMITMENT_SHA256" \
+            > "${RUNNER_TEMP}/commitment-verification.json"
+          jq -e \
+            --arg recovery_amendment_path "$RECOVERY_AMENDMENT_PATH" \
+            --arg recovery_amendment_sha256 "$RECOVERY_AMENDMENT_SHA256" \
+            --arg ref "$APPARATUS_REF" \
+            --arg repository "$REPOSITORY" \
+            --arg scope "$SCOPE_SHA256" \
+            --arg sha "$GITHUB_SHA" \
+            --arg source_p "$SOURCE_P" \
+            --arg source_tree "$SOURCE_TREE" \
+            --argjson run_number "$GITHUB_RUN_NUMBER" \
+            --arg workflow "$WORKFLOW_PATH" '
+              .scope_sha256 == $scope
+              and .recovery_amendment_path == $recovery_amendment_path
+              and .recovery_amendment_sha256 == $recovery_amendment_sha256
+              and .source_p == $source_p
+              and .source_tree == $source_tree
+              and .run_number == $run_number
+              and .attestation_workflow == $workflow
+              and .attestation_workflow_sha == $sha
+              and .attestation_git_ref == $ref
+              and .attestation_workflow_ref == ($repository + "/" + $workflow + "@" + $ref)
+            ' "$subject" >/dev/null
+          printf 'subject=%s\n' "$subject" >> "$GITHUB_OUTPUT"
+
+      - name: Admit the retained v1 amendment and public no-burn state
+        id: recovery
+        shell: bash
+        env:
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+          SUBJECT: ${{ steps.commitment.outputs.subject }}
+        run: |
+          set -euo pipefail
+          amendment="$RECOVERY_AMENDMENT_PATH"
+          test -f "$amendment"
+          test ! -L "$amendment"
+          test "$(sha256sum "$amendment" | cut -d ' ' -f 1)" = \
+            "$RECOVERY_AMENDMENT_SHA256"
+          canonical="${RUNNER_TEMP}/design-seed-v1-failure-receipt.canonical.json"
+          jq -S -c . "$amendment" > "$canonical"
+          cmp --silent "$amendment" "$canonical"
+          jq -e \
+            --arg commitment "$SUPERSEDED_COMMITMENT_SHA256" \
+            --arg failure_message "ModuleNotFoundError: No module named 'yaml'" \
+            --arg recovery_ref "$APPARATUS_REF" \
+            --arg recovery_workflow "$WORKFLOW_PATH" \
+            --arg scope "$SUPERSEDED_SCOPE" \
+            --arg superseded_ref "$SUPERSEDED_REF" \
+            --arg superseded_release "$SUPERSEDED_RELEASE_TAG" \
+            --arg superseded_workflow "$SUPERSEDED_WORKFLOW_PATH" \
+            --arg superseded_workflow_sha "$SUPERSEDED_WORKFLOW_SHA" \
+            --argjson job_id "$SUPERSEDED_JOB_ID" \
+            --argjson run_id "$SUPERSEDED_RUN_ID" '
+              keys == [
+                "burn_status",
+                "failed_job_id",
+                "failed_run_attempt",
+                "failed_run_id",
+                "failed_step_name",
+                "failed_step_number",
+                "failure_code",
+                "failure_message",
+                "protocol_id",
+                "recovery_protocol_version",
+                "replacement_git_ref",
+                "replacement_workflow",
+                "schema_version",
+                "scientific_scope_disposition",
+                "scope_sha256",
+                "superseded_commitment_sha256",
+                "superseded_git_ref",
+                "superseded_protocol_version",
+                "superseded_release_tag",
+                "superseded_workflow",
+                "superseded_workflow_sha"
+              ]
+              and .schema_version == "fractal-design-seed-recovery-amendment-v1"
+              and .protocol_id == "fractal-ann-diagnostics"
+              and .superseded_protocol_version == "0.3.0"
+              and .recovery_protocol_version == "0.3.1"
+              and .scientific_scope_disposition == "UNCHANGED_FOUR_INPUT_SCOPE"
+              and .scope_sha256 == $scope
+              and .failed_run_id == $run_id
+              and .failed_run_attempt == 1
+              and .failed_job_id == $job_id
+              and .failed_step_number == 5
+              and .failed_step_name ==
+                "Verify the exact commitment and exact-P package closure"
+              and .failure_code == "MISSING_DECLARED_RUNTIME_DEPENDENCY"
+              and .failure_message == $failure_message
+              and .burn_status == "NO_RELEASE_NO_ATTESTATION_NO_SEED"
+              and .superseded_workflow == $superseded_workflow
+              and .superseded_git_ref == $superseded_ref
+              and .superseded_workflow_sha == $superseded_workflow_sha
+              and .superseded_commitment_sha256 == $commitment
+              and .superseded_release_tag == $superseded_release
+              and .replacement_workflow == $recovery_workflow
+              and .replacement_git_ref == $recovery_ref
+            ' "$amendment" >/dev/null
+          test "$(jq -r .recovery_amendment_path "$SUBJECT")" = \
+            "$RECOVERY_AMENDMENT_PATH"
+          test "$(jq -r .recovery_amendment_sha256 "$SUBJECT")" = \
+            "$RECOVERY_AMENDMENT_SHA256"
+          test "$(jq -r .scope_sha256 "$SUBJECT")" = "$SCOPE_SHA256"
+          test "$(jq -r .run_number "$SUBJECT")" = "$GITHUB_RUN_NUMBER"
+
+          evidence="${RUNNER_TEMP}/design-seed-v1-recovery-projections"
+          anonymous_home="${RUNNER_TEMP}/design-seed-v1-anonymous-home"
+          install -d -m 0700 "$evidence" "$anonymous_home"
+          public_projection() {
+            local name="$1"
+            local api_path="$2"
+            local expected_status="$3"
+            local body="${RUNNER_TEMP}/${name}.body.json"
+            local status
+            local curl_status
+            local attempt
+            local max_attempts=4
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+              : > "$body"
+              set +e
+              status="$(
+                env -i \
+                  HOME="$anonymous_home" \
+                  LANG=C.UTF-8 \
+                  LC_ALL=C.UTF-8 \
+                  PATH=/usr/bin:/bin \
+                  /usr/bin/curl --disable --silent --show-error \
+                    --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                    --max-redirs 0 --connect-timeout 10 --max-time 30 \
+                    --header 'Accept: application/vnd.github+json' \
+                    --header 'Accept-Encoding: identity' \
+                    --header 'X-GitHub-Api-Version: 2026-03-10' \
+                    --output "$body" --write-out '%{http_code}' \
+                    "https://api.github.com${api_path}"
+              )"
+              curl_status=$?
+              set -e
+              if test "$curl_status" -eq 0 && test "$status" = "$expected_status"; then
+                break
+              fi
+              if test "$curl_status" -eq 0; then
+                case "$status" in
+                  429|500|502|503|504) ;;
+                  *) return 1 ;;
+                esac
+              fi
+              if test "$attempt" -eq "$max_attempts"; then
+                break
+              fi
+              sleep "$((1 << (attempt - 1)))"
+            done
+            test "$curl_status" -eq 0
+            test "$status" = "$expected_status"
+            test -s "$body"
+            test "$(stat -c %s "$body")" -le 4194304
+            jq -S -c . "$body" > "${body}.canonical"
+            mv -- "${body}.canonical" "$body"
+            jq -S -c -n \
+              --arg api_path "$api_path" \
+              --argjson http_status "$status" \
+              --slurpfile response "$body" '
+                {api_path: $api_path,
+                 http_status: $http_status,
+                 response: $response[0],
+                 schema_version: "fractal-design-seed-public-api-projection-v1"}
+              ' > "${evidence}/${name}.json"
+          }
+
+          run_path="/repos/${REPOSITORY}/actions/runs/${SUPERSEDED_RUN_ID}/attempts/1"
+          job_path="/repos/${REPOSITORY}/actions/jobs/${SUPERSEDED_JOB_ID}"
+          release_path="/repos/${REPOSITORY}/releases/tags/${SUPERSEDED_RELEASE_TAG}"
+          tag_path="/repos/${REPOSITORY}/git/ref/tags/${SUPERSEDED_RELEASE_TAG}"
+          v2_release_tag="design-seed-scope-v2-${SCOPE_SHA256}"
+          v2_release_path="/repos/${REPOSITORY}/releases/tags/${v2_release_tag}"
+          v2_tag_path="/repos/${REPOSITORY}/git/ref/tags/${v2_release_tag}"
+          public_projection design-seed-v1-failure-run-api "$run_path" 200
+          public_projection design-seed-v1-failure-job-api "$job_path" 200
+          public_projection design-seed-v1-release-absence-api "$release_path" 404
+          public_projection design-seed-v1-tag-absence-api "$tag_path" 404
+          public_projection design-seed-v2-release-preburn-absence-api \
+            "$v2_release_path" 404
+          public_projection design-seed-v2-tag-preburn-absence-api "$v2_tag_path" 404
+
+          jq -e \
+            --arg branch "${SUPERSEDED_REF#refs/tags/}" \
+            --arg path "$run_path" \
+            --arg repository "$REPOSITORY" \
+            --arg sha "$SUPERSEDED_WORKFLOW_SHA" \
+            --arg workflow "$SUPERSEDED_WORKFLOW_PATH" \
+            --argjson run_id "$SUPERSEDED_RUN_ID" '
+              .api_path == $path
+              and .http_status == 200
+              and .response.id == $run_id
+              and .response.run_attempt == 1
+              and .response.run_number == 1
+              and .response.event == "workflow_dispatch"
+              and .response.status == "completed"
+              and .response.conclusion == "failure"
+              and .response.head_branch == $branch
+              and .response.head_sha == $sha
+              and .response.path == $workflow
+              and .response.actor.login == "mhdk1602"
+              and .response.triggering_actor.login == "mhdk1602"
+              and .response.repository.full_name == $repository
+              and .response.head_repository.full_name == $repository
+            ' "${evidence}/design-seed-v1-failure-run-api.json" >/dev/null
+          jq -e \
+            --arg failed_name \
+              "Verify the exact commitment and exact-P package closure" \
+            --arg path "$job_path" \
+            --argjson run_id "$SUPERSEDED_RUN_ID" \
+            --argjson job_id "$SUPERSEDED_JOB_ID" '
+              .api_path == $path
+              and .http_status == 200
+              and .response.id == $job_id
+              and .response.run_id == $run_id
+              and .response.run_attempt == 1
+              and .response.status == "completed"
+              and .response.conclusion == "failure"
+              and ([.response.steps[]
+                | select(.number >= 1 and .number <= 10)
+                | {conclusion, name, number, status}] == [
+                  {conclusion: "success", name: "Set up job",
+                   number: 1, status: "completed"},
+                  {conclusion: "success",
+                   name: "Admit the fixed hosted-runner identity and immutable apparatus tag",
+                   number: 2, status: "completed"},
+                  {conclusion: "success", name: "Check out the immutable apparatus tag",
+                   number: 3, status: "completed"},
+                  {conclusion: "success", name: "Install the pinned verifier environment",
+                   number: 4, status: "completed"},
+                  {conclusion: "failure", name: $failed_name,
+                   number: 5, status: "completed"},
+                  {conclusion: "skipped",
+                   name: "Publish the one-shot assetless scope release",
+                   number: 6, status: "completed"},
+                  {conclusion: "skipped", name: "Build the closed API-verifiable predicate",
+                   number: 7, status: "completed"},
+                  {conclusion: "skipped",
+                   name: "Attest only after the immutable burn is visible",
+                   number: 8, status: "completed"},
+                  {conclusion: "skipped",
+                   name: "Retain the commitment, bundle, and remote burn readbacks",
+                   number: 9, status: "completed"},
+                  {conclusion: "skipped", name: "Upload the closed design-seed evidence",
+                   number: 10, status: "completed"}
+                ])
+            ' "${evidence}/design-seed-v1-failure-job-api.json" >/dev/null
+          for binding in \
+            "design-seed-v1-release-absence-api.json:${release_path}" \
+            "design-seed-v1-tag-absence-api.json:${tag_path}" \
+            "design-seed-v2-release-preburn-absence-api.json:${v2_release_path}" \
+            "design-seed-v2-tag-preburn-absence-api.json:${v2_tag_path}"; do
+            file="${binding%%:*}"
+            path="${binding#*:}"
+            jq -e \
+              --arg path "$path" '
+                .api_path == $path
+                and .http_status == 404
+                and .response.message == "Not Found"
+                and (.response.status == null or .response.status == "404")
+              ' "${evidence}/${file}" >/dev/null
+          done
+          jq -S -c '
+            .response
+            | {actor: .actor.login,
+               conclusion,
+               event,
+               head_branch,
+               head_repository: .head_repository.full_name,
+               head_sha,
+               id,
+               path,
+               repository: .repository.full_name,
+               run_attempt,
+               run_number,
+               status,
+               triggering_actor: .triggering_actor.login}
+            ' "${evidence}/design-seed-v1-failure-run-api.json" \
+            > "${evidence}/recovery-actions-run-api-projection.json"
+          jq -S -c '
+            .response
+            | {conclusion,
+               failed_step_conclusion: (.steps[] | select(.number == 5) | .conclusion),
+               failed_step_name: (.steps[] | select(.number == 5) | .name),
+               failed_step_number: (.steps[] | select(.number == 5) | .number),
+               id,
+               run_attempt,
+               run_id,
+               status,
+               steps: [.steps[] | select(.number >= 1 and .number <= 10)
+                 | {conclusion, name, number, status}]}
+            ' "${evidence}/design-seed-v1-failure-job-api.json" \
+            > "${evidence}/recovery-actions-job-api-projection.json"
+          jq -S -c \
+            '{path: .api_path, status: .http_status}' \
+            "${evidence}/design-seed-v1-release-absence-api.json" \
+            > "${evidence}/recovery-release-absence-api-projection.json"
+          jq -S -c \
+            '{path: .api_path, status: .http_status}' \
+            "${evidence}/design-seed-v1-tag-absence-api.json" \
+            > "${evidence}/recovery-release-tag-absence-api-projection.json"
+          cp -- "$amendment" "$evidence/design-seed-v1-failure-receipt.json"
+          chmod 0444 "$evidence"/*.json
+          printf 'path=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the one-shot assetless scope release
+        id: release
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          tag="design-seed-scope-v2-${SCOPE_SHA256}"
+          encoded_tag="$(jq -rn --arg value "$tag" '$value|@uri')"
+          body="Design-seed v2 scope burn for commitment ${COMMITMENT_SHA256}; run ${GITHUB_RUN_ID}."
+          request="${RUNNER_TEMP}/scope-release-request.json"
+          response="${RUNNER_TEMP}/scope-release-create.json"
+          jq -S -c -n \
+            --arg body "$body" \
+            --arg tag "$tag" \
+            --arg target "$GITHUB_SHA" '
+              {body: $body,
+               draft: false,
+               make_latest: "false",
+               name: $tag,
+               prerelease: false,
+               tag_name: $tag,
+               target_commitish: $target}
+            ' > "$request"
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/releases" --input "$request" \
+            | jq -S -c . > "$response"
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' "$response")"
+          published="${RUNNER_TEMP}/scope-release-published.json"
+          immutable=false
+          for _attempt in $(seq 1 60); do
+            gh api \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "/repos/${REPOSITORY}/releases/${release_id}" \
+              | jq -S -c . > "$published"
+            if jq -e '.immutable == true' "$published" >/dev/null; then
+              immutable=true
+              break
+            fi
+            sleep 2
+          done
+          test "$immutable" = true
+          jq -e \
+            --arg author 'github-actions[bot]' \
+            --arg tag "$tag" \
+            --arg target "$GITHUB_SHA" \
+            --argjson release_id "$release_id" '
+              .id == $release_id
+              and .draft == false
+              and .immutable == true
+              and .prerelease == false
+              and .tag_name == $tag
+              and .name == $tag
+              and .target_commitish == $target
+              and .author.login == $author
+              and (.published_at | type == "string" and test("Z$"))
+              and (.assets | type == "array" and length == 0)
+            ' "$published" >/dev/null
+          tag_api="${RUNNER_TEMP}/scope-release-tag.json"
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "/repos/${REPOSITORY}/git/ref/tags/${encoded_tag}" \
+            | jq -S -c . > "$tag_api"
+          jq -e \
+            --arg ref "refs/tags/${tag}" \
+            --arg target "$GITHUB_SHA" '
+              .ref == $ref and .object.type == "commit" and .object.sha == $target
+            ' "$tag_api" >/dev/null
+          {
+            printf 'release_id=%s\n' "$release_id"
+            printf 'release_name=%s\n' "$tag"
+            printf 'release_published_at=%s\n' "$(jq -r .published_at "$published")"
+            printf 'release_tag=%s\n' "$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the closed API-verifiable predicate
+        id: predicate
+        shell: bash
+        env:
+          COMMITMENT_SHA256: ${{ inputs.commitment_sha256 }}
+          RELEASE_ID: ${{ steps.release.outputs.release_id }}
+          RELEASE_NAME: ${{ steps.release.outputs.release_name }}
+          RELEASE_PUBLISHED_AT: ${{ steps.release.outputs.release_published_at }}
+          RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+        run: |
+          set -euo pipefail
+          predicate="${RUNNER_TEMP}/design-seed-predicate-v2.json"
+          jq -S -c -n \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg commitment "$COMMITMENT_SHA256" \
+            --arg event "$GITHUB_EVENT_NAME" \
+            --arg git_ref "$GITHUB_REF" \
+            --arg release_name "$RELEASE_NAME" \
+            --arg release_published "$RELEASE_PUBLISHED_AT" \
+            --arg release_tag "$RELEASE_TAG" \
+            --arg recovery_amendment_path "$RECOVERY_AMENDMENT_PATH" \
+            --arg recovery_amendment_sha256 "$RECOVERY_AMENDMENT_SHA256" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg scope "$SCOPE_SHA256" \
+            --arg source_p "$SOURCE_P" \
+            --arg source_tree "$SOURCE_TREE" \
+            --arg triggering_actor "$GITHUB_TRIGGERING_ACTOR" \
+            --arg workflow "$WORKFLOW_PATH" \
+            --arg workflow_ref "$GITHUB_WORKFLOW_REF" \
+            --arg workflow_sha "$GITHUB_WORKFLOW_SHA" \
+            --argjson release_id "$RELEASE_ID" \
+            --argjson run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --argjson run_id "$GITHUB_RUN_ID" \
+            --argjson run_number "$GITHUB_RUN_NUMBER" '
+              {actor: $actor,
+               commitment_sha256: $commitment,
+               event: $event,
+               git_ref: $git_ref,
+               release_id: $release_id,
+               release_name: $release_name,
+               release_published_at_utc: $release_published,
+               release_tag: $release_tag,
+               recovery_amendment_path: $recovery_amendment_path,
+               recovery_amendment_sha256: $recovery_amendment_sha256,
+               repository: $repository,
+               run_attempt: $run_attempt,
+               run_id: $run_id,
+               run_number: $run_number,
+               schema_version: "fractal-design-seed-attestation-predicate-v2",
+               scope_sha256: $scope,
+               source_p: $source_p,
+               source_tree: $source_tree,
+               triggering_actor: $triggering_actor,
+               workflow: $workflow,
+               workflow_ref: $workflow_ref,
+               workflow_sha: $workflow_sha}
+            ' > "$predicate"
+          printf 'path=%s\n' "$predicate" >> "$GITHUB_OUTPUT"
+
+      - name: Attest only after the immutable burn is visible
+        id: attestation
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ steps.commitment.outputs.subject }}
+          predicate-type: https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/design-seed-commitment/v2
+          predicate-path: ${{ steps.predicate.outputs.path }}
+          create-storage-record: false
+
+      - name: Retain the commitment, bundle, and remote burn readbacks
+        id: evidence
+        shell: bash
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attestation.outputs.bundle-path }}
+          SCOPE_SHA256: ${{ inputs.scope_sha256 }}
+          SUBJECT: ${{ steps.commitment.outputs.subject }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/design-seed-evidence-v2"
+          install -d -m 0700 "$evidence"
+          cp -- "$SUBJECT" "$evidence/$(basename "$SUBJECT")"
+          cp -- "$ATTESTATION_BUNDLE" \
+            "$evidence/design-seed-attestation-v2-${SCOPE_SHA256}.sigstore.bundle.json"
+          cp -- "${RUNNER_TEMP}/scope-release-published.json" \
+            "$evidence/scope-release-v2-api.json"
+          cp -- "${RUNNER_TEMP}/scope-release-tag.json" \
+            "$evidence/scope-release-v2-tag-api.json"
+          cp -- "${RUNNER_TEMP}/design-seed-predicate-v2.json" \
+            "$evidence/design-seed-predicate-v2.json"
+          recovery="${{ steps.recovery.outputs.path }}"
+          for projection in \
+            design-seed-v1-failure-receipt.json \
+            design-seed-v1-failure-run-api.json \
+            design-seed-v1-failure-job-api.json \
+            design-seed-v1-release-absence-api.json \
+            design-seed-v1-tag-absence-api.json \
+            design-seed-v2-release-preburn-absence-api.json \
+            design-seed-v2-tag-preburn-absence-api.json \
+            recovery-actions-run-api-projection.json \
+            recovery-actions-job-api-projection.json \
+            recovery-release-absence-api-projection.json \
+            recovery-release-tag-absence-api-projection.json; do
+            cp -- "$recovery/$projection" "$evidence/$projection"
+          done
+          (cd "$evidence" && sha256sum -- * > SHA256SUMS)
+          printf 'path=%s\n' "$evidence" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the closed design-seed evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: design-seed-evidence-v2-${{ inputs.scope_sha256 }}
+          path: ${{ steps.evidence.outputs.path }}
+          if-no-files-found: error
+          include-hidden-files: false
+          compression-level: 0
+          overwrite: false
+          retention-days: 90

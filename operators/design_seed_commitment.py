@@ -44,25 +44,40 @@ from fractal_ann_diagnostics.drand_beacon import (
 from fractal_ann_diagnostics.execution_claim import ExecutionBeaconContract
 from fractal_ann_diagnostics.github_state_attestation import parse_sigstore_bundle
 
-REQUEST_SCHEMA = "fractal-design-seed-commitment-request-v1"
-COMMITMENT_SCHEMA = "fractal-design-seed-commitment-v1"
-ATTESTATION_ADMISSION_SCHEMA = "fractal-design-seed-attestation-admission-v1"
-REVEAL_SCHEMA = "fractal-design-seed-reveal-v1"
-ATTESTATION_PREDICATE_SCHEMA = "fractal-design-seed-attestation-predicate-v1"
-LOCAL_ATTEMPT_SCHEMA = "fractal-design-seed-local-attempt-v1"
+REQUEST_SCHEMA = "fractal-design-seed-commitment-request-v2"
+COMMITMENT_SCHEMA = "fractal-design-seed-commitment-v2"
+ATTESTATION_ADMISSION_SCHEMA = "fractal-design-seed-attestation-admission-v2"
+REVEAL_SCHEMA = "fractal-design-seed-reveal-v2"
+ATTESTATION_PREDICATE_SCHEMA = "fractal-design-seed-attestation-predicate-v2"
+LOCAL_ATTEMPT_SCHEMA = "fractal-design-seed-local-attempt-v2"
+CLI_RESULT_SCHEMA = "fractal-design-seed-cli-result-v2"
+RECOVERY_AMENDMENT_SCHEMA = "fractal-design-seed-recovery-amendment-v1"
 ATTESTATION_PREDICATE_TYPE = (
-    "https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/design-seed-commitment/v1"
+    "https://mhdk1602.github.io/fractal-ann-diagnostics/attestations/design-seed-commitment/v2"
 )
 
 PROTOCOL_ID = "fractal-ann-diagnostics"
-PROTOCOL_VERSION = "0.3.0"
+PROTOCOL_VERSION = "0.3.1"
 PURPOSE = "post-embedding-development-design-seed"
 OWNER_LOGIN = "mhdk1602"
 REPOSITORY = "mhdk1602/fractal-ann-diagnostics"
 OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 EVENT = "workflow_dispatch"
-ATTESTATION_WORKFLOW = ".github/workflows/design-seed-commitment.yml"
-ATTESTATION_GIT_REF = "refs/tags/design-seed-apparatus-v1"
+ATTESTATION_RUN_NUMBER = 1
+ATTESTATION_WORKFLOW = ".github/workflows/design-seed-commitment-v2.yml"
+ATTESTATION_GIT_REF = "refs/tags/design-seed-apparatus-v2"
+RECOVERY_AMENDMENT_PATH = "research/design-seed-v1-failure-receipt.json"
+RECOVERY_AMENDMENT_SHA256 = "afb4abf60c2e53318908f0dd1ad81d14f4e845d0dbd3f4b1c6c77cf769e9296d"
+RECOVERY_RUN_ID = 34_164_023_864
+RECOVERY_RUN_ATTEMPT = 1
+RECOVERY_RUN_NUMBER = 1
+RECOVERY_JOB_ID = 101_871_404_028
+RECOVERY_WORKFLOW = ".github/workflows/design-seed-commitment.yml"
+RECOVERY_GIT_REF = "refs/tags/design-seed-apparatus-v1"
+RECOVERY_WORKFLOW_SHA = "2e5bc10eb38d4d65fed84d20fa4fe7293c4c061e"
+RECOVERY_SCOPE_SHA256 = "f49526d2d18ff5978b030c95e4b622b4e9691bd19f9b99947a2ad60ce9dc9e58"
+RECOVERY_COMMITMENT_SHA256 = "f68debe8a7193c0a8cc834779083af2bf1467bcd756127c5bc55822c3113614e"
+RECOVERY_RELEASE_TAG = f"design-seed-scope-{RECOVERY_SCOPE_SHA256}"
 RELEASE_AUTHOR = "github-actions[bot]"
 SOURCE_P = "9061f09777b1af2346eebe3fb1ae21e6325cdf75"
 SOURCE_TREE = "33e7aa05527042bdba301310c62eb3dbaffde941"
@@ -82,7 +97,17 @@ _MAX_BUNDLE_BYTES = 1024 * 1024
 _MAX_GH_OUTPUT_BYTES = 1024 * 1024
 _MAX_GITHUB_API_BYTES = 4 * 1024 * 1024
 _GITHUB_API_VERSION = "2026-03-10"
-_REMOTE_EVIDENCE_NAMES = frozenset({"actions_run", "release", "release_tag"})
+_REMOTE_EVIDENCE_NAMES = frozenset(
+    {
+        "actions_run",
+        "recovery_actions_job",
+        "recovery_actions_run",
+        "recovery_release_absence",
+        "recovery_release_tag_absence",
+        "release",
+        "release_tag",
+    }
+)
 _FILE_STABILITY_FIELDS = (
     "st_dev",
     "st_ino",
@@ -94,6 +119,30 @@ _FILE_STABILITY_FIELDS = (
     "st_mtime_ns",
     "st_ctime_ns",
 )
+
+_RECOVERY_AMENDMENT = {
+    "burn_status": "NO_RELEASE_NO_ATTESTATION_NO_SEED",
+    "failed_job_id": RECOVERY_JOB_ID,
+    "failed_run_attempt": RECOVERY_RUN_ATTEMPT,
+    "failed_run_id": RECOVERY_RUN_ID,
+    "failed_step_name": "Verify the exact commitment and exact-P package closure",
+    "failed_step_number": 5,
+    "failure_code": "MISSING_DECLARED_RUNTIME_DEPENDENCY",
+    "failure_message": "ModuleNotFoundError: No module named 'yaml'",
+    "protocol_id": PROTOCOL_ID,
+    "recovery_protocol_version": PROTOCOL_VERSION,
+    "replacement_git_ref": ATTESTATION_GIT_REF,
+    "replacement_workflow": ATTESTATION_WORKFLOW,
+    "schema_version": RECOVERY_AMENDMENT_SCHEMA,
+    "scientific_scope_disposition": "UNCHANGED_FOUR_INPUT_SCOPE",
+    "scope_sha256": RECOVERY_SCOPE_SHA256,
+    "superseded_commitment_sha256": RECOVERY_COMMITMENT_SHA256,
+    "superseded_git_ref": RECOVERY_GIT_REF,
+    "superseded_protocol_version": "0.3.0",
+    "superseded_release_tag": RECOVERY_RELEASE_TAG,
+    "superseded_workflow": RECOVERY_WORKFLOW,
+    "superseded_workflow_sha": RECOVERY_WORKFLOW_SHA,
+}
 
 
 class DesignSeedCommitmentError(RuntimeError):
@@ -427,6 +476,42 @@ def _verify_exact_p_source() -> None:
         raise DesignSeedCommitmentError("exact source P package tree contains untracked files")
 
 
+def _verify_recovery_amendment(
+    *, path: object, expected_sha256: object, workflow_sha: object
+) -> None:
+    """Bind the canonical recovery receipt tracked by the immutable v2 apparatus."""
+
+    _exact("recovery_amendment_path", path, RECOVERY_AMENDMENT_PATH)
+    _exact(
+        "recovery_amendment_sha256",
+        _sha256("recovery_amendment_sha256", expected_sha256),
+        RECOVERY_AMENDMENT_SHA256,
+    )
+    if type(workflow_sha) is not str or _GIT_SHA.fullmatch(workflow_sha) is None:
+        raise DesignSeedCommitmentError("recovery workflow SHA must be one full Git commit")
+    root = Path(__file__).resolve().parents[1]
+    candidate = root / RECOVERY_AMENDMENT_PATH
+    if candidate.resolve(strict=False) != candidate:
+        raise DesignSeedCommitmentError("recovery amendment path escaped the repository")
+    encoded = _read_control(candidate, label="design-seed recovery amendment")
+    if _digest(encoded) != expected_sha256:
+        raise DesignSeedCommitmentError("recovery amendment digest differs")
+    receipt = _closed(
+        _parse_canonical_file(encoded, label="design-seed recovery amendment"),
+        frozenset(_RECOVERY_AMENDMENT),
+        label="design-seed recovery amendment",
+    )
+    if dict(receipt) != _RECOVERY_AMENDMENT or encoded != _canonical_file_bytes(
+        _RECOVERY_AMENDMENT
+    ):
+        raise DesignSeedCommitmentError("recovery amendment differs from the closed contract")
+    tracked = _git_output(root, ["show", f"{workflow_sha}:{RECOVERY_AMENDMENT_PATH}"])
+    if tracked != encoded:
+        raise DesignSeedCommitmentError(
+            "immutable v2 apparatus does not track the exact recovery amendment"
+        )
+
+
 @dataclass(frozen=True)
 class _ScopeBinding:
     staged_inventory_sha256: str
@@ -436,6 +521,8 @@ class _ScopeBinding:
     scope_sha256: str
     source_p: str
     source_tree: str
+    recovery_amendment_path: str
+    recovery_amendment_sha256: str
 
     def _validate_scope(self) -> None:
         for name in (
@@ -456,6 +543,12 @@ class _ScopeBinding:
             raise DesignSeedCommitmentError("scope_sha256 differs from the four pinned inputs")
         _exact("source_p", self.source_p, SOURCE_P)
         _exact("source_tree", self.source_tree, SOURCE_TREE)
+        _exact("recovery_amendment_path", self.recovery_amendment_path, RECOVERY_AMENDMENT_PATH)
+        _exact(
+            "recovery_amendment_sha256",
+            _sha256("recovery_amendment_sha256", self.recovery_amendment_sha256),
+            RECOVERY_AMENDMENT_SHA256,
+        )
 
     def _scope_dict(self) -> dict[str, str]:
         return {
@@ -465,6 +558,8 @@ class _ScopeBinding:
             "selection_receipt_sha256": self.selection_receipt_sha256,
             "source_p": self.source_p,
             "source_tree": self.source_tree,
+            "recovery_amendment_path": self.recovery_amendment_path,
+            "recovery_amendment_sha256": self.recovery_amendment_sha256,
             "staged_inventory_sha256": self.staged_inventory_sha256,
         }
 
@@ -475,6 +570,7 @@ class DesignSeedCommitmentRequest(_ScopeBinding):
     attestation_workflow_sha: str
     attestation_git_ref: str
     attestation_workflow_ref: str
+    run_number: int = ATTESTATION_RUN_NUMBER
     protocol_id: str = PROTOCOL_ID
     protocol_version: str = PROTOCOL_VERSION
     purpose: str = PURPOSE
@@ -493,6 +589,7 @@ class DesignSeedCommitmentRequest(_ScopeBinding):
             ("protocol_id", PROTOCOL_ID),
             ("protocol_version", PROTOCOL_VERSION),
             ("purpose", PURPOSE),
+            ("run_number", ATTESTATION_RUN_NUMBER),
             ("scope_derivation", SCOPE_DERIVATION),
             ("schema_version", REQUEST_SCHEMA),
         ):
@@ -508,6 +605,7 @@ class DesignSeedCommitmentRequest(_ScopeBinding):
             "protocol_id": self.protocol_id,
             "protocol_version": self.protocol_version,
             "purpose": self.purpose,
+            "run_number": self.run_number,
             "schema_version": self.schema_version,
             "scope_derivation": self.scope_derivation,
         }
@@ -533,6 +631,7 @@ class DesignSeedCommitment(_ScopeBinding):
     attestation_workflow_sha: str
     attestation_git_ref: str
     attestation_workflow_ref: str
+    run_number: int = ATTESTATION_RUN_NUMBER
     quicknet_network: str = QUICKNET_NETWORK
     quicknet_chain_hash: str = QUICKNET_CHAIN_HASH
     quicknet_scheme_id: str = QUICKNET_SCHEME_ID
@@ -553,6 +652,7 @@ class DesignSeedCommitment(_ScopeBinding):
             git_ref=self.attestation_git_ref,
             workflow_ref=self.attestation_workflow_ref,
         )
+        _exact("run_number", self.run_number, ATTESTATION_RUN_NUMBER)
         expected_request = DesignSeedCommitmentRequest(
             staged_inventory_sha256=self.staged_inventory_sha256,
             partition_audit_file_sha256=self.partition_audit_file_sha256,
@@ -561,14 +661,17 @@ class DesignSeedCommitment(_ScopeBinding):
             scope_sha256=self.scope_sha256,
             source_p=self.source_p,
             source_tree=self.source_tree,
+            recovery_amendment_path=self.recovery_amendment_path,
+            recovery_amendment_sha256=self.recovery_amendment_sha256,
             attestation_workflow=self.attestation_workflow,
             attestation_workflow_sha=self.attestation_workflow_sha,
             attestation_git_ref=self.attestation_git_ref,
             attestation_workflow_ref=self.attestation_workflow_ref,
+            run_number=self.run_number,
         )
         if self.request_sha256 != expected_request.request_sha256:
             raise DesignSeedCommitmentError("request_sha256 differs from the closed request")
-        expected_name = f"design-seed-commitment-{self.scope_sha256}.json"
+        expected_name = f"design-seed-commitment-v2-{self.scope_sha256}.json"
         _exact("attestation_subject_name", self.attestation_subject_name, expected_name)
         for name, expected in (
             ("quicknet_network", QUICKNET_NETWORK),
@@ -600,6 +703,7 @@ class DesignSeedCommitment(_ScopeBinding):
             "quicknet_public_key": self.quicknet_public_key,
             "quicknet_scheme_id": self.quicknet_scheme_id,
             "request_sha256": self.request_sha256,
+            "run_number": self.run_number,
             "schema_version": self.schema_version,
             "seed_derivation": self.seed_derivation,
             "target_round_derivation": self.target_round_derivation,
@@ -632,6 +736,7 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
     git_ref: str
     run_id: int
     run_attempt: int
+    run_number: int
     event: str
     actor: str
     triggering_actor: str
@@ -641,6 +746,14 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
     release_published_at_utc: str
     actions_run_api_projection_base64: str
     actions_run_api_projection_sha256: str
+    recovery_actions_job_api_projection_base64: str
+    recovery_actions_job_api_projection_sha256: str
+    recovery_actions_run_api_projection_base64: str
+    recovery_actions_run_api_projection_sha256: str
+    recovery_release_absence_api_projection_base64: str
+    recovery_release_absence_api_projection_sha256: str
+    recovery_release_tag_absence_api_projection_base64: str
+    recovery_release_tag_absence_api_projection_sha256: str
     release_api_projection_base64: str
     release_api_projection_sha256: str
     release_tag_api_projection_base64: str
@@ -664,6 +777,10 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
             "attestation_bundle_sha256",
             "predicate_sha256",
             "actions_run_api_projection_sha256",
+            "recovery_actions_job_api_projection_sha256",
+            "recovery_actions_run_api_projection_sha256",
+            "recovery_release_absence_api_projection_sha256",
+            "recovery_release_tag_absence_api_projection_sha256",
             "release_api_projection_sha256",
             "release_tag_api_projection_sha256",
             "rekor_log_key_sha256",
@@ -675,6 +792,7 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
         _exact("actor", self.actor, OWNER_LOGIN)
         _exact("triggering_actor", self.triggering_actor, OWNER_LOGIN)
         _exact("run_attempt", self.run_attempt, 1)
+        _exact("run_number", self.run_number, ATTESTATION_RUN_NUMBER)
         _exact("predicate_type", self.predicate_type, ATTESTATION_PREDICATE_TYPE)
         _exact("schema_version", self.schema_version, ATTESTATION_ADMISSION_SCHEMA)
         _positive("run_id", self.run_id)
@@ -697,7 +815,7 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
             raise DesignSeedCommitmentError("git_ref must be one canonical branch or tag ref")
         expected_ref = f"{REPOSITORY}/{self.workflow}@{self.git_ref}"
         _exact("workflow_ref", self.workflow_ref, expected_ref)
-        expected_subject = f"design-seed-commitment-{self.scope_sha256}.json"
+        expected_subject = f"design-seed-commitment-v2-{self.scope_sha256}.json"
         _exact("attestation_subject_name", self.attestation_subject_name, expected_subject)
         try:
             bundle = base64.b64decode(
@@ -736,6 +854,26 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
                 self.actions_run_api_projection_base64,
                 self.actions_run_api_projection_sha256,
             ),
+            "recovery_actions_job": _decode_projection(
+                "recovery_actions_job",
+                self.recovery_actions_job_api_projection_base64,
+                self.recovery_actions_job_api_projection_sha256,
+            ),
+            "recovery_actions_run": _decode_projection(
+                "recovery_actions_run",
+                self.recovery_actions_run_api_projection_base64,
+                self.recovery_actions_run_api_projection_sha256,
+            ),
+            "recovery_release_absence": _decode_projection(
+                "recovery_release_absence",
+                self.recovery_release_absence_api_projection_base64,
+                self.recovery_release_absence_api_projection_sha256,
+            ),
+            "recovery_release_tag_absence": _decode_projection(
+                "recovery_release_tag_absence",
+                self.recovery_release_tag_absence_api_projection_base64,
+                self.recovery_release_tag_absence_api_projection_sha256,
+            ),
             "release": _decode_projection(
                 "release",
                 self.release_api_projection_base64,
@@ -756,9 +894,26 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
         tag_projection = _parse_canonical_file(
             projections["release_tag"], label="release_tag API projection"
         )
+        recovery_run_projection = _parse_canonical_file(
+            projections["recovery_actions_run"],
+            label="recovery_actions_run API projection",
+        )
+        recovery_job_projection = _parse_canonical_file(
+            projections["recovery_actions_job"],
+            label="recovery_actions_job API projection",
+        )
+        recovery_release_absence = _parse_canonical_file(
+            projections["recovery_release_absence"],
+            label="recovery_release_absence API projection",
+        )
+        recovery_tag_absence = _parse_canonical_file(
+            projections["recovery_release_tag_absence"],
+            label="recovery_release_tag_absence API projection",
+        )
         retained = (
             ("run id", run_projection.get("id"), self.run_id),
             ("run attempt", run_projection.get("run_attempt"), 1),
+            ("run number", run_projection.get("run_number"), self.run_number),
             ("run event", run_projection.get("event"), EVENT),
             ("run actor", run_projection.get("actor"), OWNER_LOGIN),
             ("run triggering actor", run_projection.get("triggering_actor"), OWNER_LOGIN),
@@ -778,6 +933,38 @@ class DesignSeedAttestationAdmission(_ScopeBinding):
             ("release tag ref", tag_projection.get("ref"), f"refs/tags/{self.release_tag}"),
             ("release tag type", tag_projection.get("object_type"), "commit"),
             ("release tag SHA", tag_projection.get("object_sha"), self.workflow_sha),
+            ("recovery run id", recovery_run_projection.get("id"), RECOVERY_RUN_ID),
+            (
+                "recovery run attempt",
+                recovery_run_projection.get("run_attempt"),
+                RECOVERY_RUN_ATTEMPT,
+            ),
+            (
+                "recovery run number",
+                recovery_run_projection.get("run_number"),
+                RECOVERY_RUN_NUMBER,
+            ),
+            ("recovery run conclusion", recovery_run_projection.get("conclusion"), "failure"),
+            ("recovery run status", recovery_run_projection.get("status"), "completed"),
+            (
+                "recovery run workflow",
+                recovery_run_projection.get("path"),
+                RECOVERY_WORKFLOW,
+            ),
+            (
+                "recovery run head SHA",
+                recovery_run_projection.get("head_sha"),
+                RECOVERY_WORKFLOW_SHA,
+            ),
+            ("recovery job id", recovery_job_projection.get("id"), RECOVERY_JOB_ID),
+            ("recovery failed step", recovery_job_projection.get("failed_step_number"), 5),
+            (
+                "recovery failed step conclusion",
+                recovery_job_projection.get("failed_step_conclusion"),
+                "failure",
+            ),
+            ("recovery release absence status", recovery_release_absence.get("status"), 404),
+            ("recovery tag absence status", recovery_tag_absence.get("status"), 404),
         )
         for name, observed, expected in retained:
             _exact(f"retained GitHub {name}", observed, expected)
@@ -920,7 +1107,7 @@ def _derive_target_round(integrated_seconds: int) -> tuple[int, int, int]:
 
 
 def _release_tag(scope_sha256: str) -> str:
-    return f"design-seed-scope-{_sha256('scope SHA-256', scope_sha256)}"
+    return f"design-seed-scope-v2-{_sha256('scope SHA-256', scope_sha256)}"
 
 
 def _ref_name(git_ref: str) -> str:
@@ -992,7 +1179,7 @@ def _read_github_api(path: str) -> Mapping[str, Any]:
         headers={
             "Accept": "application/vnd.github+json",
             "Accept-Encoding": "identity",
-            "User-Agent": "fractal-ann-diagnostics-design-seed-v1",
+            "User-Agent": "fractal-ann-diagnostics-design-seed-v2",
             "X-GitHub-Api-Version": _GITHUB_API_VERSION,
         },
         method="GET",
@@ -1021,6 +1208,45 @@ def _read_github_api(path: str) -> Mapping[str, Any]:
     return value
 
 
+def _read_github_api_absence(path: str) -> Mapping[str, object]:
+    """Require an exact public 404 without following redirects."""
+
+    if not path.startswith("/") or "?" in path or "#" in path:
+        raise DesignSeedCommitmentError("GitHub API absence path is not closed")
+    url = f"https://api.github.com{path}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Accept-Encoding": "identity",
+            "User-Agent": "fractal-ann-diagnostics-design-seed-v2",
+            "X-GitHub-Api-Version": _GITHUB_API_VERSION,
+        },
+        method="GET",
+    )
+    context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    opener = urllib.request.build_opener(
+        _NoRedirect(), urllib.request.HTTPSHandler(context=context)
+    )
+    try:
+        with opener.open(request, timeout=30):
+            raise DesignSeedCommitmentError("GitHub object expected absent is now present")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404 or exc.geturl() != url:
+            raise DesignSeedCommitmentError("GitHub API absence response differs") from exc
+        encoded = exc.read(_MAX_GITHUB_API_BYTES + 1)
+    except DesignSeedCommitmentError:
+        raise
+    except (OSError, ValueError, urllib.error.URLError) as exc:
+        raise DesignSeedCommitmentError("public GitHub API absence check failed") from exc
+    if not encoded or len(encoded) > _MAX_GITHUB_API_BYTES:
+        raise DesignSeedCommitmentError("GitHub API absence response is empty or too large")
+    body = _strict_json(encoded, label="GitHub API absence response")
+    if not isinstance(body, Mapping) or body.get("message") != "Not Found":
+        raise DesignSeedCommitmentError("GitHub API absence response is not a closed 404")
+    return {"path": path, "status": 404}
+
+
 def _nested_login(value: Mapping[str, Any], name: str) -> object:
     row = value.get(name)
     if not isinstance(row, Mapping):
@@ -1041,6 +1267,147 @@ def _default_remote_admission_verifier(
     predicate: Mapping[str, Any],
     rekor_integrated_at_utc: str,
 ) -> Mapping[str, bytes]:
+    recovery_run = _read_github_api(
+        f"/repos/{REPOSITORY}/actions/runs/{RECOVERY_RUN_ID}/attempts/{RECOVERY_RUN_ATTEMPT}"
+    )
+    recovery_run_projection: dict[str, object] = {
+        "actor": _nested_login(recovery_run, "actor"),
+        "conclusion": recovery_run.get("conclusion"),
+        "event": recovery_run.get("event"),
+        "head_branch": recovery_run.get("head_branch"),
+        "head_repository": _nested_repository(recovery_run, "head_repository"),
+        "head_sha": recovery_run.get("head_sha"),
+        "id": recovery_run.get("id"),
+        "path": recovery_run.get("path"),
+        "repository": _nested_repository(recovery_run, "repository"),
+        "run_attempt": recovery_run.get("run_attempt"),
+        "run_number": recovery_run.get("run_number"),
+        "status": recovery_run.get("status"),
+        "triggering_actor": _nested_login(recovery_run, "triggering_actor"),
+    }
+    expected_recovery_run = {
+        "actor": OWNER_LOGIN,
+        "conclusion": "failure",
+        "event": EVENT,
+        "head_branch": _ref_name(RECOVERY_GIT_REF),
+        "head_repository": REPOSITORY,
+        "head_sha": RECOVERY_WORKFLOW_SHA,
+        "id": RECOVERY_RUN_ID,
+        "path": RECOVERY_WORKFLOW,
+        "repository": REPOSITORY,
+        "run_attempt": RECOVERY_RUN_ATTEMPT,
+        "run_number": RECOVERY_RUN_NUMBER,
+        "status": "completed",
+        "triggering_actor": OWNER_LOGIN,
+    }
+    for name, expected in expected_recovery_run.items():
+        _exact(f"recovery GitHub Actions run {name}", recovery_run_projection[name], expected)
+
+    recovery_job = _read_github_api(f"/repos/{REPOSITORY}/actions/jobs/{RECOVERY_JOB_ID}")
+    raw_steps = recovery_job.get("steps")
+    if not isinstance(raw_steps, list):
+        raise DesignSeedCommitmentError("recovery GitHub Actions job steps are absent")
+    retained_steps = [
+        {
+            "conclusion": step.get("conclusion"),
+            "name": step.get("name"),
+            "number": step.get("number"),
+            "status": step.get("status"),
+        }
+        for step in raw_steps
+        if isinstance(step, Mapping) and step.get("number") in range(1, 11)
+    ]
+    expected_steps = [
+        {"conclusion": "success", "name": "Set up job", "number": 1, "status": "completed"},
+        {
+            "conclusion": "success",
+            "name": "Admit the fixed hosted-runner identity and immutable apparatus tag",
+            "number": 2,
+            "status": "completed",
+        },
+        {
+            "conclusion": "success",
+            "name": "Check out the immutable apparatus tag",
+            "number": 3,
+            "status": "completed",
+        },
+        {
+            "conclusion": "success",
+            "name": "Install the pinned verifier environment",
+            "number": 4,
+            "status": "completed",
+        },
+        {
+            "conclusion": "failure",
+            "name": _RECOVERY_AMENDMENT["failed_step_name"],
+            "number": 5,
+            "status": "completed",
+        },
+        {
+            "conclusion": "skipped",
+            "name": "Publish the one-shot assetless scope release",
+            "number": 6,
+            "status": "completed",
+        },
+        {
+            "conclusion": "skipped",
+            "name": "Build the closed API-verifiable predicate",
+            "number": 7,
+            "status": "completed",
+        },
+        {
+            "conclusion": "skipped",
+            "name": "Attest only after the immutable burn is visible",
+            "number": 8,
+            "status": "completed",
+        },
+        {
+            "conclusion": "skipped",
+            "name": "Retain the commitment, bundle, and remote burn readbacks",
+            "number": 9,
+            "status": "completed",
+        },
+        {
+            "conclusion": "skipped",
+            "name": "Upload the closed design-seed evidence",
+            "number": 10,
+            "status": "completed",
+        },
+    ]
+    if retained_steps != expected_steps:
+        raise DesignSeedCommitmentError("recovery GitHub Actions step boundary differs")
+    recovery_job_projection: dict[str, object] = {
+        "conclusion": recovery_job.get("conclusion"),
+        "failed_step_conclusion": retained_steps[4]["conclusion"],
+        "failed_step_name": retained_steps[4]["name"],
+        "failed_step_number": retained_steps[4]["number"],
+        "id": recovery_job.get("id"),
+        "run_attempt": recovery_job.get("run_attempt"),
+        "run_id": recovery_job.get("run_id"),
+        "status": recovery_job.get("status"),
+        "steps": retained_steps,
+    }
+    expected_recovery_job = {
+        "conclusion": "failure",
+        "failed_step_conclusion": "failure",
+        "failed_step_name": _RECOVERY_AMENDMENT["failed_step_name"],
+        "failed_step_number": 5,
+        "id": RECOVERY_JOB_ID,
+        "run_attempt": RECOVERY_RUN_ATTEMPT,
+        "run_id": RECOVERY_RUN_ID,
+        "status": "completed",
+    }
+    for name, expected in expected_recovery_job.items():
+        _exact(f"recovery GitHub Actions job {name}", recovery_job_projection[name], expected)
+
+    encoded_recovery_tag = urllib.parse.quote(RECOVERY_RELEASE_TAG, safe="")
+    recovery_release_absence = _read_github_api_absence(
+        f"/repos/{REPOSITORY}/releases/tags/{encoded_recovery_tag}"
+    )
+    recovery_tag_absence = _read_github_api_absence(
+        f"/repos/{REPOSITORY}/git/ref/tags/{encoded_recovery_tag}"
+    )
+
     run_id = _positive("attestation predicate run_id", predicate["run_id"])
     release_id = _positive("attestation predicate release_id", predicate["release_id"])
     run = _read_github_api(f"/repos/{REPOSITORY}/actions/runs/{run_id}/attempts/1")
@@ -1056,6 +1423,7 @@ def _default_remote_admission_verifier(
         "path": run.get("path"),
         "repository": _nested_repository(run, "repository"),
         "run_attempt": run.get("run_attempt"),
+        "run_number": run.get("run_number"),
         "run_started_at": run.get("run_started_at"),
         "status": run.get("status"),
         "triggering_actor": _nested_login(run, "triggering_actor"),
@@ -1071,6 +1439,7 @@ def _default_remote_admission_verifier(
         "path": commitment.attestation_workflow,
         "repository": REPOSITORY,
         "run_attempt": 1,
+        "run_number": ATTESTATION_RUN_NUMBER,
         "status": "completed",
         "triggering_actor": OWNER_LOGIN,
     }
@@ -1137,6 +1506,10 @@ def _default_remote_admission_verifier(
         _exact(f"GitHub release tag {name}", tag_projection[name], expected)
     return {
         "actions_run": _projection_bytes(run_projection),
+        "recovery_actions_job": _projection_bytes(recovery_job_projection),
+        "recovery_actions_run": _projection_bytes(recovery_run_projection),
+        "recovery_release_absence": _projection_bytes(recovery_release_absence),
+        "recovery_release_tag_absence": _projection_bytes(recovery_tag_absence),
         "release": _projection_bytes(release_projection),
         "release_tag": _projection_bytes(tag_projection),
     }
@@ -1192,8 +1565,11 @@ def _predicate_from_statement(statement: Mapping[str, Any]) -> Mapping[str, Any]
                 "release_name",
                 "release_published_at_utc",
                 "release_tag",
+                "recovery_amendment_path",
+                "recovery_amendment_sha256",
                 "run_attempt",
                 "run_id",
+                "run_number",
                 "schema_version",
                 "scope_sha256",
                 "source_p",
@@ -1219,10 +1595,13 @@ def _validate_predicate(
         ("actor", OWNER_LOGIN),
         ("triggering_actor", OWNER_LOGIN),
         ("run_attempt", 1),
+        ("run_number", ATTESTATION_RUN_NUMBER),
         ("scope_sha256", commitment.scope_sha256),
         ("commitment_sha256", commitment.commitment_sha256),
         ("source_p", commitment.source_p),
         ("source_tree", commitment.source_tree),
+        ("recovery_amendment_path", commitment.recovery_amendment_path),
+        ("recovery_amendment_sha256", commitment.recovery_amendment_sha256),
         ("workflow", commitment.attestation_workflow),
         ("workflow_sha", commitment.attestation_workflow_sha),
         ("git_ref", commitment.attestation_git_ref),
@@ -1368,9 +1747,16 @@ def build_design_seed_request(
     attestation_workflow: str,
     attestation_workflow_sha: str,
     attestation_git_ref: str,
+    recovery_amendment: str,
+    recovery_amendment_sha256: str,
     output_directory: str | Path,
 ) -> tuple[Path, DesignSeedCommitmentRequest]:
     _verify_exact_p_source()
+    _verify_recovery_amendment(
+        path=recovery_amendment,
+        expected_sha256=recovery_amendment_sha256,
+        workflow_sha=attestation_workflow_sha,
+    )
     pins = {
         name: _sha256(name, value)
         for name, value in (
@@ -1387,12 +1773,14 @@ def build_design_seed_request(
         scope_sha256=scope,
         source_p=SOURCE_P,
         source_tree=SOURCE_TREE,
+        recovery_amendment_path=recovery_amendment,
+        recovery_amendment_sha256=recovery_amendment_sha256,
         attestation_workflow=attestation_workflow,
         attestation_workflow_sha=attestation_workflow_sha,
         attestation_git_ref=attestation_git_ref,
         attestation_workflow_ref=attestation_workflow_ref,
     )
-    target = _safe_output_directory(output_directory) / f"design-seed-request-{scope}.json"
+    target = _safe_output_directory(output_directory) / f"design-seed-request-v2-{scope}.json"
     _write_exclusive(target, request.canonical_file_bytes())
     return target, request
 
@@ -1411,9 +1799,14 @@ def verify_design_seed_request(
     )
     if encoded != request.canonical_file_bytes():
         raise DesignSeedCommitmentError("design-seed request bytes are not canonical")
-    expected_name = f"design-seed-request-{request.scope_sha256}.json"
+    expected_name = f"design-seed-request-v2-{request.scope_sha256}.json"
     if Path(path).name != expected_name:
         raise DesignSeedCommitmentError("design-seed request filename differs from its scope")
+    _verify_recovery_amendment(
+        path=request.recovery_amendment_path,
+        expected_sha256=request.recovery_amendment_sha256,
+        workflow_sha=request.attestation_workflow_sha,
+    )
     return request
 
 
@@ -1429,15 +1822,18 @@ def build_design_seed_commitment(
         scope_sha256=request.scope_sha256,
         source_p=request.source_p,
         source_tree=request.source_tree,
+        recovery_amendment_path=request.recovery_amendment_path,
+        recovery_amendment_sha256=request.recovery_amendment_sha256,
         request_sha256=request.request_sha256,
-        attestation_subject_name=f"design-seed-commitment-{request.scope_sha256}.json",
+        attestation_subject_name=f"design-seed-commitment-v2-{request.scope_sha256}.json",
         attestation_workflow=request.attestation_workflow,
         attestation_workflow_sha=request.attestation_workflow_sha,
         attestation_git_ref=request.attestation_git_ref,
         attestation_workflow_ref=request.attestation_workflow_ref,
+        run_number=request.run_number,
     )
     directory = _safe_output_directory(output_directory)
-    marker = directory / f".design-seed-scope-{request.scope_sha256}.local-attempt.json"
+    marker = directory / f".design-seed-scope-v2-{request.scope_sha256}.local-attempt.json"
     marker_bytes = _canonical_file_bytes(
         {
             "authority": "LOCAL_DEFENSE_ONLY",
@@ -1472,6 +1868,11 @@ def verify_design_seed_commitment(
         raise DesignSeedCommitmentError("commitment filename differs from its attested subject")
     if observed_digest != commitment.commitment_sha256:
         raise DesignSeedCommitmentError("commitment digest is internally inconsistent")
+    _verify_recovery_amendment(
+        path=commitment.recovery_amendment_path,
+        expected_sha256=commitment.recovery_amendment_sha256,
+        workflow_sha=commitment.attestation_workflow_sha,
+    )
     return commitment
 
 
@@ -1515,6 +1916,8 @@ def admit_design_seed_attestation(
         scope_sha256=commitment.scope_sha256,
         source_p=commitment.source_p,
         source_tree=commitment.source_tree,
+        recovery_amendment_path=commitment.recovery_amendment_path,
+        recovery_amendment_sha256=commitment.recovery_amendment_sha256,
         commitment_sha256=commitment.commitment_sha256,
         attestation_subject_name=commitment.attestation_subject_name,
         attestation_bundle_base64=base64.b64encode(bundle).decode("ascii"),
@@ -1527,6 +1930,7 @@ def admit_design_seed_attestation(
         git_ref=predicate["git_ref"],
         run_id=predicate["run_id"],
         run_attempt=predicate["run_attempt"],
+        run_number=predicate["run_number"],
         event=predicate["event"],
         actor=predicate["actor"],
         triggering_actor=predicate["triggering_actor"],
@@ -1536,6 +1940,22 @@ def admit_design_seed_attestation(
         release_published_at_utc=predicate["release_published_at_utc"],
         actions_run_api_projection_base64=encoded_remote["actions_run"][0],
         actions_run_api_projection_sha256=encoded_remote["actions_run"][1],
+        recovery_actions_job_api_projection_base64=encoded_remote["recovery_actions_job"][0],
+        recovery_actions_job_api_projection_sha256=encoded_remote["recovery_actions_job"][1],
+        recovery_actions_run_api_projection_base64=encoded_remote["recovery_actions_run"][0],
+        recovery_actions_run_api_projection_sha256=encoded_remote["recovery_actions_run"][1],
+        recovery_release_absence_api_projection_base64=encoded_remote["recovery_release_absence"][
+            0
+        ],
+        recovery_release_absence_api_projection_sha256=encoded_remote["recovery_release_absence"][
+            1
+        ],
+        recovery_release_tag_absence_api_projection_base64=encoded_remote[
+            "recovery_release_tag_absence"
+        ][0],
+        recovery_release_tag_absence_api_projection_sha256=encoded_remote[
+            "recovery_release_tag_absence"
+        ][1],
         release_api_projection_base64=encoded_remote["release"][0],
         release_api_projection_sha256=encoded_remote["release"][1],
         release_tag_api_projection_base64=encoded_remote["release_tag"][0],
@@ -1552,7 +1972,7 @@ def admit_design_seed_attestation(
     )
     target = (
         _safe_output_directory(output_directory)
-        / f"design-seed-attestation-{commitment.scope_sha256}.json"
+        / f"design-seed-attestation-v2-{commitment.scope_sha256}.json"
     )
     _write_exclusive(target, admission.canonical_file_bytes())
     return target, admission
@@ -1579,7 +1999,7 @@ def verify_design_seed_attestation(
     )
     if encoded != admission.canonical_file_bytes():
         raise DesignSeedCommitmentError("attestation-admission bytes are not canonical")
-    expected_name = f"design-seed-attestation-{commitment.scope_sha256}.json"
+    expected_name = f"design-seed-attestation-v2-{commitment.scope_sha256}.json"
     if Path(path).name != expected_name:
         raise DesignSeedCommitmentError("attestation-admission filename differs from scope")
     for name in (
@@ -1590,6 +2010,8 @@ def verify_design_seed_attestation(
         "scope_sha256",
         "source_p",
         "source_tree",
+        "recovery_amendment_path",
+        "recovery_amendment_sha256",
         "commitment_sha256",
         "attestation_subject_name",
     ):
@@ -1625,6 +2047,7 @@ def verify_design_seed_attestation(
     for name in (
         "run_id",
         "run_attempt",
+        "run_number",
         "event",
         "actor",
         "triggering_actor",
@@ -1658,6 +2081,26 @@ def verify_design_seed_attestation(
             "actions_run",
             admission.actions_run_api_projection_base64,
             admission.actions_run_api_projection_sha256,
+        ),
+        "recovery_actions_job": _decode_projection(
+            "recovery_actions_job",
+            admission.recovery_actions_job_api_projection_base64,
+            admission.recovery_actions_job_api_projection_sha256,
+        ),
+        "recovery_actions_run": _decode_projection(
+            "recovery_actions_run",
+            admission.recovery_actions_run_api_projection_base64,
+            admission.recovery_actions_run_api_projection_sha256,
+        ),
+        "recovery_release_absence": _decode_projection(
+            "recovery_release_absence",
+            admission.recovery_release_absence_api_projection_base64,
+            admission.recovery_release_absence_api_projection_sha256,
+        ),
+        "recovery_release_tag_absence": _decode_projection(
+            "recovery_release_tag_absence",
+            admission.recovery_release_tag_absence_api_projection_base64,
+            admission.recovery_release_tag_absence_api_projection_sha256,
         ),
         "release": _decode_projection(
             "release",
@@ -1760,6 +2203,8 @@ def build_design_seed_reveal(
         scope_sha256=commitment.scope_sha256,
         source_p=commitment.source_p,
         source_tree=commitment.source_tree,
+        recovery_amendment_path=commitment.recovery_amendment_path,
+        recovery_amendment_sha256=commitment.recovery_amendment_sha256,
         commitment_sha256=commitment.commitment_sha256,
         attestation_admission_path=str(admission_path),
         attestation_admission_sha256=admission.admission_sha256,
@@ -1770,7 +2215,7 @@ def build_design_seed_reveal(
         quicknet_signature=claims.signature,
         design_seed_sha256=seed,
     )
-    target = _safe_output_directory(output_directory) / f"design-seed-reveal-{seed}.json"
+    target = _safe_output_directory(output_directory) / f"design-seed-reveal-v2-{seed}.json"
     _write_exclusive(target, reveal.canonical_file_bytes())
     return target, reveal
 
@@ -1794,7 +2239,7 @@ def verify_design_seed_reveal(
     reveal = DesignSeedReveal.from_dict(_parse_canonical_file(encoded, label="design-seed reveal"))
     if encoded != reveal.canonical_file_bytes():
         raise DesignSeedCommitmentError("design-seed reveal bytes are not canonical")
-    expected_name = f"design-seed-reveal-{reveal.design_seed_sha256}.json"
+    expected_name = f"design-seed-reveal-v2-{reveal.design_seed_sha256}.json"
     if Path(path).name != expected_name:
         raise DesignSeedCommitmentError("reveal filename differs from the derived seed")
     for name in (
@@ -1805,6 +2250,8 @@ def verify_design_seed_reveal(
         "scope_sha256",
         "source_p",
         "source_tree",
+        "recovery_amendment_path",
+        "recovery_amendment_sha256",
         "commitment_sha256",
     ):
         expected = (
@@ -1865,6 +2312,8 @@ def _parser() -> argparse.ArgumentParser:
     request.add_argument("--attestation-workflow", required=True)
     request.add_argument("--attestation-workflow-sha", required=True)
     request.add_argument("--attestation-git-ref", required=True)
+    request.add_argument("--recovery-amendment", required=True)
+    request.add_argument("--recovery-amendment-sha256", required=True)
     request.add_argument("--output-directory", type=Path, required=True)
 
     verify_request = commands.add_parser("verify-request")
@@ -1909,7 +2358,7 @@ def _result(kind: str, path: Path, sha256: str, scope: str) -> None:
                 "artifact_kind": kind,
                 "artifact_path": str(path.resolve(strict=True)),
                 "artifact_sha256": sha256,
-                "schema_version": "fractal-design-seed-cli-result-v1",
+                "schema_version": CLI_RESULT_SCHEMA,
                 "scope_sha256": scope,
             }
         ).decode("ascii")
@@ -1928,6 +2377,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 attestation_workflow=arguments.attestation_workflow,
                 attestation_workflow_sha=arguments.attestation_workflow_sha,
                 attestation_git_ref=arguments.attestation_git_ref,
+                recovery_amendment=arguments.recovery_amendment,
+                recovery_amendment_sha256=arguments.recovery_amendment_sha256,
                 output_directory=arguments.output_directory,
             )
             _result("request", path, value.request_sha256, value.scope_sha256)

@@ -56,8 +56,15 @@ NumPy 2.5.1, scikit-learn 1.9.0, SciPy 1.18.0, and PyYAML 6.0.3. The final nonro
 networkless build gate also
 proves that the `torch` and `transformers` module specifications are absent. C0 cannot claim to
 have produced the pre-C1 embedding matrices. The exact MPS builder receipt and commands are
-specified in [embedding-store.md](embedding-store.md). The shared lock hash binds both resolutions;
-the selected extra and closed installed-package set distinguish their execution roles.
+specified in [embedding-store.md](embedding-store.md). The completed embedding stores preserve
+their original `uv.lock` digest,
+`a7251c8ce2b54888a047daefb32a2584c6d3f596030dd6cd87e46693b7ca57d6`; the corrected image
+closure uses `4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337e5`. Both independently
+retained closure records resolve PyYAML 6.0.3. The selected extra and closed installed-package set
+distinguish their execution roles. The canonical
+[runtime-packaging amendment](confirmatory-runtime-packaging-amendment-v1.json), SHA-256
+`dd79e8b1aa2315eb6269cb6628ec835775853d139b501e30581e029a0726290b`, binds that transition to
+the unchanged source tree and four-input scientific scope.
 
 Snapshot transport is HTTP; transport encryption is not the trust boundary. The Dockerfile first
 pins the dated `InRelease` bytes and Debian archive keyring by SHA-256, then verifies the Release
