@@ -657,14 +657,14 @@ def test_tlock_interoperability_receipt_matches_the_pinned_ciphertext_size() -> 
     assert "609" not in step
 
 
-def test_trivy_download_matches_cache_owner_and_offline_scans_use_read_only_db() -> None:
+def test_trivy_containers_match_bound_resource_owners_and_use_read_only_db() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     step = workflow[
         workflow.index(
             "- name: Retain and adjudicate raw Trivy and CycloneDX evidence"
         ) : workflow.index("- name: Retain govulncheck source and symbol reachability evidence")
     ]
-    commands = tuple(re.finditer(r"(?m)^\s+run_trivy (image|sbom) \\\n", step))
+    commands = tuple(re.finditer(r"(?m)^\s+run_trivy_(image|sbom) \\\n", step))
 
     assert [match.group(1) for match in commands] == [
         "image",
@@ -684,13 +684,18 @@ def test_trivy_download_matches_cache_owner_and_offline_scans_use_read_only_db()
     assert step.count("--cache-backend memory") == 4
     assert 'trivy_uid="$(id -u)"' in step
     assert 'trivy_gid="$(id -g)"' in step
-    assert '--user "${trivy_uid}:${trivy_gid}"' in step
+    assert step.count('--user "${trivy_uid}:${trivy_gid}"') == 2
     assert '--mount "type=bind,src=${trivy_cache},dst=/trivy-cache"' in step
     assert 'chmod -R a-w,go+rX "$trivy_cache"' in step
-    assert step.count("--cache-dir /trivy-cache") == 3
-    assert step.count(
-        '--mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly"'
-    ) == 2
+    assert step.count("--cache-dir /trivy-cache") == 4
+    assert step.count('--mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly"') == 3
+    image_runner = step[step.index("run_trivy_image()") : step.index("run_trivy_sbom()")]
+    sbom_runner = step[step.index("run_trivy_sbom()") : step.index("for platform in")]
+    assert "/var/run/docker.sock" in image_runner
+    assert "dst=/evidence" not in image_runner
+    assert '--user "${trivy_uid}:${trivy_gid}"' in sbom_runner
+    assert "/var/run/docker.sock" not in sbom_runner
+    assert '--mount "type=bind,src=${evidence_dir},dst=/evidence,readonly"' in sbom_runner
     assert "/root/.cache/trivy" not in step
 
 

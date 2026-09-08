@@ -2460,7 +2460,7 @@ jobs:
             and (.VulnerabilityDB.UpdatedAt | type == "string" and length > 0)
             and (.VulnerabilityDB.DownloadedAt | type == "string" and length > 0)
           ' "$evidence_dir/trivy-version-db.json" >/dev/null
-          run_trivy() {
+          run_trivy_image() {
             docker run --rm \
               --platform linux/amd64 \
               --network none \
@@ -2468,8 +2468,18 @@ jobs:
               --security-opt no-new-privileges \
               --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
               --mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly" \
+              "$TRIVY_IMAGE" --cache-dir /trivy-cache image "$@"
+          }
+          run_trivy_sbom() {
+            docker run --rm \
+              --platform linux/amd64 \
+              --network none \
+              --user "${trivy_uid}:${trivy_gid}" \
+              --cap-drop ALL \
+              --security-opt no-new-privileges \
+              --mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly" \
               --mount "type=bind,src=${evidence_dir},dst=/evidence,readonly" \
-              "$TRIVY_IMAGE" --cache-dir /trivy-cache "$@"
+              "$TRIVY_IMAGE" --cache-dir /trivy-cache sbom "$@"
           }
           for platform in linux/amd64 linux/arm64; do
             os="${platform%/*}"
@@ -2492,7 +2502,7 @@ jobs:
             cyclonedx="$evidence_dir/${slug}-trivy.cdx.json"
             sbom_scan="$evidence_dir/${slug}-trivy-sbom-rescan.json"
             adjudication="$evidence_dir/${slug}-security-adjudication.json"
-            run_trivy image \
+            run_trivy_image \
               --cache-backend memory \
               --image-src docker \
               --scanners vuln \
@@ -2504,7 +2514,7 @@ jobs:
               --disable-telemetry \
               --no-progress \
               "$platform_reference" > "$direct"
-            run_trivy image \
+            run_trivy_image \
               --cache-backend memory \
               --image-src docker \
               --scanners vuln \
@@ -2516,7 +2526,7 @@ jobs:
               --disable-telemetry \
               --no-progress \
               "$platform_reference" > "$cyclonedx"
-            run_trivy sbom \
+            run_trivy_sbom \
               --scanners vuln \
               --format json \
               --skip-db-update \
@@ -2564,7 +2574,7 @@ jobs:
           release_cyclonedx="$evidence_dir/release-linux-arm64-trivy.cdx.json"
           release_sbom_scan="$evidence_dir/release-linux-arm64-trivy-sbom-rescan.json"
           release_adjudication="$evidence_dir/release-linux-arm64-security-adjudication.json"
-          run_trivy image \
+          run_trivy_image \
             --cache-backend memory \
             --image-src docker \
             --scanners vuln \
@@ -2576,7 +2586,7 @@ jobs:
             --disable-telemetry \
             --no-progress \
             "$release_reference" > "$release_direct"
-          run_trivy image \
+          run_trivy_image \
             --cache-backend memory \
             --image-src docker \
             --scanners vuln \
@@ -2588,7 +2598,7 @@ jobs:
             --disable-telemetry \
             --no-progress \
             "$release_reference" > "$release_cyclonedx"
-          run_trivy sbom \
+          run_trivy_sbom \
             --scanners vuln \
             --format json \
             --skip-db-update \
