@@ -1842,6 +1842,14 @@ def build_development_phase2_view(
             )
         acl_guard.verify()
 
+        # Reproducing the independently committed selection creates and removes
+        # a private scratch directory below the output parent.  That expected,
+        # label-free transaction changes the parent's timestamps.  Start the
+        # publication-stability interval only after the second reproduction has
+        # completed; mutations from this point through source admission remain
+        # fail-closed at the check below.
+        parent_before = os.fstat(parent_descriptor)
+
         # The complete, label-bearing source remains unopened until every
         # label-free control has been reverified under its retained lease.
         source_descriptor, source_before = _open_absolute_directory_acl(

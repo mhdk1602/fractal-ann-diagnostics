@@ -725,6 +725,37 @@ def test_changed_admission_under_lease_blocks_source_open(
     assert not (output_parent / "phase-two").exists()
 
 
+def test_label_free_scratch_churn_refreshes_output_parent_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _build_fixture(tmp_path, monkeypatch)
+    admitted = operator._admit_label_free_controls
+    call_count = 0
+
+    def mutate_parent_then_admit(**kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        marker = fixture.output_parent / f".label-free-scratch-{call_count}"
+        marker.mkdir(mode=0o700)
+        marker.rmdir()
+        metadata = os.stat(fixture.output_parent)
+        os.utime(
+            fixture.output_parent,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns + call_count * 1_000_000),
+        )
+        return admitted(**kwargs)
+
+    monkeypatch.setattr(operator, "_admit_label_free_controls", mutate_parent_then_admit)
+
+    receipt = operator.build_development_phase2_view(**fixture.arguments)
+
+    assert call_count == 2
+    assert receipt.output_root == fixture.output
+    assert fixture.output.is_dir()
+    _thaw_tree(fixture.output)
+
+
 def test_indeterminate_phase_two_rollback_preserves_the_pinned_package(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
