@@ -657,7 +657,7 @@ def test_tlock_interoperability_receipt_matches_the_pinned_ciphertext_size() -> 
     assert "609" not in step
 
 
-def test_offline_trivy_image_scans_use_memory_cache_with_read_only_db() -> None:
+def test_trivy_download_matches_cache_owner_and_offline_scans_use_read_only_db() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     step = workflow[
         workflow.index(
@@ -682,7 +682,16 @@ def test_offline_trivy_image_scans_use_memory_cache_with_read_only_db() -> None:
         else:
             assert "--cache-backend memory" not in command
     assert step.count("--cache-backend memory") == 4
-    assert '--mount "type=bind,src=${trivy_cache},dst=/root/.cache/trivy,readonly"' in step
+    assert 'trivy_uid="$(id -u)"' in step
+    assert 'trivy_gid="$(id -g)"' in step
+    assert '--user "${trivy_uid}:${trivy_gid}"' in step
+    assert '--mount "type=bind,src=${trivy_cache},dst=/trivy-cache"' in step
+    assert 'chmod -R a-w,go+rX "$trivy_cache"' in step
+    assert step.count("--cache-dir /trivy-cache") == 3
+    assert step.count(
+        '--mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly"'
+    ) == 2
+    assert "/root/.cache/trivy" not in step
 
 
 def test_candidate_closure_binds_the_admitted_build_context_tree() -> None:

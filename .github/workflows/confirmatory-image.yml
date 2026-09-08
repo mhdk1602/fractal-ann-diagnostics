@@ -2422,6 +2422,8 @@ jobs:
           sealed_context="${RUNNER_TEMP}/confirmatory-c0-context"
           registry_index="$evidence_dir/registry-index.json"
           trivy_cache="${RUNNER_TEMP}/trivy-cache"
+          trivy_uid="$(id -u)"
+          trivy_gid="$(id -g)"
           install -d -m 0700 "$trivy_cache"
           test -f "$registry_index"
           docker pull --platform linux/amd64 "$TRIVY_IMAGE" >/dev/null
@@ -2435,19 +2437,22 @@ jobs:
             ' "$evidence_dir/trivy-image.json" >/dev/null
           docker run --rm \
             --platform linux/amd64 \
+            --user "${trivy_uid}:${trivy_gid}" \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            --mount "type=bind,src=${trivy_cache},dst=/root/.cache/trivy" \
+            --mount "type=bind,src=${trivy_cache},dst=/trivy-cache" \
             "$TRIVY_IMAGE" \
+            --cache-dir /trivy-cache \
             image --download-db-only --no-progress --disable-telemetry
+          chmod -R a-w,go+rX "$trivy_cache"
           docker run --rm \
             --platform linux/amd64 \
             --network none \
             --cap-drop ALL \
             --security-opt no-new-privileges \
-            --mount "type=bind,src=${trivy_cache},dst=/root/.cache/trivy,readonly" \
+            --mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly" \
             "$TRIVY_IMAGE" \
-            version --format json \
+            --cache-dir /trivy-cache version --format json \
             | jq -S -c . > "$evidence_dir/trivy-version-db.json"
           jq -e '
             .Version == "0.72.0"
@@ -2462,9 +2467,9 @@ jobs:
               --cap-drop ALL \
               --security-opt no-new-privileges \
               --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock \
-              --mount "type=bind,src=${trivy_cache},dst=/root/.cache/trivy,readonly" \
+              --mount "type=bind,src=${trivy_cache},dst=/trivy-cache,readonly" \
               --mount "type=bind,src=${evidence_dir},dst=/evidence,readonly" \
-              "$TRIVY_IMAGE" "$@"
+              "$TRIVY_IMAGE" --cache-dir /trivy-cache "$@"
           }
           for platform in linux/amd64 linux/arm64; do
             os="${platform%/*}"
