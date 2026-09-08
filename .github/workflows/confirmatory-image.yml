@@ -2430,7 +2430,7 @@ jobs:
           jq -e \
             --arg digest \
               sha256:cffe3f5161a47a6823fbd23d985795b3ed72a4c806da4c4df16266c02accdd6f '
-              .[0].RepoDigests
+              .RepoDigests
               | any(.[]; endswith("@" + $digest))
             ' "$evidence_dir/trivy-image.json" >/dev/null
           docker run --rm \
