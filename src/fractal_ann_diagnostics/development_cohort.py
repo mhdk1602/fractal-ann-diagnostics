@@ -1548,7 +1548,23 @@ def _label_sources(
                     and row.role == role
                     and row.visibility == "online"
                 ]
-                if len(matches) != 1 or audit_by_path.get(expected_path) != matches[0]:
+                if len(matches) != 1:
+                    raise DevelopmentCohortError(
+                        f"label source {development_stage}:{corpus}:{role} "
+                        "differs from the inventory"
+                    )
+                audited = audit_by_path.get(expected_path)
+                # The partition audit binds its complete source inventory by
+                # staged_inventory_sha256 but directly enumerates only the
+                # assignments, queries, qrels, corpus, and exclusion inputs it
+                # reads. Evidence bundles are label payloads, so absence from
+                # source_artifacts is expected. If a compatible audit does
+                # enumerate one, it still has to match the inventory pin.
+                if (role == "qrels" and audited != matches[0]) or (
+                    role == "evidence-bundles"
+                    and audited is not None
+                    and audited != matches[0]
+                ):
                     raise DevelopmentCohortError(
                         f"label source {development_stage}:{corpus}:{role} differs from the audit"
                     )

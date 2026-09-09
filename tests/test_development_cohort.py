@@ -249,12 +249,16 @@ def _stage(tmp_path: Path) -> _Fixture:
         encoding="ascii",
     )
     audit_sha256 = _digest("typed-partition-audit")
+    # The production partition audit enumerates only artifacts used by the
+    # label-free partition proof. Evidence bundles remain transitively bound by
+    # the staged inventory digest and are opened only during materialization.
+    audit_sources = tuple(row for row in artifacts if row.role != "evidence-bundles")
     audit = SimpleNamespace(
         artifact_sha256=audit_sha256,
         assignment_artifact_sha256=assignment_pin.sha256,
         component_membership_sha256=_digest("component-membership"),
         source_artifact_set_sha256=_digest("audit-source-artifact-set"),
-        source_artifacts=artifacts,
+        source_artifacts=audit_sources,
         query_counts=tuple(query_counts),
     )
     return _Fixture(
