@@ -3319,12 +3319,12 @@ jobs:
               },
               "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.56.0"},
               "golang.org/x/mod": {"original": "0.36.0", "patched": "0.38.0"},
-              "golang.org/x/net": {"original": "0.55.0", "patched": "0.57.0"},
+              "golang.org/x/net": {"original": "0.55.0", "patched": "0.58.0"},
               "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
               "golang.org/x/sys": {"original": "0.45.0", "patched": "0.47.0"},
               "golang.org/x/text": {"original": "0.38.0", "patched": "0.41.0"},
               "golang.org/x/tools": {"original": "0.45.0", "patched": "0.48.0"},
-              "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.1"},
+              "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.2"},
               "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
           }
           assert opa_receipt["opa_sha256"] == hashlib.sha256(opa_path.read_bytes()).hexdigest()

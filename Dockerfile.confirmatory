@@ -327,12 +327,12 @@ ARG OPA_COMMIT=e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297
 ARG OPA_SOURCE_SHA256=a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637
 ARG OPA_VERSION=1.18.2
 ARG OPA_RELEASE_TIMESTAMP=2026-07-02T13:14:00Z
-ARG GRPC_VERSION=1.83.1
+ARG GRPC_VERSION=1.83.2
 ARG KLAUSPOST_COMPRESS_VERSION=1.18.7
 ARG ORAS_VERSION=2.6.2
 ARG X_CRYPTO_VERSION=0.56.0
 ARG X_MOD_VERSION=0.38.0
-ARG X_NET_VERSION=0.57.0
+ARG X_NET_VERSION=0.58.0
 ARG X_SYNC_VERSION=0.22.0
 ARG X_SYS_VERSION=0.47.0
 ARG X_TEXT_VERSION=0.41.0
@@ -342,9 +342,9 @@ ARG GO_TARBALL_SHA256_AMD64=708effb774be8237570d0add163225abbdfaf4fca28b2611df16
 ARG GO_TARBALL_SHA256_ARM64=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
 ARG OPA_ORIGINAL_GO_MOD_SHA256=59b4beeea1af5d33ce1c22579e24ab4b0002a3638d0aadeb82a5a4500eb8a175
 ARG OPA_ORIGINAL_GO_SUM_SHA256=be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f
-ARG OPA_PATCHED_GO_MOD_SHA256=065eb0199aab744eb5ea18f5c2146a0e41a029acd0fec7b6b06c22aeedbb57b3
-ARG OPA_PATCHED_GO_SUM_SHA256=b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43
-ARG OPA_DEPENDENCY_DELTA_SHA256=a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694
+ARG OPA_PATCHED_GO_MOD_SHA256=7bef641fc93c386bd9dfd05033b216e601ac1e14f95cedef86a7123b17e4a0c8
+ARG OPA_PATCHED_GO_SUM_SHA256=c6d3bb17e0ff837e0d08ca92ca630a7c76886e33d8573cd7c11bf6919dde1ae5
+ARG OPA_DEPENDENCY_DELTA_SHA256=373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f
 ARG SOURCE_DATE_EPOCH
 
 ENV LANG=C.UTF-8 \
@@ -422,13 +422,13 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
     && cp go.sum /out/artifacts/go.sum.patched \
     && diff -u \
         --label go.mod@opa-v1.18.2 \
-        --label go.mod@opa-v1.18.2+c0-security-overlay-v4 \
+        --label go.mod@opa-v1.18.2+c0-security-overlay-v5 \
         /tmp/go.mod.original go.mod \
         > /out/artifacts/opa-go-mod.patch \
         || test "$?" -eq 1 \
     && diff -u \
         --label go.sum@opa-v1.18.2 \
-        --label go.sum@opa-v1.18.2+c0-security-overlay-v4 \
+        --label go.sum@opa-v1.18.2+c0-security-overlay-v5 \
         /tmp/go.sum.original go.sum \
         > /out/artifacts/opa-go-sum.patch \
         || test "$?" -eq 1 \
@@ -456,11 +456,11 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.41\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.83\.1' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.83\.2' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/crypto[[:space:]]+v0\.56\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.57\.0' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.58\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sys[[:space:]]+v0\.47\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
@@ -1246,7 +1246,7 @@ LABEL org.opencontainers.image.title="Fractal ANN confirmatory runner" \
       io.fractal-ann.confirmatory.debian-keyring-sha256="506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017" \
       io.fractal-ann.confirmatory.go-builder-image="docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36" \
       io.fractal-ann.confirmatory.opa-commit="e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297" \
-      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694" \
+      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f" \
       io.fractal-ann.confirmatory.opa-rego-sha256="${OPA_REGO_SHA256}" \
       io.fractal-ann.confirmatory.opa-rego-test-sha256="${OPA_REGO_TEST_SHA256}" \
       io.fractal-ann.confirmatory.opa-source-sha256="a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637" \

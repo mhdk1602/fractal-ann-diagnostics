@@ -94,7 +94,7 @@ _DEBIAN_SNAPSHOT = "20260714T000000Z"
 _DEBIAN_INRELEASE_SHA256 = "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa"
 _DEBIAN_KEYRING_SHA256 = "506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017"
 _OPA_COMMIT = "e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297"
-_OPA_DEPENDENCY_DELTA_SHA256 = "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
+_OPA_DEPENDENCY_DELTA_SHA256 = "373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f"
 _OPA_SOURCE_SHA256 = "a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637"
 _SQLITE_SHA256 = "c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0"
 _SQLITE_SHA3_256 = "98f2b3f3c11be6a03ea32346937b032c2472ebbd7a716bed36ca2f5693e7ce8b"
@@ -1265,12 +1265,12 @@ def _verify_build_receipts(
             "github.com/klauspost/compress": {"original": "1.18.5", "patched": "1.18.7"},
             "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.56.0"},
             "golang.org/x/mod": {"original": "0.36.0", "patched": "0.38.0"},
-            "golang.org/x/net": {"original": "0.55.0", "patched": "0.57.0"},
+            "golang.org/x/net": {"original": "0.55.0", "patched": "0.58.0"},
             "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
             "golang.org/x/sys": {"original": "0.45.0", "patched": "0.47.0"},
             "golang.org/x/text": {"original": "0.38.0", "patched": "0.41.0"},
             "golang.org/x/tools": {"original": "0.45.0", "patched": "0.48.0"},
-            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.1"},
+            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.2"},
             "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
         },
         "opa_commit": _OPA_COMMIT,
@@ -1284,10 +1284,10 @@ def _verify_build_receipts(
             "be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f"
         ),
         "patched_go_mod_sha256": (
-            "065eb0199aab744eb5ea18f5c2146a0e41a029acd0fec7b6b06c22aeedbb57b3"
+            "7bef641fc93c386bd9dfd05033b216e601ac1e14f95cedef86a7123b17e4a0c8"
         ),
         "patched_go_sum_sha256": (
-            "b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43"
+            "c6d3bb17e0ff837e0d08ca92ca630a7c76886e33d8573cd7c11bf6919dde1ae5"
         ),
         "schema_version": "fractal-opa-build-receipt-v2",
         "source_date_epoch": expected_source_epoch,
@@ -1308,11 +1308,11 @@ def _verify_build_receipts(
         b"github.com/klauspost/compress\tv1.18.7",
         b"oras.land/oras-go/v2\tv2.6.2",
         b"golang.org/x/crypto\tv0.56.0",
-        b"golang.org/x/net\tv0.57.0",
+        b"golang.org/x/net\tv0.58.0",
         b"golang.org/x/sync\tv0.22.0",
         b"golang.org/x/sys\tv0.47.0",
         b"golang.org/x/text\tv0.41.0",
-        b"google.golang.org/grpc\tv1.83.1",
+        b"google.golang.org/grpc\tv1.83.2",
         b"CGO_ENABLED=0",
     ):
         if marker not in build_info:

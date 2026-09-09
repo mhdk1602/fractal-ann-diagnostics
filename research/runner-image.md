@@ -40,6 +40,13 @@ layers.
 | Native toolchain repository | Debian snapshot `20260714T000000Z`, Bookworm main | [Debian Snapshot](https://snapshot.debian.org/archive/debian/20260714T000000Z/) |
 | hnswlib build wheels | `requirements.confirmatory-build.txt`, exact versions and SHA-256 hashes | [PyPI JSON API](https://docs.pypi.org/api/json/) |
 
+The OPA builder's security overlay fixes `google.golang.org/grpc` at 1.83.2; Go's minimum-version
+selection consequently fixes `golang.org/x/net` at 0.58.0. The retained patched `go.mod` and
+`go.sum` SHA-256 values are `7bef641fc93c386bd9dfd05033b216e601ac1e14f95cedef86a7123b17e4a0c8`
+and `c6d3bb17e0ff837e0d08ca92ca630a7c76886e33d8573cd7c11bf6919dde1ae5`. The canonical
+concatenated module-delta digest is
+`373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f`.
+
 The tlock builder applies the declared security-version overlay, runs `go mod tidy`, downloads the
 complete module graph, verifies that graph, and records `go list -m -json all`. Only then does it
 check and retain the final `go.mod` and `go.sum` bytes. This ordering matters because

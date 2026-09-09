@@ -40,8 +40,9 @@ UV_LOCK_SHA256 = "4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337
 HNSWLIB_SHA256 = "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
 OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c"
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
-OPA_PATCHED_GO_SUM_SHA256 = "b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43"
-OPA_DEPENDENCY_DELTA_SHA256 = "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
+OPA_PATCHED_GO_MOD_SHA256 = "7bef641fc93c386bd9dfd05033b216e601ac1e14f95cedef86a7123b17e4a0c8"
+OPA_PATCHED_GO_SUM_SHA256 = "c6d3bb17e0ff837e0d08ca92ca630a7c76886e33d8573cd7c11bf6919dde1ae5"
+OPA_DEPENDENCY_DELTA_SHA256 = "373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f"
 TLE_PATCHED_GO_SUM_SHA256 = "a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad"
 BUILDX_SHA256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b"
 BUILDKIT_DIGEST = "sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
@@ -115,19 +116,24 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert hashlib.sha256(OPA_REGO_TEST.read_bytes()).hexdigest() == OPA_REGO_TEST_SHA256
     assert f"ARG OPA_REGO_SHA256={OPA_REGO_SHA256}" in dockerfile
     assert f"ARG OPA_REGO_TEST_SHA256={OPA_REGO_TEST_SHA256}" in dockerfile
+    assert f"ARG OPA_PATCHED_GO_MOD_SHA256={OPA_PATCHED_GO_MOD_SHA256}" in dockerfile
     assert f"ARG OPA_PATCHED_GO_SUM_SHA256={OPA_PATCHED_GO_SUM_SHA256}" in dockerfile
     assert f"ARG OPA_DEPENDENCY_DELTA_SHA256={OPA_DEPENDENCY_DELTA_SHA256}" in dockerfile
+    assert "ARG GRPC_VERSION=1.83.2" in dockerfile
+    assert "ARG X_NET_VERSION=0.58.0" in dockerfile
+    assert dockerfile.count("c0-security-overlay-v5") == 2
+    assert "c0-security-overlay-v4" not in dockerfile
     assert "fractal-opa-build-receipt-v2" in dockerfile
     for module, original, patched in (
         ("github.com/klauspost/compress", "1.18.5", "1.18.7"),
         ("golang.org/x/crypto", "0.52.0", "0.56.0"),
         ("golang.org/x/mod", "0.36.0", "0.38.0"),
-        ("golang.org/x/net", "0.55.0", "0.57.0"),
+        ("golang.org/x/net", "0.55.0", "0.58.0"),
         ("golang.org/x/sync", "0.21.0", "0.22.0"),
         ("golang.org/x/sys", "0.45.0", "0.47.0"),
         ("golang.org/x/text", "0.38.0", "0.41.0"),
         ("golang.org/x/tools", "0.45.0", "0.48.0"),
-        ("google.golang.org/grpc", "1.81.1", "1.83.1"),
+        ("google.golang.org/grpc", "1.81.1", "1.83.2"),
         ("oras.land/oras-go/v2", "2.6.1", "2.6.2"),
     ):
         assert f'"{module}":{{"original":"{original}","patched":"%s"}}' in dockerfile

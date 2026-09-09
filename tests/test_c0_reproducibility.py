@@ -147,7 +147,7 @@ def _native_receipt() -> bytes:
 def _opa_receipt(opa: bytes) -> bytes:
     value = {
         "dependency_delta_sha256": (
-            "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
+            "373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f"
         ),
         "go_builder_image": (
             "docker.io/library/golang:1.26.6-bookworm@"
@@ -159,12 +159,12 @@ def _opa_receipt(opa: bytes) -> bytes:
             "github.com/klauspost/compress": {"original": "1.18.5", "patched": "1.18.7"},
             "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.56.0"},
             "golang.org/x/mod": {"original": "0.36.0", "patched": "0.38.0"},
-            "golang.org/x/net": {"original": "0.55.0", "patched": "0.57.0"},
+            "golang.org/x/net": {"original": "0.55.0", "patched": "0.58.0"},
             "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
             "golang.org/x/sys": {"original": "0.45.0", "patched": "0.47.0"},
             "golang.org/x/text": {"original": "0.38.0", "patched": "0.41.0"},
             "golang.org/x/tools": {"original": "0.45.0", "patched": "0.48.0"},
-            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.1"},
+            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.2"},
             "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
         },
         "opa_commit": "e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297",
@@ -179,10 +179,10 @@ def _opa_receipt(opa: bytes) -> bytes:
             "be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f"
         ),
         "patched_go_mod_sha256": (
-            "065eb0199aab744eb5ea18f5c2146a0e41a029acd0fec7b6b06c22aeedbb57b3"
+            "7bef641fc93c386bd9dfd05033b216e601ac1e14f95cedef86a7123b17e4a0c8"
         ),
         "patched_go_sum_sha256": (
-            "b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43"
+            "c6d3bb17e0ff837e0d08ca92ca630a7c76886e33d8573cd7c11bf6919dde1ae5"
         ),
         "schema_version": "fractal-opa-build-receipt-v2",
         "source_date_epoch": SOURCE_EPOCH,
@@ -321,11 +321,11 @@ def _layer(
         b"\tdep\tgithub.com/klauspost/compress\tv1.18.7\n"
         b"\tdep\toras.land/oras-go/v2\tv2.6.2\n"
         b"\tdep\tgolang.org/x/crypto\tv0.56.0\n"
-        b"\tdep\tgolang.org/x/net\tv0.57.0\n"
+        b"\tdep\tgolang.org/x/net\tv0.58.0\n"
         b"\tdep\tgolang.org/x/sync\tv0.22.0\n"
         b"\tdep\tgolang.org/x/sys\tv0.47.0\n"
         b"\tdep\tgolang.org/x/text\tv0.41.0\n"
-        b"\tdep\tgoogle.golang.org/grpc\tv1.83.1\n"
+        b"\tdep\tgoogle.golang.org/grpc\tv1.83.2\n"
         b"\tbuild\tCGO_ENABLED=0\n"
     )
     output = io.BytesIO()
@@ -542,7 +542,7 @@ def _archive(
         ),
         "io.fractal-ann.confirmatory.opa-commit": ("e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297"),
         "io.fractal-ann.confirmatory.opa-dependency-delta-sha256": (
-            "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
+            "373d5387b9de8f53c2bda66bb1da87ca552b98f06d29d2961fd12f431ebf438f"
         ),
         "io.fractal-ann.confirmatory.opa-rego-sha256": OPA_POLICY_SHA256,
         "io.fractal-ann.confirmatory.opa-rego-test-sha256": (
