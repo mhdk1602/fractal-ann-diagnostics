@@ -625,6 +625,11 @@ def test_registry_metadata_filters_reject_ambiguous_or_obsolete_shapes() -> None
 
 def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    security_step = workflow[
+        workflow.index(
+            "- name: Retain and adjudicate raw Trivy and CycloneDX evidence"
+        ) : workflow.index("- name: Retain govulncheck source and symbol reachability evidence")
+    ]
 
     assert "id: release_attestation" in workflow
     assert "subject-name: ${{ env.RELEASE_IMAGE_NAME }}" in workflow
@@ -641,13 +646,22 @@ def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
     assert "release-linux-arm64-trivy.cdx.json" in workflow
     assert "release-linux-arm64-trivy-sbom-rescan.json" in workflow
     assert "--image-role timelock-release" in workflow
-    assert ".severity_counts.UNKNOWN == 2" in workflow
-    assert ".finding_count == 2" in workflow
-    assert workflow.count('vulnerability_id: "GO-2026-5932"') >= 2
-    assert 'installed_version: "v0.56.0"' in workflow
-    assert 'installed_version: "v0.57.0"' in workflow
-    assert ".vex_required == false" in workflow
-    assert ".vex_documents == []" in workflow
+    assert '.policy == "zero-raw-high-critical-and-direct-sbom-parity"' in security_step
+    assert ".direct_sbom_parity == true" in security_step
+    assert ".raw_high_critical_count == 0" in security_step
+    assert ".severity_counts.HIGH == 0" in security_step
+    assert ".severity_counts.CRITICAL == 0" in security_step
+    assert '"CRITICAL", "HIGH", "LOW", "MEDIUM", "UNKNOWN"' in security_step
+    assert ".finding_count == (.findings | length)" in security_step
+    assert ".finding_count == ([.severity_counts[]] | add)" in security_step
+    assert "all(\n              .findings[];" in security_step
+    assert ".severity_counts.UNKNOWN == 2" not in security_step
+    assert ".finding_count == 2" not in security_step
+    assert 'vulnerability_id: "GO-2026-5932"' not in security_step
+    assert 'installed_version: "v0.56.0"' not in security_step
+    assert 'installed_version: "v0.57.0"' not in security_step
+    assert ".vex_required == false" in security_step
+    assert ".vex_documents == []" in security_step
 
 
 def test_tlock_interoperability_receipt_matches_the_pinned_ciphertext_size() -> None:

@@ -294,14 +294,25 @@ def test_existing_output_is_never_overwritten(tmp_path: Path) -> None:
     assert paths[-1].read_text() == "custodied\n"
 
 
-def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
+def test_timelock_release_retains_the_historical_53_row_projection(
     tmp_path: Path,
 ) -> None:
-    unknowns = [_unknown_x_crypto("v0.56.0"), _unknown_x_crypto("v0.57.0")]
+    findings = [
+        _unknown_x_crypto("v0.56.0"),
+        _unknown_x_crypto("v0.57.0"),
+        *[
+            _finding(severity="LOW", vulnerability_id=f"CVE-2026-{index:04d}")
+            for index in range(1000, 1032)
+        ],
+        *[
+            _finding(severity="MEDIUM", vulnerability_id=f"CVE-2026-{index:04d}")
+            for index in range(2000, 2019)
+        ],
+    ]
     direct, sbom, cyclonedx, output = _write_evidence(
         tmp_path,
-        direct_findings=unknowns,
-        sbom_findings=unknowns,
+        direct_findings=findings,
+        sbom_findings=findings,
         result_type="gobinary",
     )
 
@@ -314,23 +325,60 @@ def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
         output_path=output,
     )
 
-    assert receipt["finding_count"] == 2
+    assert receipt["finding_count"] == 53
     assert receipt["severity_counts"]["UNKNOWN"] == 2
-    assert [row["installed_version"] for row in receipt["findings"]] == [
+    assert receipt["severity_counts"]["LOW"] == 32
+    assert receipt["severity_counts"]["MEDIUM"] == 19
+    assert receipt["severity_counts"]["HIGH"] == 0
+    assert receipt["severity_counts"]["CRITICAL"] == 0
+    assert sum(receipt["severity_counts"].values()) == 53
+    assert receipt["policy"] == "zero-raw-high-critical-and-direct-sbom-parity"
+    assert receipt["direct_sbom_parity"] is True
+    assert receipt["raw_high_critical_count"] == 0
+    go_findings = [row for row in receipt["findings"] if row["vulnerability_id"] == "GO-2026-5932"]
+    assert [row["installed_version"] for row in go_findings] == [
         "v0.56.0",
         "v0.57.0",
     ]
-    assert {row["vulnerability_id"] for row in receipt["findings"]} == {"GO-2026-5932"}
-    assert {row["fixed_version"] for row in receipt["findings"]} == {""}
+    assert {row["fixed_version"] for row in go_findings} == {""}
+    assert len(receipt["findings"]) == len(findings)
+    assert {row["vulnerability_id"] for row in receipt["findings"]} == {
+        finding["VulnerabilityID"] for finding in findings
+    }
     assert receipt["vex_documents"] == []
     assert receipt["vex_required"] is False
 
 
-def test_timelock_release_rejects_an_extra_nonserious_finding(tmp_path: Path) -> None:
+def test_timelock_release_admits_an_empty_equal_database_projection(tmp_path: Path) -> None:
+    direct, sbom, cyclonedx, output = _write_evidence(
+        tmp_path,
+        direct_findings=[],
+        sbom_findings=[],
+        result_type="gobinary",
+    )
+
+    receipt = adjudicate_runner_security(
+        platform="linux/arm64",
+        image_role="timelock-release",
+        direct_trivy_path=direct,
+        sbom_trivy_path=sbom,
+        cyclonedx_path=cyclonedx,
+        output_path=output,
+    )
+
+    assert receipt["finding_count"] == 0
+    assert receipt["findings"] == []
+    assert sum(receipt["severity_counts"].values()) == 0
+    assert receipt["raw_high_critical_count"] == 0
+
+
+def test_timelock_release_retains_changed_equal_nonserious_findings(tmp_path: Path) -> None:
     findings = [
         _unknown_x_crypto("v0.56.0"),
         _unknown_x_crypto("v0.57.0"),
-        _finding(severity="LOW"),
+        _finding(severity="UNKNOWN", vulnerability_id="CVE-2026-9999"),
+        _finding(severity="LOW", vulnerability_id="CVE-2026-7777"),
+        _finding(severity="MEDIUM", vulnerability_id="CVE-2026-8888"),
     ]
     direct, sbom, cyclonedx, output = _write_evidence(
         tmp_path,
@@ -339,7 +387,66 @@ def test_timelock_release_rejects_an_extra_nonserious_finding(tmp_path: Path) ->
         result_type="gobinary",
     )
 
-    with pytest.raises(RunnerSecurityError, match="exact admitted UNKNOWN"):
+    receipt = adjudicate_runner_security(
+        platform="linux/arm64",
+        image_role="timelock-release",
+        direct_trivy_path=direct,
+        sbom_trivy_path=sbom,
+        cyclonedx_path=cyclonedx,
+        output_path=output,
+    )
+
+    assert receipt["finding_count"] == len(findings)
+    assert sum(receipt["severity_counts"].values()) == len(findings)
+    assert receipt["severity_counts"]["UNKNOWN"] == 3
+    assert receipt["severity_counts"]["LOW"] == 1
+    assert receipt["severity_counts"]["MEDIUM"] == 1
+    assert receipt["severity_counts"]["HIGH"] == 0
+    assert receipt["severity_counts"]["CRITICAL"] == 0
+    assert {row["vulnerability_id"] for row in receipt["findings"]} == {
+        "GO-2026-5932",
+        "CVE-2026-9999",
+        "CVE-2026-7777",
+        "CVE-2026-8888",
+    }
+    assert receipt["vex_documents"] == []
+    assert receipt["vex_required"] is False
+
+
+@pytest.mark.parametrize("severity", ["HIGH", "CRITICAL"])
+def test_timelock_release_rejects_every_raw_serious_finding(
+    tmp_path: Path,
+    severity: str,
+) -> None:
+    findings = [_finding(severity=severity)]
+    direct, sbom, cyclonedx, output = _write_evidence(
+        tmp_path,
+        direct_findings=findings,
+        sbom_findings=findings,
+        result_type="gobinary",
+    )
+
+    with pytest.raises(RunnerSecurityError, match="HIGH or CRITICAL"):
+        adjudicate_runner_security(
+            platform="linux/arm64",
+            image_role="timelock-release",
+            direct_trivy_path=direct,
+            sbom_trivy_path=sbom,
+            cyclonedx_path=cyclonedx,
+            output_path=output,
+        )
+    assert not output.exists()
+
+
+def test_timelock_release_rejects_direct_sbom_database_drift(tmp_path: Path) -> None:
+    direct, sbom, cyclonedx, output = _write_evidence(
+        tmp_path,
+        direct_findings=[_unknown_x_crypto("v0.57.0")],
+        sbom_findings=[],
+        result_type="gobinary",
+    )
+
+    with pytest.raises(RunnerSecurityError, match="vulnerability sets differ"):
         adjudicate_runner_security(
             platform="linux/arm64",
             image_role="timelock-release",

@@ -371,6 +371,14 @@ read-only cache mount. Each Trivy image scan selects the in-memory scan-cache ba
 the database stays immutable while Trivy avoids creating or updating its default Bolt
 `fanal/fanal.db`. Direct image results and CycloneDX rescans must still agree exactly.
 
+The downloaded database is a time-stamped measurement, not part of the image identity. Its
+advisory rows can change between runs even when the scanned bytes do not. Admission therefore does
+not pin `LOW`, `MEDIUM`, or `UNKNOWN` finding identities or counts. The gate retains every
+normalized finding without VEX suppression and admits only when the direct and CycloneDX-rescan
+sets agree exactly with zero raw `HIGH` or `CRITICAL` findings. A separate pinned `govulncheck`
+record supports the narrower `GO-2026-5932` module-only, package-and-symbol-unreachable claim; it
+does not suppress or rewrite the Trivy evidence.
+
 The retained package contains more than the registry digest:
 
 ```text

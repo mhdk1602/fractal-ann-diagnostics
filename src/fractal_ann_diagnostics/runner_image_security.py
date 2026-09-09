@@ -278,25 +278,8 @@ def adjudicate_runner_security(
     serious = [finding for finding in direct.findings if finding.severity in _SERIOUS]
     if serious:
         raise RunnerSecurityError("raw scan contains a HIGH or CRITICAL vulnerability")
-    if image_role == "timelock-release":
-        expected_unknowns = tuple(
-            Finding(
-                result_class="lang-pkgs",
-                result_type="gobinary",
-                vulnerability_id="GO-2026-5932",
-                package_id=f"golang.org/x/crypto@{version}",
-                package_name="golang.org/x/crypto",
-                installed_version=version,
-                fixed_version="",
-                severity="UNKNOWN",
-                status="affected",
-            )
-            for version in ("v0.56.0", "v0.57.0")
-        )
-        if direct.findings != expected_unknowns:
-            raise RunnerSecurityError(
-                "timelock-release scan differs from the exact admitted UNKNOWN findings"
-            )
+    # Nonserious findings are retained observations from the captured database,
+    # not admission pins whose identities or counts must remain stable across runs.
     counts = Counter(finding.severity for finding in direct.findings)
     receipt: dict[str, object] = {
         "cyclonedx": cyclonedx,

@@ -2621,36 +2621,21 @@ jobs:
             .schema_version == "fractal-runner-security-adjudication-v1"
             and .platform == "linux/arm64"
             and .image_role == "timelock-release"
+            and .policy == "zero-raw-high-critical-and-direct-sbom-parity"
             and .direct_sbom_parity == true
             and .raw_high_critical_count == 0
             and .severity_counts.HIGH == 0
             and .severity_counts.CRITICAL == 0
-            and .severity_counts.UNKNOWN == 2
-            and .finding_count == 2
-            and .findings == [
-              {
-                fixed_version: "",
-                installed_version: "v0.56.0",
-                package_id: "golang.org/x/crypto@v0.56.0",
-                package_name: "golang.org/x/crypto",
-                result_class: "lang-pkgs",
-                result_type: "gobinary",
-                severity: "UNKNOWN",
-                status: "affected",
-                vulnerability_id: "GO-2026-5932"
-              },
-              {
-                fixed_version: "",
-                installed_version: "v0.57.0",
-                package_id: "golang.org/x/crypto@v0.57.0",
-                package_name: "golang.org/x/crypto",
-                result_class: "lang-pkgs",
-                result_type: "gobinary",
-                severity: "UNKNOWN",
-                status: "affected",
-                vulnerability_id: "GO-2026-5932"
-              }
-            ]
+            and ((.severity_counts | keys) ==
+              ["CRITICAL", "HIGH", "LOW", "MEDIUM", "UNKNOWN"])
+            and .finding_count == (.findings | length)
+            and .finding_count == ([.severity_counts[]] | add)
+            and all(
+              .findings[];
+              (.severity == "UNKNOWN"
+                or .severity == "LOW"
+                or .severity == "MEDIUM")
+            )
             and .vex_required == false
             and .vex_documents == []
           ' "$release_adjudication" >/dev/null
