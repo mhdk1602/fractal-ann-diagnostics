@@ -572,7 +572,19 @@ WORKDIR /build/patched
 # Apply only the closed security overlay. Every selected version and the final
 # go.mod/go.sum bytes are pinned; the original source tree remains retained in
 # the discarded builder for a byte-level lineage receipt.
-RUN GOFLAGS=-mod=mod go get \
+RUN retry_go_network() { \
+        attempt=1; \
+        while :; do \
+            "$@" && return 0; \
+            if test "${attempt}" -ge 4; then \
+                echo "Go network command failed after ${attempt} attempts" >&2; \
+                return 1; \
+            fi; \
+            sleep "$((attempt * 5))"; \
+            attempt="$((attempt + 1))"; \
+        done; \
+    } \
+    && retry_go_network env GOFLAGS=-mod=mod go get \
         filippo.io/age@v1.2.1 \
         golang.org/x/crypto@v0.57.0 \
         golang.org/x/net@v0.58.0 \
@@ -580,8 +592,8 @@ RUN GOFLAGS=-mod=mod go get \
         golang.org/x/text@v0.42.0 \
         google.golang.org/grpc@v1.83.2 \
         google.golang.org/protobuf@v1.36.11 \
-    && GOFLAGS=-mod=mod go mod tidy \
-    && go mod download all \
+    && retry_go_network env GOFLAGS=-mod=mod go mod tidy \
+    && retry_go_network go mod download all \
     && go mod verify \
     && go list -m -json all > /out/artifacts/go-modules.json \
     && printf '%s  %s\n' "${TLE_PATCHED_GO_MOD_SHA256}" go.mod | sha256sum -c - \

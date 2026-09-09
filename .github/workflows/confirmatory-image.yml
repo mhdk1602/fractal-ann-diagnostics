@@ -2718,6 +2718,7 @@ jobs:
           export HOME=/work/home
           export GOMODCACHE=/work/gomodcache
           export GOPATH=/work/gopath
+          export GOSUMDB=sum.golang.org
           export GOTOOLCHAIN=local
           export LANG=C.UTF-8
           export LC_ALL=C.UTF-8
@@ -2733,7 +2734,19 @@ jobs:
             go.sum | sha256sum -c -
           cp go.mod /work/go.mod.original
           cp go.sum /work/go.sum.original
-          GOFLAGS=-mod=mod go get \
+          retry_go_network() {
+            attempt=1
+            while :; do
+              "$@" && return 0
+              if test "$attempt" -ge 4; then
+                echo "Go network command failed after $attempt attempts" >&2
+                return 1
+              fi
+              sleep "$((attempt * 5))"
+              attempt="$((attempt + 1))"
+            done
+          }
+          retry_go_network env GOFLAGS=-mod=mod go get \
             filippo.io/age@v1.2.1 \
             golang.org/x/crypto@v0.57.0 \
             golang.org/x/net@v0.58.0 \
@@ -2741,7 +2754,7 @@ jobs:
             golang.org/x/text@v0.42.0 \
             google.golang.org/grpc@v1.83.2 \
             google.golang.org/protobuf@v1.36.11
-          GOFLAGS=-mod=mod go mod tidy
+          retry_go_network env GOFLAGS=-mod=mod go mod tidy
           printf '%s  %s\n' \
             b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53 \
             go.mod | sha256sum -c -
@@ -2750,7 +2763,7 @@ jobs:
             go.sum | sha256sum -c -
           cp go.mod /work/go.mod.patched
           cp go.sum /work/go.sum.patched
-          go mod download all
+          retry_go_network go mod download all
           go mod verify
           go list -deps ./cmd/tle > /work/source-packages.txt
           printf '%s  %s\n' \

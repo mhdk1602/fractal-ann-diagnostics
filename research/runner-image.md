@@ -53,7 +53,11 @@ check and retain the final `go.mod` and `go.sum` bytes. This ordering matters be
 `go mod download all` adds transitive zip checksums that are absent from the tidy-only file. The
 retained `go.sum` SHA-256, `a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad`,
 therefore identifies the actual network-disabled test and build input rather than an earlier
-intermediate file.
+intermediate file. Each network-bearing Go command has at most four attempts within the same build,
+with fixed five-second increments between attempts. Retries reuse the builder's checksum-verified
+module cache; they do not rerun the workflow or alter the selected versions. SumDB remains enabled,
+and the final module files, module graph, tests, and binaries remain subject to their existing exact
+digest gates.
 
 The lock also resolves the `production-embedding` optional set for the separate macOS arm64 MPS
 builder. `Dockerfile.confirmatory` does not select that extra, does not install PyTorch or

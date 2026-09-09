@@ -273,6 +273,34 @@ def test_tlock_module_pin_closes_the_downloaded_offline_build_graph() -> None:
     assert TLE_PATCHED_GO_SUM_SHA256 in source_builder
 
 
+def test_tlock_network_hydration_has_bounded_same_build_retries() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    source_builder = dockerfile.split("FROM ${GO_IMAGE} AS tle-source-builder", maxsplit=1)[
+        1
+    ].split("FROM ${PYTHON_IMAGE} AS tle-builder", maxsplit=1)[0]
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    for build_path in (source_builder, workflow):
+        assert "retry_go_network()" in build_path
+        assert "attempt=1" in build_path
+        assert 'test "${attempt}" -ge 4' in build_path or 'test "$attempt" -ge 4' in build_path
+        assert 'sleep "$((attempt * 5))"' in build_path
+        assert 'attempt="$((attempt + 1))"' in build_path
+        assert "return 1" in build_path
+        assert "retry_go_network env GOFLAGS=-mod=mod go get" in build_path
+        assert "retry_go_network env GOFLAGS=-mod=mod go mod tidy" in build_path
+        assert "retry_go_network go mod download all" in build_path
+
+    assert "GOSUMDB=sum.golang.org" in source_builder
+    assert "export GOSUMDB=sum.golang.org" in workflow
+    assert (
+        "GOSUMDB=off"
+        not in workflow.split("retry_go_network()", maxsplit=1)[1].split(
+            "go mod verify", maxsplit=1
+        )[0]
+    )
+
+
 def test_runtime_is_nonroot_deterministic_and_read_only_compatible() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     runtime = dockerfile.split("FROM ${DISTROLESS_IMAGE} AS scientific-runtime-base", maxsplit=1)[1]
