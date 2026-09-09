@@ -60,7 +60,7 @@ env:
   DISTROLESS_ISSUER: https://accounts.google.com
   DOCKER_BUILD_RECORD_UPLOAD: "false"
   DOCKER_BUILD_SUMMARY: "false"
-  GO_IMAGE: docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
+  GO_IMAGE: docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36
   IMAGE_NAME: ${{ inputs.mode == 'production' && 'ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory' || 'ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-candidate' }}
   RELEASE_IMAGE_NAME: ${{ inputs.mode == 'production' && 'ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-release' || 'ghcr.io/mhdk1602/fractal-ann-diagnostics-confirmatory-release-candidate' }}
   PUBLICATION_MODE: ${{ inputs.mode }}
@@ -1401,7 +1401,7 @@ jobs:
               and .expected_build_context_tree_sha256 == $build_context_tree_sha256
               and .expected_source_date_epoch == $source_epoch
               and .image_closure_equal == true
-              and .tle_binary_sha256 == "ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5"
+              and .tle_binary_sha256 == "2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e"
               and .tle_binary_byte_count == 13303934
               and (.archive_a.executable_projection.manifest_descriptor.digest
                 == .archive_b.executable_projection.manifest_descriptor.digest)
@@ -1839,7 +1839,7 @@ jobs:
             --arg projection_receipt_sha256 "$release_projection_receipt_sha256" \
             --arg published_arm64_manifest_digest "$published_release_arm64_digest" \
             --arg tle_binary_sha256 \
-              ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5 \
+              2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e \
             '{image_digest: $image_digest,
               image_reference: $image_reference,
               projection_receipt_sha256: $projection_receipt_sha256,
@@ -2026,7 +2026,7 @@ jobs:
           safe_binary_sha256="$(jq -r .tle_binary_sha256 \
             "$evidence_dir/published-release-arm64-projection.json")"
           test "$safe_binary_sha256" = \
-            ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
+            2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e
 
           network_name="c0-quicknet-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           server_name="c0-quicknet-fixture-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -2182,7 +2182,7 @@ jobs:
               .schema_version == "fractal-tlock-quicknet-interoperability-v1"
               and .release_image_reference == $reference
               and .safe_binary_sha256
-                == "ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5"
+                == "2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e"
               and .external_client_network_access == false
               and .quicknet_round == 30485281
               and ([.directions[] | .plaintext_equal] == [true, true])
@@ -2630,8 +2630,8 @@ jobs:
             and .findings == [
               {
                 fixed_version: "",
-                installed_version: "v0.53.0",
-                package_id: "golang.org/x/crypto@v0.53.0",
+                installed_version: "v0.56.0",
+                package_id: "golang.org/x/crypto@v0.56.0",
                 package_name: "golang.org/x/crypto",
                 result_class: "lang-pkgs",
                 result_type: "gobinary",
@@ -2641,8 +2641,8 @@ jobs:
               },
               {
                 fixed_version: "",
-                installed_version: "v0.54.0",
-                package_id: "golang.org/x/crypto@v0.54.0",
+                installed_version: "v0.57.0",
+                package_id: "golang.org/x/crypto@v0.57.0",
                 package_name: "golang.org/x/crypto",
                 result_class: "lang-pkgs",
                 result_type: "gobinary",
@@ -2738,7 +2738,7 @@ jobs:
           export LC_ALL=C.UTF-8
           install -d "$HOME" "$GOMODCACHE" "$GOPATH"
           cd /work/source
-          test "$(go env GOVERSION)" = go1.26.5
+          test "$(go env GOVERSION)" = go1.26.6
           test "$(go env GOARCH)" = arm64
           printf '%s  %s\n' \
             0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741 \
@@ -2750,18 +2750,18 @@ jobs:
           cp go.sum /work/go.sum.original
           GOFLAGS=-mod=mod go get \
             filippo.io/age@v1.2.1 \
-            golang.org/x/crypto@v0.54.0 \
-            golang.org/x/net@v0.57.0 \
-            golang.org/x/sys@v0.47.0 \
-            golang.org/x/text@v0.40.0 \
-            google.golang.org/grpc@v1.82.1 \
+            golang.org/x/crypto@v0.57.0 \
+            golang.org/x/net@v0.58.0 \
+            golang.org/x/sys@v0.48.0 \
+            golang.org/x/text@v0.42.0 \
+            google.golang.org/grpc@v1.83.2 \
             google.golang.org/protobuf@v1.36.11
           GOFLAGS=-mod=mod go mod tidy
           printf '%s  %s\n' \
-            ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08 \
+            b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53 \
             go.mod | sha256sum -c -
           printf '%s  %s\n' \
-            baa8d4e184c2d516317ecaf984c9d7aa5ac9f7fbd0209058538200b0292c71e0 \
+            61bfa01969b85347ad4cdbb062b1b1061e3f080c4154c6997973cec842951e88 \
             go.sum | sha256sum -c -
           cp go.mod /work/go.mod.patched
           cp go.sum /work/go.sum.patched
@@ -2782,12 +2782,12 @@ jobs:
               -o /work/tle-symbol-bearing \
               ./cmd/tle
           printf '%s  %s\n' \
-            69ca051a3d3e14f6f405875dfdcb976c6be78cab66dc24c7191a949bd8257ff7 \
+            9a45595fa4d094c0ff5f3c0fc25127fd659a79b5897e262c61e2ba80167de36a \
             /work/tle-symbol-bearing | sha256sum -c -
-          test "$(stat -c '%s' /work/tle-symbol-bearing)" -eq 19342638
+          test "$(stat -c '%s' /work/tle-symbol-bearing)" -eq 19347499
           go tool nm /work/tle-symbol-bearing > /work/go-tool-nm.txt
           printf '%s  %s\n' \
-            d37ef9b9e10d3b3b17569653d5d3be68f5dba50f72d6494fcf63a360c952936b \
+            ecbbb9d90e312a78880c6a7f53f90205f60ae314a725871c516e95502e4b15be \
             /work/go-tool-nm.txt | sha256sum -c -
           ! grep -i openpgp /work/go-tool-nm.txt
           install -d /work/govulncheck-a /work/govulncheck-b
@@ -2806,7 +2806,7 @@ jobs:
             /work/govulncheck-a/govulncheck \
             /work/govulncheck
           printf '%s  %s\n' \
-            1cf0bf22b6f9484c850380cd3065bffd9a6d6577181e281053ab2d6bcb8898f0 \
+            6a616046957838d9b20df2b15f621738cc78e8d06ac14447f19450718a9d6d31 \
             /work/govulncheck | sha256sum -c -
           test "$(stat -c '%s' /work/govulncheck)" -eq 9633918
           module_zip="$GOMODCACHE/cache/download/golang.org/x/vuln/@v/v1.6.0.zip"
@@ -2882,7 +2882,7 @@ jobs:
             and .govulncheck_version == "v1.6.0"
             and .finding.vulnerability_id == "GO-2026-5932"
             and .finding.module == "golang.org/x/crypto"
-            and .finding.version == "v0.54.0"
+            and .finding.version == "v0.57.0"
             and .finding.package_or_symbol_reachable == false
             and .source_scan.finding_trace_level == "module"
             and .source_scan.package_or_symbol_reachable == false
@@ -3310,21 +3310,21 @@ jobs:
           assert opa_receipt["schema_version"] == "fractal-opa-build-receipt-v2"
           assert opa_receipt["target_arch"] == architecture
           assert opa_receipt["source_date_epoch"] == source_epoch
-          assert opa_receipt["go_version"] == "1.26.5"
+          assert opa_receipt["go_version"] == "1.26.6"
           assert opa_receipt["opa_version"] == "1.18.2"
           assert opa_receipt["module_versions"] == {
               "github.com/klauspost/compress": {
                   "original": "1.18.5",
                   "patched": "1.18.7",
               },
-              "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.53.0"},
-              "golang.org/x/mod": {"original": "0.36.0", "patched": "0.37.0"},
-              "golang.org/x/net": {"original": "0.55.0", "patched": "0.56.0"},
+              "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.56.0"},
+              "golang.org/x/mod": {"original": "0.36.0", "patched": "0.38.0"},
+              "golang.org/x/net": {"original": "0.55.0", "patched": "0.57.0"},
               "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
-              "golang.org/x/sys": {"original": "0.45.0", "patched": "0.46.0"},
-              "golang.org/x/text": {"original": "0.38.0", "patched": "0.40.0"},
-              "golang.org/x/tools": {"original": "0.45.0", "patched": "0.47.0"},
-              "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.82.1"},
+              "golang.org/x/sys": {"original": "0.45.0", "patched": "0.47.0"},
+              "golang.org/x/text": {"original": "0.38.0", "patched": "0.41.0"},
+              "golang.org/x/tools": {"original": "0.45.0", "patched": "0.48.0"},
+              "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.1"},
               "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
           }
           assert opa_receipt["opa_sha256"] == hashlib.sha256(opa_path.read_bytes()).hexdigest()

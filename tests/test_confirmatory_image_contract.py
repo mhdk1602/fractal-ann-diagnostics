@@ -29,7 +29,7 @@ SOURCE_DATE_EPOCH_FILE = ROOT / "confirmatory-source-date-epoch.txt"
 
 PYTHON_DIGEST = "sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b"
 UV_DIGEST = "sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc"
-GO_DIGEST = "sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651"
+GO_DIGEST = "sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36"
 DISTROLESS_DIGEST = "sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe"
 DOCKERFILE_FRONTEND_DIGEST = (
     "sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e"
@@ -40,9 +40,9 @@ UV_LOCK_SHA256 = "4eb9036fec9db996afdb1971e9cb804ae177041ab46eab00a014c47f920337
 HNSWLIB_SHA256 = "cb6d037eedebb34a7134e7dc78966441dfd04c9cf5ee93911be911ced951c44c"
 OPA_REGO_SHA256 = "18f6eb8a7411a7a1415bd2425ad5720f28fcd3b428d9aa2c1e7d73f6e14e356c"
 OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
-OPA_PATCHED_GO_SUM_SHA256 = "6b6d66e548bce5eb3b4613daed39d87e563b99fcda36f286dabf1694b93195e1"
-OPA_DEPENDENCY_DELTA_SHA256 = "400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0"
-TLE_PATCHED_GO_SUM_SHA256 = "988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c"
+OPA_PATCHED_GO_SUM_SHA256 = "b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43"
+OPA_DEPENDENCY_DELTA_SHA256 = "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
+TLE_PATCHED_GO_SUM_SHA256 = "a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad"
 BUILDX_SHA256 = "f1332ddb9010bd0b72628266c3a906d9a6979848033df4c8d9bd2cd113bae12b"
 BUILDKIT_DIGEST = "sha256:0168606be2315b7c807a03b3d8aa79beefdb31c98740cebdffdfeebf31190c9f"
 BINFMT_DIGEST = "sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0"
@@ -91,7 +91,7 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     lock_bytes = LOCKFILE.read_bytes()
     requirements = BUILD_REQUIREMENTS.read_text(encoding="utf-8")
     python_image = f"python:3.12.13-slim-bookworm@{PYTHON_DIGEST}"
-    go_image = f"docker.io/library/golang:1.26.5-bookworm@{GO_DIGEST}"
+    go_image = f"docker.io/library/golang:1.26.6-bookworm@{GO_DIGEST}"
     distroless_image = f"gcr.io/distroless/base-nossl-debian12:nonroot@{DISTROLESS_DIGEST}"
 
     assert dockerfile.splitlines()[0] == (
@@ -120,14 +120,14 @@ def test_container_sources_and_dependency_inputs_are_immutable() -> None:
     assert "fractal-opa-build-receipt-v2" in dockerfile
     for module, original, patched in (
         ("github.com/klauspost/compress", "1.18.5", "1.18.7"),
-        ("golang.org/x/crypto", "0.52.0", "0.53.0"),
-        ("golang.org/x/mod", "0.36.0", "0.37.0"),
-        ("golang.org/x/net", "0.55.0", "0.56.0"),
+        ("golang.org/x/crypto", "0.52.0", "0.56.0"),
+        ("golang.org/x/mod", "0.36.0", "0.38.0"),
+        ("golang.org/x/net", "0.55.0", "0.57.0"),
         ("golang.org/x/sync", "0.21.0", "0.22.0"),
-        ("golang.org/x/sys", "0.45.0", "0.46.0"),
-        ("golang.org/x/text", "0.38.0", "0.40.0"),
-        ("golang.org/x/tools", "0.45.0", "0.47.0"),
-        ("google.golang.org/grpc", "1.81.1", "1.82.1"),
+        ("golang.org/x/sys", "0.45.0", "0.47.0"),
+        ("golang.org/x/text", "0.38.0", "0.41.0"),
+        ("golang.org/x/tools", "0.45.0", "0.48.0"),
+        ("google.golang.org/grpc", "1.81.1", "1.83.1"),
         ("oras.land/oras-go/v2", "2.6.1", "2.6.2"),
     ):
         assert f'"{module}":{{"original":"{original}","patched":"%s"}}' in dockerfile
@@ -638,8 +638,8 @@ def test_workflow_separately_scans_and_attests_the_release_subject() -> None:
     assert ".severity_counts.UNKNOWN == 2" in workflow
     assert ".finding_count == 2" in workflow
     assert workflow.count('vulnerability_id: "GO-2026-5932"') >= 2
-    assert 'installed_version: "v0.53.0"' in workflow
-    assert 'installed_version: "v0.54.0"' in workflow
+    assert 'installed_version: "v0.56.0"' in workflow
+    assert 'installed_version: "v0.57.0"' in workflow
     assert ".vex_required == false" in workflow
     assert ".vex_documents == []" in workflow
 
@@ -854,7 +854,7 @@ def test_workflow_proves_bidirectional_quicknet_release_interoperability() -> No
     assert "3092e410128cd64b98bd4f50ce60503b7df91fa3d676f2b820b00403452b3e7a" in step
     assert "3b724032620587c2551ee857c98dc02690076f4972a4fe4389b0f6e0911a6a92" in step
     assert "e153cfa8539e871f50143d1bde10fec7ec3fe82630f717c3c1bf166eb4975059" in step
-    assert "ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5" in step
+    assert "2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e" in step
     assert "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971" in step
     assert "round=30485281" in step
     assert "3e690bc527c8a4e78232bc06b5a3cff057c51c68f51b208a1a21b2abd6d6b194" in step
@@ -886,10 +886,10 @@ def test_workflow_retains_versioned_govulncheck_reachability_without_vex() -> No
     step = workflow[step_start:step_end]
 
     assert "golang.org/x/vuln/cmd/govulncheck@v1.6.0" in step
-    assert "1cf0bf22b6f9484c850380cd3065bffd9a6d6577181e281053ab2d6bcb8898f0" in step
+    assert "6a616046957838d9b20df2b15f621738cc78e8d06ac14447f19450718a9d6d31" in step
     assert "b677bec1ea587aa03320e7d65520dd52cae824fd197ede36417a5f572be41cb3" in step
-    assert "69ca051a3d3e14f6f405875dfdcb976c6be78cab66dc24c7191a949bd8257ff7" in step
-    assert "d37ef9b9e10d3b3b17569653d5d3be68f5dba50f72d6494fcf63a360c952936b" in step
+    assert "9a45595fa4d094c0ff5f3c0fc25127fd659a79b5897e262c61e2ba80167de36a" in step
+    assert "ecbbb9d90e312a78880c6a7f53f90205f60ae314a725871c516e95502e4b15be" in step
     assert "go list -deps ./cmd/tle" in step
     assert "! grep -i openpgp" in step
     assert step.index("go list -deps ./cmd/tle") < step.index("export CGO_ENABLED=0")

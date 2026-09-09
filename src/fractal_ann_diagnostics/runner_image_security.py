@@ -291,7 +291,7 @@ def adjudicate_runner_security(
                 severity="UNKNOWN",
                 status="affected",
             )
-            for version in ("v0.53.0", "v0.54.0")
+            for version in ("v0.56.0", "v0.57.0")
         )
         if direct.findings != expected_unknowns:
             raise RunnerSecurityError(

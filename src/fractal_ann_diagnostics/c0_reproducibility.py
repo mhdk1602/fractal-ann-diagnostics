@@ -86,15 +86,15 @@ _PYTHON_BUILDER_IMAGE = (
     "sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b"
 )
 _GO_BUILDER_IMAGE = (
-    "docker.io/library/golang:1.26.5-bookworm@"
-    "sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651"
+    "docker.io/library/golang:1.26.6-bookworm@"
+    "sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36"
 )
 _OPA_REGO_TEST_SHA256 = "67370adfcba1c5180bdc99ae2cab900785ec5cee6fd91a9a4a9058415a7d4f00"
 _DEBIAN_SNAPSHOT = "20260714T000000Z"
 _DEBIAN_INRELEASE_SHA256 = "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa"
 _DEBIAN_KEYRING_SHA256 = "506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017"
 _OPA_COMMIT = "e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297"
-_OPA_DEPENDENCY_DELTA_SHA256 = "400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0"
+_OPA_DEPENDENCY_DELTA_SHA256 = "a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694"
 _OPA_SOURCE_SHA256 = "a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637"
 _SQLITE_SHA256 = "c917d7db16648ec95f714974ace5e5dcf46b7dc70e26600a0a102a3141125db0"
 _SQLITE_SHA3_256 = "98f2b3f3c11be6a03ea32346937b032c2472ebbd7a716bed36ca2f5693e7ce8b"
@@ -241,7 +241,7 @@ _TLE_BUILD_RECEIPT_FIELDS = frozenset(
     }
 )
 
-_TLE_BINARY_SHA256 = "ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5"
+_TLE_BINARY_SHA256 = "2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e"
 _TLE_BINARY_BYTE_COUNT = 13_303_934
 _TLE_SOURCE_COMMIT = "7b54141a9733fd6fa207587a11148280e6fb020d"
 _TLE_TAG_OBJECT = "6a94bf6b8200ab67f2b80af8000a55db64998d94"
@@ -249,13 +249,13 @@ _TLE_SOURCE_ARCHIVE_SHA256 = "98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c3
 _TLE_SOURCE_TREE_MANIFEST_SHA256 = (
     "6fedff45430fc81e9dbf5b13b1a2dc90e9840ae91f03de307dac5c2f7475c94c"
 )
-_TLE_DEPENDENCY_DELTA_SHA256 = "1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59"
-_TLE_GO_TARBALL_SHA256 = "fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
-_TLE_GO_TOOL_SHA256 = "22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b"
+_TLE_DEPENDENCY_DELTA_SHA256 = "e85b3c5040050c1a1b4229cb08b21fdf4721647053d0ace13bdcd2cf4f7e00a1"
+_TLE_GO_TARBALL_SHA256 = "d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e"
+_TLE_GO_TOOL_SHA256 = "410fd7436bc1adf673e6dbe484919e9551988259508103261a1365fa9763ffd3"
 _TLE_ORIGINAL_GO_MOD_SHA256 = "0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741"
 _TLE_ORIGINAL_GO_SUM_SHA256 = "1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b"
-_TLE_PATCHED_GO_MOD_SHA256 = "ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08"
-_TLE_PATCHED_GO_SUM_SHA256 = "988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c"
+_TLE_PATCHED_GO_MOD_SHA256 = "b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53"
+_TLE_PATCHED_GO_SUM_SHA256 = "a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad"
 
 
 class C0ReproducibilityError(ValueError):
@@ -1260,17 +1260,17 @@ def _verify_build_receipts(
     opa_exact: dict[str, object] = {
         "dependency_delta_sha256": _OPA_DEPENDENCY_DELTA_SHA256,
         "go_builder_image": _GO_BUILDER_IMAGE,
-        "go_version": "1.26.5",
+        "go_version": "1.26.6",
         "module_versions": {
             "github.com/klauspost/compress": {"original": "1.18.5", "patched": "1.18.7"},
-            "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.53.0"},
-            "golang.org/x/mod": {"original": "0.36.0", "patched": "0.37.0"},
-            "golang.org/x/net": {"original": "0.55.0", "patched": "0.56.0"},
+            "golang.org/x/crypto": {"original": "0.52.0", "patched": "0.56.0"},
+            "golang.org/x/mod": {"original": "0.36.0", "patched": "0.38.0"},
+            "golang.org/x/net": {"original": "0.55.0", "patched": "0.57.0"},
             "golang.org/x/sync": {"original": "0.21.0", "patched": "0.22.0"},
-            "golang.org/x/sys": {"original": "0.45.0", "patched": "0.46.0"},
-            "golang.org/x/text": {"original": "0.38.0", "patched": "0.40.0"},
-            "golang.org/x/tools": {"original": "0.45.0", "patched": "0.47.0"},
-            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.82.1"},
+            "golang.org/x/sys": {"original": "0.45.0", "patched": "0.47.0"},
+            "golang.org/x/text": {"original": "0.38.0", "patched": "0.41.0"},
+            "golang.org/x/tools": {"original": "0.45.0", "patched": "0.48.0"},
+            "google.golang.org/grpc": {"original": "1.81.1", "patched": "1.83.1"},
             "oras.land/oras-go/v2": {"original": "2.6.1", "patched": "2.6.2"},
         },
         "opa_commit": _OPA_COMMIT,
@@ -1284,10 +1284,10 @@ def _verify_build_receipts(
             "be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f"
         ),
         "patched_go_mod_sha256": (
-            "7a4e0b0a05ad266401896008bff46c6dd822e647c1ddcda26de44ccdb781fdb3"
+            "065eb0199aab744eb5ea18f5c2146a0e41a029acd0fec7b6b06c22aeedbb57b3"
         ),
         "patched_go_sum_sha256": (
-            "6b6d66e548bce5eb3b4613daed39d87e563b99fcda36f286dabf1694b93195e1"
+            "b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43"
         ),
         "schema_version": "fractal-opa-build-receipt-v2",
         "source_date_epoch": expected_source_epoch,
@@ -1297,22 +1297,22 @@ def _verify_build_receipts(
         if opa[field] != expected:
             raise C0ReproducibilityError(f"OPA build receipt has invalid {field}")
     if opa["go_tarball_sha256"] != (
-        "fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49"
+        "d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e"
     ):
         raise C0ReproducibilityError("OPA build receipt has invalid arm64 Go tarball digest")
     if opa["opa_sha256"] != hashlib.sha256(fixed[_OPA_PATH].payload).hexdigest():
         raise C0ReproducibilityError("OPA build receipt disagrees with the runtime OPA binary")
     build_info = fixed[_OPA_BUILD_INFO_PATH].payload
     for marker in (
-        b"go1.26.5",
+        b"go1.26.6",
         b"github.com/klauspost/compress\tv1.18.7",
         b"oras.land/oras-go/v2\tv2.6.2",
-        b"golang.org/x/crypto\tv0.53.0",
-        b"golang.org/x/net\tv0.56.0",
+        b"golang.org/x/crypto\tv0.56.0",
+        b"golang.org/x/net\tv0.57.0",
         b"golang.org/x/sync\tv0.22.0",
-        b"golang.org/x/sys\tv0.46.0",
-        b"golang.org/x/text\tv0.40.0",
-        b"google.golang.org/grpc\tv1.82.1",
+        b"golang.org/x/sys\tv0.47.0",
+        b"golang.org/x/text\tv0.41.0",
+        b"google.golang.org/grpc\tv1.83.1",
         b"CGO_ENABLED=0",
     ):
         if marker not in build_info:
@@ -1420,9 +1420,9 @@ def _verify_tle_build_receipt(
             "type": "ET_EXEC",
         },
         "go_tarball_sha256": _TLE_GO_TARBALL_SHA256,
-        "go_tarball_url": "https://go.dev/dl/go1.26.5.linux-arm64.tar.gz",
+        "go_tarball_url": "https://go.dev/dl/go1.26.6.linux-arm64.tar.gz",
         "go_tool_sha256": _TLE_GO_TOOL_SHA256,
-        "go_version": "1.26.5",
+        "go_version": "1.26.6",
         "included": True,
         "independent_build_count": 2,
         "independent_builds_byte_identical": True,

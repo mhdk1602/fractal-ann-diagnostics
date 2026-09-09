@@ -15,13 +15,13 @@ from typing import Any
 
 TLOCK_REACHABILITY_SCHEMA = "fractal-tlock-govulncheck-reachability-v1"
 
-_GOVULNCHECK_SHA256 = "1cf0bf22b6f9484c850380cd3065bffd9a6d6577181e281053ab2d6bcb8898f0"
+_GOVULNCHECK_SHA256 = "6a616046957838d9b20df2b15f621738cc78e8d06ac14447f19450718a9d6d31"
 _GOVULNCHECK_BYTE_COUNT = 9_633_918
-_SYMBOL_BINARY_SHA256 = "69ca051a3d3e14f6f405875dfdcb976c6be78cab66dc24c7191a949bd8257ff7"
-_SYMBOL_BINARY_BYTE_COUNT = 19_342_638
+_SYMBOL_BINARY_SHA256 = "9a45595fa4d094c0ff5f3c0fc25127fd659a79b5897e262c61e2ba80167de36a"
+_SYMBOL_BINARY_BYTE_COUNT = 19_347_499
 _SOURCE_PACKAGE_LIST_SHA256 = "323f5b5bb4147900ae4401b214cd9156e19f8690ad41a4db4fcef66dd5694265"
 _SOURCE_PACKAGE_COUNT = 403
-_NM_SHA256 = "d37ef9b9e10d3b3b17569653d5d3be68f5dba50f72d6494fcf63a360c952936b"
+_NM_SHA256 = "ecbbb9d90e312a78880c6a7f53f90205f60ae314a725871c516e95502e4b15be"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_FILE_BYTES = 512 * 1024 * 1024
 
@@ -99,7 +99,7 @@ def _scan_projection(
         "scanner_version": "v1.6.0",
     }
     if expected_mode == "source":
-        required_config["go_version"] = "go1.26.5"
+        required_config["go_version"] = "go1.26.6"
     for field, expected in required_config.items():
         if config.get(field) != expected:
             raise TlockReachabilityError(f"{label} has invalid config field {field}")
@@ -112,7 +112,7 @@ def _scan_projection(
     findings = [document["finding"] for document in documents if "finding" in document]
     expected_finding = {
         "osv": "GO-2026-5932",
-        "trace": [{"module": "golang.org/x/crypto", "version": "v0.54.0"}],
+        "trace": [{"module": "golang.org/x/crypto", "version": "v0.57.0"}],
     }
     if findings != [expected_finding]:
         raise TlockReachabilityError(f"{label} must contain one module-only GO-2026-5932 finding")
@@ -211,7 +211,7 @@ def adjudicate_tlock_reachability(
         "finding": {
             "module": "golang.org/x/crypto",
             "package_or_symbol_reachable": False,
-            "version": "v0.54.0",
+            "version": "v0.57.0",
             "vulnerability_id": "GO-2026-5932",
         },
         "govulncheck_binary_byte_count": len(govulncheck),

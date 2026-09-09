@@ -259,7 +259,7 @@ def _plan(tmp_path: Path, *, phase: str = "online") -> ProviderPhasePlan:
         oci_index_digest=f"sha256:{runtime_digest}",
         oci_platform_manifest_digest=f"sha256:{_digest(f'platform:{phase}')}",
         tle_binary_sha256=(
-            "ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5" if tle else None
+            "2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e" if tle else None
         ),
         tle_build_provenance_sha256=_digest("tle-build") if tle else None,
         tle_vulnerability_scan_sha256=_digest("tle-scan") if tle else None,

@@ -2,7 +2,7 @@
 
 ARG PYTHON_IMAGE=python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc
-ARG GO_IMAGE=docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651
+ARG GO_IMAGE=docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36
 ARG DISTROLESS_IMAGE=gcr.io/distroless/base-nossl-debian12:nonroot@sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe
 ARG DEBIAN_SNAPSHOT=20260714T000000Z
 ARG SOURCE_DATE_EPOCH
@@ -327,24 +327,24 @@ ARG OPA_COMMIT=e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297
 ARG OPA_SOURCE_SHA256=a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637
 ARG OPA_VERSION=1.18.2
 ARG OPA_RELEASE_TIMESTAMP=2026-07-02T13:14:00Z
-ARG GRPC_VERSION=1.82.1
+ARG GRPC_VERSION=1.83.1
 ARG KLAUSPOST_COMPRESS_VERSION=1.18.7
 ARG ORAS_VERSION=2.6.2
-ARG X_CRYPTO_VERSION=0.53.0
-ARG X_MOD_VERSION=0.37.0
-ARG X_NET_VERSION=0.56.0
+ARG X_CRYPTO_VERSION=0.56.0
+ARG X_MOD_VERSION=0.38.0
+ARG X_NET_VERSION=0.57.0
 ARG X_SYNC_VERSION=0.22.0
-ARG X_SYS_VERSION=0.46.0
-ARG X_TEXT_VERSION=0.40.0
-ARG X_TOOLS_VERSION=0.47.0
-ARG GO_VERSION=1.26.5
-ARG GO_TARBALL_SHA256_AMD64=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+ARG X_SYS_VERSION=0.47.0
+ARG X_TEXT_VERSION=0.41.0
+ARG X_TOOLS_VERSION=0.48.0
+ARG GO_VERSION=1.26.6
+ARG GO_TARBALL_SHA256_AMD64=708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89
+ARG GO_TARBALL_SHA256_ARM64=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
 ARG OPA_ORIGINAL_GO_MOD_SHA256=59b4beeea1af5d33ce1c22579e24ab4b0002a3638d0aadeb82a5a4500eb8a175
 ARG OPA_ORIGINAL_GO_SUM_SHA256=be7b973025c1a5588a822baed9513f7356e08a6794fa24db79b8fb832cee6b2f
-ARG OPA_PATCHED_GO_MOD_SHA256=7a4e0b0a05ad266401896008bff46c6dd822e647c1ddcda26de44ccdb781fdb3
-ARG OPA_PATCHED_GO_SUM_SHA256=6b6d66e548bce5eb3b4613daed39d87e563b99fcda36f286dabf1694b93195e1
-ARG OPA_DEPENDENCY_DELTA_SHA256=400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0
+ARG OPA_PATCHED_GO_MOD_SHA256=065eb0199aab744eb5ea18f5c2146a0e41a029acd0fec7b6b06c22aeedbb57b3
+ARG OPA_PATCHED_GO_SUM_SHA256=b40cf0cbe9511a57ad091cbdeb441118c3295c6b1bd1edd0ea4aad98f2d29e43
+ARG OPA_DEPENDENCY_DELTA_SHA256=a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694
 ARG SOURCE_DATE_EPOCH
 
 ENV LANG=C.UTF-8 \
@@ -394,15 +394,17 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
     && cp go.sum /tmp/go.sum.original \
     && go mod edit \
         -require="oras.land/oras-go/v2@v${ORAS_VERSION}" \
+        -require="golang.org/x/crypto@v${X_CRYPTO_VERSION}" \
         -require="golang.org/x/text@v${X_TEXT_VERSION}" \
         -require="google.golang.org/grpc@v${GRPC_VERSION}" \
         -require="github.com/klauspost/compress@v${KLAUSPOST_COMPRESS_VERSION}" \
     && go mod download \
         "oras.land/oras-go/v2@v${ORAS_VERSION}" \
+        "golang.org/x/crypto@v${X_CRYPTO_VERSION}" \
         "golang.org/x/text@v${X_TEXT_VERSION}" \
         "google.golang.org/grpc@v${GRPC_VERSION}" \
         "github.com/klauspost/compress@v${KLAUSPOST_COMPRESS_VERSION}" \
-    && go mod tidy -go=1.25.0 -compat=1.25 \
+    && go mod tidy -go=1.26.0 -compat=1.26 \
     && test "$(go list -m -f '{{.Version}}' oras.land/oras-go/v2)" = "v${ORAS_VERSION}" \
     && test "$(go list -m -f '{{.Version}}' golang.org/x/sync)" = "v${X_SYNC_VERSION}" \
     && test "$(go list -m -f '{{.Version}}' golang.org/x/text)" = "v${X_TEXT_VERSION}" \
@@ -420,13 +422,13 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
     && cp go.sum /out/artifacts/go.sum.patched \
     && diff -u \
         --label go.mod@opa-v1.18.2 \
-        --label go.mod@opa-v1.18.2+c0-security-overlay-v3 \
+        --label go.mod@opa-v1.18.2+c0-security-overlay-v4 \
         /tmp/go.mod.original go.mod \
         > /out/artifacts/opa-go-mod.patch \
         || test "$?" -eq 1 \
     && diff -u \
         --label go.sum@opa-v1.18.2 \
-        --label go.sum@opa-v1.18.2+c0-security-overlay-v3 \
+        --label go.sum@opa-v1.18.2+c0-security-overlay-v4 \
         /tmp/go.sum.original go.sum \
         > /out/artifacts/opa-go-sum.patch \
         || test "$?" -eq 1 \
@@ -452,15 +454,15 @@ RUN case "${SOURCE_DATE_EPOCH}" in \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sync[[:space:]]+v0\.22\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.40\.0' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/text[[:space:]]+v0\.41\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.82\.1' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+google.golang.org/grpc[[:space:]]+v1\.83\.1' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/crypto[[:space:]]+v0\.53\.0' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/crypto[[:space:]]+v0\.56\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.56\.0' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/net[[:space:]]+v0\.57\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
-    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sys[[:space:]]+v0\.46\.0' \
+    && grep -E '^[[:space:]]+dep[[:space:]]+golang.org/x/sys[[:space:]]+v0\.47\.0' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
     && grep -E '^[[:space:]]+dep[[:space:]]+github.com/klauspost/compress[[:space:]]+v1\.18\.7' \
         /out/artifacts/opa-go-build-info.txt >/dev/null \
@@ -509,12 +511,12 @@ ARG TLE_TAG_OBJECT=6a94bf6b8200ab67f2b80af8000a55db64998d94
 ARG TLE_SOURCE_ARCHIVE_SHA256=98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d
 ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
 ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
-ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
-ARG TLE_PATCHED_GO_SUM_SHA256=988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c
-ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
-ARG GO_VERSION=1.26.5
-ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
-ARG GO_TOOL_SHA256_ARM64=22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b
+ARG TLE_PATCHED_GO_MOD_SHA256=b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53
+ARG TLE_PATCHED_GO_SUM_SHA256=a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad
+ARG TLE_BINARY_SHA256=2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e
+ARG GO_VERSION=1.26.6
+ARG GO_TARBALL_SHA256_ARM64=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
+ARG GO_TOOL_SHA256_ARM64=410fd7436bc1adf673e6dbe484919e9551988259508103261a1365fa9763ffd3
 
 ENV CGO_ENABLED=0 \
     GOARCH=arm64 \
@@ -531,8 +533,8 @@ ENV CGO_ENABLED=0 \
 ADD --checksum=sha256:98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d \
     https://github.com/drand/tlock/archive/7b54141a9733fd6fa207587a11148280e6fb020d.tar.gz \
     /tmp/tlock-source.tar.gz
-ADD --checksum=sha256:fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49 \
-    https://go.dev/dl/go1.26.5.linux-arm64.tar.gz \
+ADD --checksum=sha256:d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e \
+    https://go.dev/dl/go1.26.6.linux-arm64.tar.gz \
     /tmp/go-linux-arm64.tar.gz
 
 RUN case "${SOURCE_DATE_EPOCH}" in \
@@ -572,11 +574,11 @@ WORKDIR /build/patched
 # the discarded builder for a byte-level lineage receipt.
 RUN GOFLAGS=-mod=mod go get \
         filippo.io/age@v1.2.1 \
-        golang.org/x/crypto@v0.54.0 \
-        golang.org/x/net@v0.57.0 \
-        golang.org/x/sys@v0.47.0 \
-        golang.org/x/text@v0.40.0 \
-        google.golang.org/grpc@v1.82.1 \
+        golang.org/x/crypto@v0.57.0 \
+        golang.org/x/net@v0.58.0 \
+        golang.org/x/sys@v0.48.0 \
+        golang.org/x/text@v0.42.0 \
+        google.golang.org/grpc@v1.83.2 \
         google.golang.org/protobuf@v1.36.11 \
     && GOFLAGS=-mod=mod go mod tidy \
     && go mod download all \
@@ -632,13 +634,13 @@ ARG TLE_SOURCE_ARCHIVE_SHA256=98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c3
 ARG TLE_SOURCE_TREE_MANIFEST_SHA256=6fedff45430fc81e9dbf5b13b1a2dc90e9840ae91f03de307dac5c2f7475c94c
 ARG TLE_ORIGINAL_GO_MOD_SHA256=0ee3447d4c3149e657a2f63c2e0046c19c21dcc63f730402cb24b08399db7741
 ARG TLE_ORIGINAL_GO_SUM_SHA256=1cb67cce42d7cf12be184f0f6a820c1f8c2f105615d43cf0a176ee35741c523b
-ARG TLE_PATCHED_GO_MOD_SHA256=ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08
-ARG TLE_PATCHED_GO_SUM_SHA256=988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c
-ARG TLE_DEPENDENCY_DELTA_SHA256=1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59
-ARG TLE_BINARY_SHA256=ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5
-ARG GO_VERSION=1.26.5
-ARG GO_TARBALL_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
-ARG GO_TOOL_SHA256_ARM64=22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b
+ARG TLE_PATCHED_GO_MOD_SHA256=b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53
+ARG TLE_PATCHED_GO_SUM_SHA256=a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad
+ARG TLE_DEPENDENCY_DELTA_SHA256=e85b3c5040050c1a1b4229cb08b21fdf4721647053d0ace13bdcd2cf4f7e00a1
+ARG TLE_BINARY_SHA256=2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e
+ARG GO_VERSION=1.26.6
+ARG GO_TARBALL_SHA256_ARM64=d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e
+ARG GO_TOOL_SHA256_ARM64=410fd7436bc1adf673e6dbe484919e9551988259508103261a1365fa9763ffd3
 
 COPY --from=tle-source-builder /out /out
 COPY --from=tle-source-builder /build/original /build/original
@@ -694,19 +696,19 @@ if hashlib.sha256(tree_payload).hexdigest() != os.environ["TLE_SOURCE_TREE_MANIF
 (artifacts / "source-tree-manifest.json").write_bytes(tree_payload + b"\n")
 
 dependency_delta = {
-    "go_directive": {"from": "1.22", "to": "1.25.0"},
+    "go_directive": {"from": "1.22", "to": "1.26.0"},
     "modules": [
         {"from": "v1.1.1", "module": "filippo.io/age", "to": "v1.2.1"},
-        {"from": "v0.25.0", "module": "golang.org/x/crypto", "to": "v0.54.0"},
-        {"from": "v0.27.0", "module": "golang.org/x/net", "to": "v0.57.0"},
-        {"from": "v0.22.0", "module": "golang.org/x/sys", "to": "v0.47.0"},
-        {"from": "v0.16.0", "module": "golang.org/x/text", "to": "v0.40.0"},
+        {"from": "v0.25.0", "module": "golang.org/x/crypto", "to": "v0.57.0"},
+        {"from": "v0.27.0", "module": "golang.org/x/net", "to": "v0.58.0"},
+        {"from": "v0.22.0", "module": "golang.org/x/sys", "to": "v0.48.0"},
+        {"from": "v0.16.0", "module": "golang.org/x/text", "to": "v0.42.0"},
         {
             "from": "v0.0.0-20240723171418-e6d459c13d2a",
             "module": "google.golang.org/genproto/googleapis/rpc",
-            "to": "v0.0.0-20260414002931-afd174a4e478",
+            "to": "v0.0.0-20260526163538-3dc84a4a5aaa",
         },
-        {"from": "v1.65.0", "module": "google.golang.org/grpc", "to": "v1.82.1"},
+        {"from": "v1.65.0", "module": "google.golang.org/grpc", "to": "v1.83.2"},
         {
             "from": "v1.34.2",
             "module": "google.golang.org/protobuf",
@@ -967,7 +969,7 @@ RUN export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
     && rm /tmp/opa-rego.sha256 \
     && test "$(/usr/local/bin/opa version | sed -n 's/^Version: //p')" = '1.18.2' \
     && test "$(/usr/local/bin/opa version | sed -n 's/^Build Commit: //p')" = 'e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297' \
-    && test "$(/usr/local/bin/opa version | sed -n 's/^Go Version: //p')" = 'go1.26.5' \
+    && test "$(/usr/local/bin/opa version | sed -n 's/^Go Version: //p')" = 'go1.26.6' \
     && test ! -e /usr/local/bin/tle \
     && /opt/venv/bin/python -c 'import sqlite3, zlib; assert sqlite3.sqlite_version == "3.53.3"; assert zlib.ZLIB_RUNTIME_VERSION == "1.3.2"' \
     && /usr/local/bin/python -c 'import os, pathlib; roots = tuple(map(pathlib.Path, ("/opt/venv", "/opt/native-libs", "/opt/artifacts", "/opt/app/src", "/opt/app/uv.lock"))); paths = roots + tuple(path for root in roots if root.is_dir() for path in root.rglob("*")); os.setgid(65532); os.setuid(65532); writable = [str(path) for path in paths if os.access(path, os.W_OK)]; assert not writable, writable[:10]'
@@ -1212,7 +1214,7 @@ COPY --from=tle-builder --chown=0:0 /out/artifacts/tle-build-receipt.json /opt/a
 RUN export PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
     && test "${TARGETARCH}" = arm64 \
     && printf '%s  %s\n' \
-        ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5 \
+        2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e \
         /usr/local/bin/tle | sha256sum -c - \
     && /usr/local/bin/tle --help >/dev/null \
     && chmod 0555 /usr/local/bin/tle \
@@ -1242,9 +1244,9 @@ LABEL org.opencontainers.image.title="Fractal ANN confirmatory runner" \
       io.fractal-ann.confirmatory.debian-snapshot="${DEBIAN_SNAPSHOT}" \
       io.fractal-ann.confirmatory.debian-inrelease-sha256="77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa" \
       io.fractal-ann.confirmatory.debian-keyring-sha256="506b815cbb32d9b6066b4a2aa524071e071761e7e7f68c3ac74f3061ba852017" \
-      io.fractal-ann.confirmatory.go-builder-image="docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651" \
+      io.fractal-ann.confirmatory.go-builder-image="docker.io/library/golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36" \
       io.fractal-ann.confirmatory.opa-commit="e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297" \
-      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="400699e81344ff2114fc5d2254734cb84a7015a68840505a7ab6a05df0dd39e0" \
+      io.fractal-ann.confirmatory.opa-dependency-delta-sha256="a90564cc4df061467a13cfb6db6f5cf8a71902bc0a96ba093e3db3b97ca69694" \
       io.fractal-ann.confirmatory.opa-rego-sha256="${OPA_REGO_SHA256}" \
       io.fractal-ann.confirmatory.opa-rego-test-sha256="${OPA_REGO_TEST_SHA256}" \
       io.fractal-ann.confirmatory.opa-source-sha256="a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637" \
@@ -1293,12 +1295,12 @@ FROM scientific-runtime-base AS release-runtime
 LABEL org.opencontainers.image.title="Fractal ANN confirmatory release runner" \
       org.opencontainers.image.description="C0-pinned ARM64 timelock release image for the registered Fractal ANN confirmatory apparatus" \
       io.fractal-ann.confirmatory.runtime-role="timelock-release" \
-      io.fractal-ann.confirmatory.tle-binary-sha256="ca9d498b6a3c1ea8edff9ace7bf00eb0f90ce67166343161f9a53f21900a6ef5" \
-      io.fractal-ann.confirmatory.tle-dependency-delta-sha256="1b15bd1dd497c5553806ea5c58c170d6580ccc6139199d4fa9028e0ef8b79c59" \
-      io.fractal-ann.confirmatory.tle-go-tarball-sha256="fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49" \
-      io.fractal-ann.confirmatory.tle-go-tool-sha256="22201b57b855105df064a291863c3fc04f22a7431187a9205122aff42a0c825b" \
-      io.fractal-ann.confirmatory.tle-patched-go-mod-sha256="ca99d5021580cc77d05367b7356b542fa3d77bc9f286aaa7d236b2a95a350c08" \
-      io.fractal-ann.confirmatory.tle-patched-go-sum-sha256="988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c" \
+      io.fractal-ann.confirmatory.tle-binary-sha256="2db90143696d6e0d3e00ce50e885d118962a2a623bcdbde99f9a1816df96275e" \
+      io.fractal-ann.confirmatory.tle-dependency-delta-sha256="e85b3c5040050c1a1b4229cb08b21fdf4721647053d0ace13bdcd2cf4f7e00a1" \
+      io.fractal-ann.confirmatory.tle-go-tarball-sha256="d0507e9e9d7fe012aae570108cbd76c15de879e17130ab8cb90d4d7445cb1f2e" \
+      io.fractal-ann.confirmatory.tle-go-tool-sha256="410fd7436bc1adf673e6dbe484919e9551988259508103261a1365fa9763ffd3" \
+      io.fractal-ann.confirmatory.tle-patched-go-mod-sha256="b506970e2d04dff148a58f586d7321ed31dfb4d107daa9cc6e1aa7aa7faaca53" \
+      io.fractal-ann.confirmatory.tle-patched-go-sum-sha256="a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad" \
       io.fractal-ann.confirmatory.tle-present="true" \
       io.fractal-ann.confirmatory.tle-release-version="1.2.0" \
       io.fractal-ann.confirmatory.tle-runtime-scope="linux/arm64-only" \

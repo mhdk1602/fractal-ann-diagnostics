@@ -28,7 +28,7 @@ layers.
 |---|---|---|
 | Python builder | `python:3.12.13-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b` | [Python 3.12.13 release](https://www.python.org/downloads/release/python-31213/); [Docker Official Image](https://hub.docker.com/_/python) |
 | uv builder | `ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc` | [uv container](https://github.com/astral-sh/uv/pkgs/container/uv) |
-| Go builder | `golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651` | [Go 1.26.5 release](https://go.dev/doc/devel/release#go1.26.5); [Docker Official Image](https://hub.docker.com/_/golang) |
+| Go builder | `golang:1.26.6-bookworm@sha256:116d58cbd88c1297624acc6e967a060012422bacf9930927e23fb719189c6f36` | [Go 1.26.6 release](https://go.dev/doc/devel/release#go1.26.6); [Docker Official Image](https://hub.docker.com/_/golang) |
 | Final base | `gcr.io/distroless/base-nossl-debian12:nonroot@sha256:26cd77482910e221ff26cf7c480203ce97f8f01ad272e2dc8a9ae29c811e9efe` | [distroless](https://github.com/GoogleContainerTools/distroless) |
 | OPA source | commit `e695c9ef8edb0f8b9f13d014d7bc8a7fbcc57297`, archive SHA-256 `a8b3ecdc925b75bdade52d315aa13efaa51c2de99acb78003ad353cce6e9e637` | [OPA repository](https://github.com/open-policy-agent/opa) |
 | TLE source | v1.2.0 commit `7b54141a9733fd6fa207587a11148280e6fb020d`, archive SHA-256 `98b5edb760cffbe6edd392f004d2d51fcc7a8e6ef7ed7672c32b1a9e1ce3e32d` | [tlock v1.2.0](https://github.com/drand/tlock/releases/tag/v1.2.0) |
@@ -44,7 +44,7 @@ The tlock builder applies the declared security-version overlay, runs `go mod ti
 complete module graph, verifies that graph, and records `go list -m -json all`. Only then does it
 check and retain the final `go.mod` and `go.sum` bytes. This ordering matters because
 `go mod download all` adds transitive zip checksums that are absent from the tidy-only file. The
-retained `go.sum` SHA-256, `988aeb96a135d5fc3cf7cd0d755ffc4bbc28a84fb114ea385843010073cd1b3c`,
+retained `go.sum` SHA-256, `a6aaeba775434823b0ab2b713a49a36947b99686e9c07ba3c51accbb7e568cad`,
 therefore identifies the actual network-disabled test and build input rather than an earlier
 intermediate file.
 

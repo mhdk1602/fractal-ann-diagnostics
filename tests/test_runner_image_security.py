@@ -297,7 +297,7 @@ def test_existing_output_is_never_overwritten(tmp_path: Path) -> None:
 def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
     tmp_path: Path,
 ) -> None:
-    unknowns = [_unknown_x_crypto("v0.53.0"), _unknown_x_crypto("v0.54.0")]
+    unknowns = [_unknown_x_crypto("v0.56.0"), _unknown_x_crypto("v0.57.0")]
     direct, sbom, cyclonedx, output = _write_evidence(
         tmp_path,
         direct_findings=unknowns,
@@ -317,8 +317,8 @@ def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
     assert receipt["finding_count"] == 2
     assert receipt["severity_counts"]["UNKNOWN"] == 2
     assert [row["installed_version"] for row in receipt["findings"]] == [
-        "v0.53.0",
-        "v0.54.0",
+        "v0.56.0",
+        "v0.57.0",
     ]
     assert {row["vulnerability_id"] for row in receipt["findings"]} == {"GO-2026-5932"}
     assert {row["fixed_version"] for row in receipt["findings"]} == {""}
@@ -328,8 +328,8 @@ def test_timelock_release_admits_only_the_two_measured_unknown_go_findings(
 
 def test_timelock_release_rejects_an_extra_nonserious_finding(tmp_path: Path) -> None:
     findings = [
-        _unknown_x_crypto("v0.53.0"),
-        _unknown_x_crypto("v0.54.0"),
+        _unknown_x_crypto("v0.56.0"),
+        _unknown_x_crypto("v0.57.0"),
         _finding(severity="LOW"),
     ]
     direct, sbom, cyclonedx, output = _write_evidence(

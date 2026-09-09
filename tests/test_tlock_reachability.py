@@ -24,8 +24,8 @@ def _stream(*, mode: str, package_reachable: bool = False) -> bytes:
         "scanner_version": "v1.6.0",
     }
     if mode == "source":
-        config["go_version"] = "go1.26.5"
-    trace: list[dict[str, str]] = [{"module": "golang.org/x/crypto", "version": "v0.54.0"}]
+        config["go_version"] = "go1.26.6"
+    trace: list[dict[str, str]] = [{"module": "golang.org/x/crypto", "version": "v0.57.0"}]
     if package_reachable:
         trace.append({"package": "golang.org/x/crypto/openpgp"})
     documents = (
