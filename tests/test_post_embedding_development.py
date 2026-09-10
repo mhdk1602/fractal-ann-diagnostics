@@ -113,6 +113,31 @@ def _receipt() -> PostEmbeddingDevelopmentReceipt:
     )
 
 
+def _ensured_joint_power(
+    config: PostEmbeddingDevelopmentConfig,
+    *,
+    freeze_tree_sha256: str,
+    power: object,
+    panels: tuple[object, ...],
+    report: object,
+    tree_sha256: str,
+    exact_replay_performed: bool = False,
+) -> operator._EnsuredJointPower:
+    invocation = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    return operator._EnsuredJointPower(
+        verification=operator._FreshJointPowerVerification(
+            bundle_root=config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY,
+            freeze_tree_sha256=freeze_tree_sha256,
+            invocation_bytes=invocation.read_bytes(),
+            power_config=power,
+            panels=panels,
+            report=report,
+            tree_sha256=tree_sha256,
+        ),
+        exact_replay_performed=exact_replay_performed,
+    )
+
+
 def _write_operator_top_level(config: PostEmbeddingDevelopmentConfig) -> None:
     config.output_root.mkdir(mode=0o700)
     for name in operator._KNOWN_TOP_LEVEL:
@@ -778,7 +803,6 @@ def test_run_rejects_existing_root_and_resume_uses_write_enabled_stages(
     execution_config = SimpleNamespace(config_sha256=_digest("execution-config"))
     power = SimpleNamespace(sha256=_digest("power"))
     report = SimpleNamespace(sha256=_digest("report"), selected_families_per_corpus=75)
-    exact_replays: list[bool] = []
     monkeypatch.setattr(operator, "_admit_upstream", lambda value: object())
 
     def stage(name: str, result: object):
@@ -811,15 +835,22 @@ def test_run_rejects_existing_root_and_resume_uses_write_enabled_stages(
     monkeypatch.setattr(
         operator,
         "_ensure_joint_power",
-        lambda *a: (power, (), report, _digest("t")),
+        lambda *a: _ensured_joint_power(
+            config,
+            freeze_tree_sha256=_digest("c"),
+            power=power,
+            panels=(),
+            report=report,
+            tree_sha256=_digest("t"),
+            exact_replay_performed=True,
+        ),
     )
     (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(b"invocation\n")
 
-    def verify_power(*args: object, **kwargs: object):
-        exact_replays.append(kwargs.get("reproduce_exact", True))
-        return power, (), report, _digest("t")
+    def unexpected_replay(*args: object, **kwargs: object):
+        raise AssertionError("resume must consume the exact verification returned by ensure")
 
-    monkeypatch.setattr(operator, "_verify_joint_power_bundle", verify_power)
+    monkeypatch.setattr(operator, "_verify_joint_power_bundle", unexpected_replay)
     monkeypatch.setattr(operator, "_build_receipt", lambda *a, **k: final_receipt)
     monkeypatch.setattr(
         operator,
@@ -833,10 +864,96 @@ def test_run_rejects_existing_root_and_resume_uses_write_enabled_stages(
         ("execution", True),
         ("freeze", True),
     ]
-    assert exact_replays == [True]
     assert (config.output_root / RECEIPT_FILENAME).read_bytes() == (
         final_receipt.canonical_file_bytes()
     )
+
+
+def test_resume_removes_validated_interrupted_freeze_staging_before_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    (config.output_root / OPERATOR_CONFIG_FILENAME).write_bytes(config.canonical_file_bytes())
+    interrupted = config.output_root / f".{FREEZE_DIRECTORY}.staging-interrupted"
+    interrupted.mkdir(mode=0o700)
+    (interrupted / "partial.json").write_bytes(b"partial\n")
+    final_receipt = _receipt()
+    execution_receipt = SimpleNamespace(artifact_sha256=_digest("execution"))
+    execution_config = SimpleNamespace(config_sha256=_digest("execution-config"))
+    power = SimpleNamespace(sha256=_digest("power"))
+    report = SimpleNamespace(sha256=_digest("report"), selected_families_per_corpus=75)
+    monkeypatch.setattr(operator, "_admit_upstream", lambda value: object())
+    monkeypatch.setattr(
+        operator,
+        "_ensure_selection_and_materialization",
+        lambda *args, **kwargs: (
+            _digest("selection"),
+            _digest("bindings"),
+            _digest("materialization"),
+        ),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_ensure_policy_and_indexes",
+        lambda *args, **kwargs: ((), _digest("index")),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_ensure_execution",
+        lambda *args, **kwargs: (execution_config, execution_receipt),
+    )
+    monkeypatch.setattr(
+        operator,
+        "_ensure_freeze",
+        lambda *args, **kwargs: (
+            _digest("freeze-config"),
+            _digest("freeze-receipt"),
+            _digest("freeze"),
+        ),
+    )
+
+    def ensure_power(*args: object):
+        assert not interrupted.exists()
+        bundle = config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY
+        bundle.mkdir(mode=0o700, parents=True)
+        (bundle / "placeholder").write_bytes(b"published\n")
+        (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(b"invocation\n")
+        return _ensured_joint_power(
+            config,
+            freeze_tree_sha256=_digest("freeze"),
+            power=power,
+            panels=(),
+            report=report,
+            tree_sha256=operator.digest_directory_tree(bundle).sha256,
+        )
+
+    monkeypatch.setattr(operator, "_ensure_joint_power", ensure_power)
+    monkeypatch.setattr(operator, "_build_receipt", lambda *args, **kwargs: final_receipt)
+    monkeypatch.setattr(
+        operator,
+        "_verify_post_embedding_development_config",
+        lambda *args, **kwargs: final_receipt,
+    )
+
+    assert operator.resume_post_embedding_development(config) is final_receipt
+    assert not interrupted.exists()
+
+
+def test_operator_lock_rejects_a_concurrent_resume(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    (config.output_root / OPERATOR_CONFIG_FILENAME).write_bytes(config.canonical_file_bytes())
+    descriptor = operator._acquire_operator_lock(config.output_root)
+    try:
+        with pytest.raises(
+            PostEmbeddingDevelopmentError,
+            match="another post-embedding development process is active",
+        ):
+            operator.resume_post_embedding_development(config)
+    finally:
+        operator._release_operator_lock(descriptor)
 
 
 def test_new_run_executes_one_generation_and_defers_exact_replay_to_freeze(
@@ -878,7 +995,14 @@ def test_new_run_executes_one_generation_and_defers_exact_replay_to_freeze(
         bundle.mkdir(mode=0o700, parents=True)
         (bundle / "placeholder").write_bytes(b"published\n")
         (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(b"invocation\n")
-        return power, (), report, operator.digest_directory_tree(bundle).sha256
+        return _ensured_joint_power(
+            config,
+            freeze_tree_sha256=_digest("freeze"),
+            power=power,
+            panels=(),
+            report=report,
+            tree_sha256=operator.digest_directory_tree(bundle).sha256,
+        )
 
     def unexpected_replay(*args: object, **kwargs: object):
         raise AssertionError("fresh operator execution must defer exact replay to freeze")
@@ -962,24 +1086,629 @@ def test_status_marks_interrupted_single_invocation(tmp_path: Path) -> None:
     assert status["completed"] is False
 
 
-def test_single_invocation_marker_blocks_retry_after_interruption(
+def test_status_admits_but_does_not_delete_interrupted_freeze_staging(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    (config.output_root / OPERATOR_CONFIG_FILENAME).write_bytes(config.canonical_file_bytes())
+    interrupted = config.output_root / f".{FREEZE_DIRECTORY}.staging-interrupted"
+    interrupted.mkdir(mode=0o700)
+    (interrupted / "partial.json").write_bytes(b"partial\n")
+
+    status = post_embedding_development_status(config)
+
+    assert status["completed"] is False
+    assert interrupted.name in status["present"]
+    assert interrupted.is_dir()
+
+
+def _mock_resumable_joint_power(
+    config: PostEmbeddingDevelopmentConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    feasible: bool = True,
+):
+    power = SimpleNamespace(sha256=_digest("power"), encoded=b"power\n")
+    panel = SimpleNamespace(
+        scenario_id="expected",
+        sha256=_digest("panel"),
+        encoded=b"panel\n",
+    )
+    selected = 75 if feasible else None
+    audit = SimpleNamespace(
+        config_sha256=power.sha256,
+        panel_sha256s=((panel.scenario_id, panel.sha256),),
+        selection_basis_sha256=_digest("selection-basis"),
+        exact_bootstrap_replicates=10_000,
+        coverage_rule="closed-certificate",
+        selected_families_per_corpus=selected,
+        selection_satisfied=feasible,
+        test_mode=False,
+        sha256=_digest("selection-audit"),
+        encoded=b"audit\n",
+    )
+    report = SimpleNamespace(
+        config_sha256=power.sha256,
+        panel_sha256s=((panel.scenario_id, panel.sha256),),
+        selection_audit_sha256=audit.sha256,
+        selection_audit_basis_sha256=audit.selection_basis_sha256,
+        selection_audit_exact_bootstrap_replicates=audit.exact_bootstrap_replicates,
+        selection_audit_coverage_rule=audit.coverage_rule,
+        test_mode=False,
+        freeze_ready=feasible,
+        selected_families_per_corpus=selected,
+        selection_satisfied=feasible,
+        encoded=b"report\n",
+    )
+    calls = {"audit": 0, "design": 0, "exact": 0}
+    monkeypatch.setattr(operator, "_joint_power_source", lambda value: (power, (panel,)))
+
+    def run_audit(*args: object):
+        calls["audit"] += 1
+        return audit
+
+    def run_design(*args: object, **kwargs: object):
+        calls["design"] += 1
+        return report
+
+    def load_audit(encoded: bytes):
+        if encoded != audit.encoded:
+            raise operator.JointPowerDesignError("invalid audit bytes")
+        return audit
+
+    def load_report(encoded: bytes):
+        if encoded != report.encoded:
+            raise operator.JointPowerDesignError("invalid report bytes")
+        return report
+
+    def verify(*args: object, **kwargs: object):
+        calls["exact"] += 1
+        return power, (panel,), report, operator.digest_directory_tree(args[0]).sha256
+
+    monkeypatch.setattr(operator, "run_joint_power_selection_audit", run_audit)
+    monkeypatch.setattr(operator, "run_joint_power_design", run_design)
+    monkeypatch.setattr(operator, "load_joint_power_selection_audit", load_audit)
+    monkeypatch.setattr(operator, "load_joint_power_report", load_report)
+    monkeypatch.setattr(
+        operator,
+        "canonical_joint_power_config_bytes",
+        lambda value: value.encoded,
+    )
+    monkeypatch.setattr(
+        operator,
+        "canonical_development_panel_bytes",
+        lambda value: value.encoded,
+    )
+    monkeypatch.setattr(
+        operator,
+        "canonical_joint_power_selection_audit_bytes",
+        lambda value: value.encoded,
+    )
+    monkeypatch.setattr(
+        operator,
+        "canonical_joint_power_report_bytes",
+        lambda value: value.encoded,
+    )
+    monkeypatch.setattr(
+        operator,
+        "_verify_joint_power_bundle",
+        verify,
+    )
+    return power, panel, audit, report, calls
+
+
+def _seed_joint_power_pending_boundary(
+    pending: Path,
+    *,
+    boundary: str,
+    power: object,
+    panel: object,
+    audit: object,
+    report: object,
+) -> None:
+    pending.mkdir(mode=0o700, parents=True)
+    audit_path = pending / JOINT_POWER_SELECTION_AUDIT_FILENAME
+    report_path = pending / "report.json"
+    config_path = pending / "config.json"
+    panel_path = pending / "panels" / f"{panel.sha256}.json"
+    if boundary == "empty-pending":
+        return
+    if boundary == "audit-next":
+        operator._checkpoint_next_path(audit_path).write_bytes(audit.encoded)
+        return
+    audit_path.write_bytes(audit.encoded)
+    if boundary == "audit-final":
+        return
+    if boundary == "report-next":
+        operator._checkpoint_next_path(report_path).write_bytes(report.encoded)
+        return
+    report_path.write_bytes(report.encoded)
+    if boundary == "report-final":
+        return
+    if boundary == "config-next":
+        operator._checkpoint_next_path(config_path).write_bytes(power.encoded)
+        return
+    config_path.write_bytes(power.encoded)
+    if boundary == "config-final":
+        return
+    panel_path.parent.mkdir(mode=0o700)
+    if boundary == "panels-directory":
+        return
+    if boundary == "panel-next":
+        operator._checkpoint_next_path(panel_path).write_bytes(panel.encoded)
+        return
+    if boundary == "complete-pending":
+        panel_path.write_bytes(panel.encoded)
+        return
+    raise AssertionError(f"unrecognized boundary: {boundary}")
+
+
+def test_single_invocation_marker_resumes_the_same_deterministic_computation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = _config(tmp_path)
     config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, report, calls = _mock_resumable_joint_power(config, monkeypatch)
+    freeze_tree = _digest("freeze-tree")
+    marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    marker_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    marker.write_bytes(marker_bytes)
+
+    observed = operator._ensure_joint_power(config, freeze_tree)
+
+    assert observed.verification.power_config is power
+    assert observed.verification.panels == (panel,)
+    assert observed.verification.report is report
+    assert observed.exact_replay_performed is False
+    assert calls == {"audit": 1, "design": 1, "exact": 0}
+    assert marker.read_bytes() == marker_bytes
+    assert (
+        config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY / "report.json"
+    ).read_bytes() == report.encoded
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    (
+        "empty-pending",
+        "audit-next",
+        "audit-final",
+        "report-next",
+        "report-final",
+        "config-next",
+        "config-final",
+        "panels-directory",
+        "panel-next",
+    ),
+)
+def test_joint_power_resume_recovers_every_checkpoint_kill_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, calls = _mock_resumable_joint_power(config, monkeypatch)
+    freeze_tree = _digest("freeze-tree")
+    marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    marker.write_bytes(operator._invocation_payload(freeze_tree, power, (panel,)))
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    _seed_joint_power_pending_boundary(
+        pending,
+        boundary=boundary,
+        power=power,
+        panel=panel,
+        audit=audit,
+        report=report,
+    )
+
+    ensured = operator._ensure_joint_power(config, freeze_tree)
+
+    bundle = config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY
+    assert bundle.is_dir()
+    assert not pending.exists()
+    assert set(operator.digest_directory_tree(bundle).entries) == {
+        "config.json",
+        "report.json",
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        "panels",
+        f"panels/{panel.sha256}.json",
+    }
+    generated_audit = boundary == "empty-pending"
+    generated_report = boundary in {"empty-pending", "audit-next", "audit-final"}
+    assert calls == {
+        "audit": int(generated_audit),
+        "design": int(generated_report),
+        "exact": int(not generated_audit),
+    }
+    assert ensured.exact_replay_performed is not generated_audit
+
+
+def test_joint_power_resume_promotes_a_complete_invocation_next_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, _report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+    )
+    freeze_tree = _digest("freeze-tree")
+    invocation_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    analysis = config.output_root / ANALYSIS_DIRECTORY
+    analysis.mkdir(mode=0o700)
+    invocation_next = analysis / operator._JOINT_POWER_INVOCATION_NEXT_FILENAME
+    invocation_next.write_bytes(invocation_bytes)
+
+    ensured = operator._ensure_joint_power(config, freeze_tree)
+
+    assert (config.output_root / JOINT_POWER_INVOCATION_FILENAME).read_bytes() == invocation_bytes
+    assert not invocation_next.exists()
+    assert calls == {"audit": 1, "design": 1, "exact": 0}
+    assert ensured.exact_replay_performed is False
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    ("invocation-next", "audit-next", "report-next", "config-next", "panel-next"),
+)
+def test_joint_power_resume_discards_only_torn_uncommitted_next_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    boundary: str,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, calls = _mock_resumable_joint_power(config, monkeypatch)
+    freeze_tree = _digest("freeze-tree")
+    invocation_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    analysis = config.output_root / ANALYSIS_DIRECTORY
+    analysis.mkdir(mode=0o700)
+    marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    if boundary == "invocation-next":
+        (analysis / operator._JOINT_POWER_INVOCATION_NEXT_FILENAME).write_bytes(b"torn")
+    else:
+        marker.write_bytes(invocation_bytes)
+        prior = {
+            "audit-next": "empty-pending",
+            "report-next": "audit-final",
+            "config-next": "report-final",
+            "panel-next": "panels-directory",
+        }[boundary]
+        pending = analysis / operator.JOINT_POWER_PENDING_DIRECTORY
+        _seed_joint_power_pending_boundary(
+            pending,
+            boundary=prior,
+            power=power,
+            panel=panel,
+            audit=audit,
+            report=report,
+        )
+        target = {
+            "audit-next": pending / JOINT_POWER_SELECTION_AUDIT_FILENAME,
+            "report-next": pending / "report.json",
+            "config-next": pending / "config.json",
+            "panel-next": pending / "panels" / f"{panel.sha256}.json",
+        }[boundary]
+        operator._checkpoint_next_path(target).write_bytes(b"torn")
+
+    ensured = operator._ensure_joint_power(config, freeze_tree)
+
+    bundle = config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY
+    assert bundle.is_dir()
+    assert marker.read_bytes() == invocation_bytes
+    audit_was_regenerated = boundary in {"invocation-next", "audit-next"}
+    report_was_regenerated = boundary in {
+        "invocation-next",
+        "audit-next",
+        "report-next",
+    }
+    assert calls == {
+        "audit": int(audit_was_regenerated),
+        "design": int(report_was_regenerated),
+        "exact": int(not audit_was_regenerated),
+    }
+    assert ensured.exact_replay_performed is not audit_was_regenerated
+
+
+def test_no_feasible_joint_power_is_checkpointed_and_resumes_without_recomputation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, _report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+        feasible=False,
+    )
+    freeze_tree = _digest("freeze-tree")
+    invocation_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(invocation_bytes)
+
+    for _ in range(2):
+        with pytest.raises(
+            PostEmbeddingDevelopmentError,
+            match="no feasible registered candidate.*sealed execution remains unauthorized",
+        ):
+            operator._ensure_joint_power(config, freeze_tree)
+
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    checkpoint = pending / operator.JOINT_POWER_NO_FEASIBLE_FILENAME
+    decoded = operator._decode(checkpoint.read_bytes(), label="no-feasible checkpoint")
+    assert decoded == {
+        "disposition": "no-feasible-registered-candidate",
+        "freeze_tree_sha256": freeze_tree,
+        "joint_power_config_sha256": power.sha256,
+        "joint_power_report_sha256": _digest("report\n"),
+        "panel_sha256s": {panel.scenario_id: panel.sha256},
+        "sealed_execution_authorized": False,
+        "schema_version": operator.JOINT_POWER_NO_FEASIBLE_SCHEMA,
+        "selection_audit_sha256": _digest("audit\n"),
+        "selected_families_per_corpus": None,
+        "single_invocation_sha256": hashlib.sha256(invocation_bytes).hexdigest(),
+    }
+    assert calls == {"audit": 1, "design": 1, "exact": 0}
+    assert set(operator.digest_directory_tree(pending).entries) == {
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        "report.json",
+        operator.JOINT_POWER_NO_FEASIBLE_FILENAME,
+    }
+    assert not (config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY).exists()
+    assert not (config.output_root / RECEIPT_FILENAME).exists()
+
+
+@pytest.mark.parametrize("encoded", (b"complete", b"torn"))
+def test_no_feasible_terminal_checkpoint_recovers_its_atomic_next_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    encoded: bytes,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+        feasible=False,
+    )
+    freeze_tree = _digest("freeze-tree")
+    invocation_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(invocation_bytes)
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    _seed_joint_power_pending_boundary(
+        pending,
+        boundary="report-final",
+        power=power,
+        panel=panel,
+        audit=audit,
+        report=report,
+    )
+    terminal = pending / operator.JOINT_POWER_NO_FEASIBLE_FILENAME
+    expected = operator._joint_power_no_feasible_payload(
+        freeze_tree_sha256=freeze_tree,
+        invocation_bytes=invocation_bytes,
+        power_config=power,
+        panels=(panel,),
+        selection_audit=audit,
+        report=report,
+    )
+    operator._checkpoint_next_path(terminal).write_bytes(
+        expected if encoded == b"complete" else encoded
+    )
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="no feasible registered candidate"):
+        operator._ensure_joint_power(config, freeze_tree)
+
+    assert terminal.read_bytes() == expected
+    assert not operator._checkpoint_next_path(terminal).exists()
+    assert calls == {"audit": 0, "design": 0, "exact": 0}
+
+
+def test_mismatched_no_feasible_terminal_checkpoint_is_immutable_and_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+        feasible=False,
+    )
+    freeze_tree = _digest("freeze-tree")
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(
+        operator._invocation_payload(freeze_tree, power, (panel,))
+    )
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    _seed_joint_power_pending_boundary(
+        pending,
+        boundary="report-final",
+        power=power,
+        panel=panel,
+        audit=audit,
+        report=report,
+    )
+    terminal = pending / operator.JOINT_POWER_NO_FEASIBLE_FILENAME
+    terminal.write_bytes(b"{}\n")
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="differs from its invocation"):
+        operator._ensure_joint_power(config, freeze_tree)
+
+    assert terminal.read_bytes() == b"{}\n"
+    assert calls == {"audit": 0, "design": 0, "exact": 0}
+
+
+def test_complete_joint_power_pending_bundle_is_reused_and_published_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, calls = _mock_resumable_joint_power(config, monkeypatch)
+    freeze_tree = _digest("freeze-tree")
+    marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    marker.write_bytes(operator._invocation_payload(freeze_tree, power, (panel,)))
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    _seed_joint_power_pending_boundary(
+        pending,
+        boundary="complete-pending",
+        power=power,
+        panel=panel,
+        audit=audit,
+        report=report,
+    )
+
+    first = operator._ensure_joint_power(config, freeze_tree)
+    published = config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY
+    first_tree = operator.digest_directory_tree(published).sha256
+    second = operator._ensure_joint_power(config, freeze_tree)
+
+    assert calls == {"audit": 0, "design": 0, "exact": 2}
+    assert first.exact_replay_performed is True
+    assert second.exact_replay_performed is True
+    assert operator.digest_directory_tree(published).sha256 == first_tree
+    assert not pending.exists()
+
+
+def test_failed_exact_replay_leaves_complete_pending_unpublished(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, audit, report, _calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+    )
+    freeze_tree = _digest("freeze-tree")
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(
+        operator._invocation_payload(freeze_tree, power, (panel,))
+    )
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    _seed_joint_power_pending_boundary(
+        pending,
+        boundary="complete-pending",
+        power=power,
+        panel=panel,
+        audit=audit,
+        report=report,
+    )
+
+    def reject_exact(*args: object, **kwargs: object):
+        assert args[0] == pending
+        assert kwargs["reproduce_exact"] is True
+        raise PostEmbeddingDevelopmentError("exact checkpoint mismatch")
+
+    monkeypatch.setattr(operator, "_verify_joint_power_bundle", reject_exact)
+    with pytest.raises(PostEmbeddingDevelopmentError, match="exact checkpoint mismatch"):
+        operator._ensure_joint_power(config, freeze_tree)
+
+    assert pending.is_dir()
+    assert not (config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY).exists()
+
+
+def test_ambiguous_invocation_next_is_rejected_before_legacy_work_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, _report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+    )
+    freeze_tree = _digest("freeze-tree")
+    invocation_bytes = operator._invocation_payload(freeze_tree, power, (panel,))
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(invocation_bytes)
+    analysis = config.output_root / ANALYSIS_DIRECTORY
+    analysis.mkdir(mode=0o700)
+    (analysis / operator._JOINT_POWER_INVOCATION_NEXT_FILENAME).write_bytes(invocation_bytes)
+    interrupted = analysis / f".{JOINT_POWER_DIRECTORY}.work-interrupted"
+    interrupted.mkdir(mode=0o700)
+    partial = interrupted / "partial.json"
+    partial.write_bytes(b"partial\n")
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="both final and next"):
+        operator._ensure_joint_power(config, freeze_tree)
+
+    assert partial.read_bytes() == b"partial\n"
+    assert calls == {"audit": 0, "design": 0, "exact": 0}
+
+
+def test_joint_power_resume_rejects_unexpected_pending_members_without_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, _report, calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+    )
+    freeze_tree = _digest("freeze-tree")
+    (config.output_root / JOINT_POWER_INVOCATION_FILENAME).write_bytes(
+        operator._invocation_payload(freeze_tree, power, (panel,))
+    )
+    pending = config.output_root / ANALYSIS_DIRECTORY / operator.JOINT_POWER_PENDING_DIRECTORY
+    pending.mkdir(mode=0o700, parents=True)
+    unexpected = pending / "unexpected.json"
+    unexpected.write_bytes(b"private\n")
+
+    with pytest.raises(PostEmbeddingDevelopmentError, match="unexpected members"):
+        operator._ensure_joint_power(config, freeze_tree)
+
+    assert unexpected.read_bytes() == b"private\n"
+    assert calls == {"audit": 0, "design": 0, "exact": 0}
+
+
+def test_joint_power_resume_rejects_a_changed_invocation_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    _mock_resumable_joint_power(config, monkeypatch)
     marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
     marker.write_bytes(b"{}\n")
-    monkeypatch.setattr(
-        operator,
-        "_joint_power_source",
-        lambda value: (SimpleNamespace(), ()),
+    interrupted = (
+        config.output_root / ANALYSIS_DIRECTORY / f".{JOINT_POWER_DIRECTORY}.work-interrupted"
     )
-    with pytest.raises(PostEmbeddingDevelopmentError, match="retry is forbidden"):
+    interrupted.mkdir(mode=0o700, parents=True)
+    (interrupted / "partial.json").write_bytes(b"partial\n")
+    with pytest.raises(PostEmbeddingDevelopmentError, match="marker differs"):
         operator._ensure_joint_power(config, _digest("freeze-tree"))
+    assert interrupted.is_dir()
 
 
-def test_existing_joint_bundle_defers_exact_replay_to_terminal_verifier(
+def test_joint_power_resume_removes_only_bound_interrupted_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path)
+    config.output_root.mkdir(mode=0o700)
+    power, panel, _audit, _report, _calls = _mock_resumable_joint_power(
+        config,
+        monkeypatch,
+    )
+    freeze_tree = _digest("freeze-tree")
+    marker = config.output_root / JOINT_POWER_INVOCATION_FILENAME
+    marker.write_bytes(operator._invocation_payload(freeze_tree, power, (panel,)))
+    interrupted = (
+        config.output_root / ANALYSIS_DIRECTORY / f".{JOINT_POWER_DIRECTORY}.work-interrupted"
+    )
+    interrupted.mkdir(mode=0o700, parents=True)
+    (interrupted / "partial.json").write_bytes(b"partial\n")
+
+    operator._ensure_joint_power(config, freeze_tree)
+
+    assert not interrupted.exists()
+    assert (config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY).is_dir()
+
+
+def test_existing_joint_bundle_performs_one_exact_replay_for_the_persisted_boundary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -988,7 +1717,7 @@ def test_existing_joint_bundle_defers_exact_replay_to_terminal_verifier(
     bundle.mkdir(mode=0o700, parents=True)
     invocation = config.output_root / JOINT_POWER_INVOCATION_FILENAME
     invocation.write_bytes(b"invocation\n")
-    power = SimpleNamespace()
+    power = SimpleNamespace(sha256=_digest("power"))
     observed: list[bool] = []
     monkeypatch.setattr(operator, "_joint_power_source", lambda value: (power, ()))
 
@@ -997,8 +1726,9 @@ def test_existing_joint_bundle_defers_exact_replay_to_terminal_verifier(
         return power, (), SimpleNamespace(), _digest("tree")
 
     monkeypatch.setattr(operator, "_verify_joint_power_bundle", inspect)
-    operator._ensure_joint_power(config, _digest("freeze-tree"))
-    assert observed == [False]
+    ensured = operator._ensure_joint_power(config, _digest("freeze-tree"))
+    assert observed == [True]
+    assert ensured.exact_replay_performed is True
 
 
 def test_changed_stage_file_changes_its_bound_tree_digest(tmp_path: Path) -> None:

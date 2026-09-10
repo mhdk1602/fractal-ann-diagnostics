@@ -60,6 +60,19 @@ def _canonical(value: object) -> bytes:
     )
 
 
+def _canonical_utf8(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
 def _write(path: Path, payload: bytes) -> bytes:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
@@ -276,6 +289,27 @@ def test_config_loader_rejects_unknown_duplicate_and_noncanonical_json(
     _write(noncanonical_path, canonical.replace(b"{", b"{ ", 1))
     with pytest.raises(DevelopmentFreezeError, match="not canonical"):
         freeze.load_development_freeze_config(noncanonical_path)
+
+
+def test_source_jsonl_accepts_canonical_utf8_without_changing_freeze_encoding() -> None:
+    row = {"id": "query-0", "text": "¿Qué explica München? 東京"}
+    encoded = _canonical_utf8(row)
+
+    assert freeze._decode_jsonl(encoded, label="development queries") == (row,)
+    assert freeze._canonical_bytes(row) == _canonical(row)
+    assert freeze._canonical_bytes(row) != encoded
+
+
+@pytest.mark.parametrize(
+    "encoded",
+    (
+        b'{"id":"query-0", "text":"Question"}\n',
+        b'{"text":"Question","id":"query-0"}\n',
+    ),
+)
+def test_source_jsonl_rejects_genuinely_noncanonical_input(encoded: bytes) -> None:
+    with pytest.raises(DevelopmentFreezeError, match="line 1 is not canonical JSON"):
+        freeze._decode_jsonl(encoded, label="development queries")
 
 
 @pytest.mark.parametrize(

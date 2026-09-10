@@ -912,9 +912,13 @@ it. This yields at least 95% simultaneous coverage across six candidate counts a
 scenarios without an independence assumption. Every checked study uses the registered
 10,000-replicate bootstrap. Any primary approximate/exact gate disagreement aborts certification.
 The action-position sensitivity retains its pointwise 95% result and remains non-gating. The
-selected family count is the maximum requirement across endpoint-specific and joint-gate
+full six-candidate grid remains in the reported estimates and continues to determine the 12-cell
+Bonferroni denominator. Production selection is restricted to 25, 50, or 75 families per corpus;
+75 is the largest registered candidate below the label-free assignment audit's minimum
+sealed-family availability of 77, attained by SciFact. Counts 100, 150, and 200 are diagnostic only.
+The selected family count is the maximum requirement across endpoint-specific and joint-gate
 calculations; the multiplicity-adjusted one-sided lower Monte Carlo bound must reach the frozen
-0.90 design target.
+0.90 design target. If no feasible count qualifies, the apparatus stops before sealed execution.
 
 The existing beta-binomial common-shock utility is only an event-yield sensitivity analysis for
 low-effort action success. It cannot establish 90% power for the primary conjunction or select the

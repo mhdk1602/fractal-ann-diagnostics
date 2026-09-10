@@ -84,24 +84,50 @@ REGISTERED_BOOTSTRAP_REPLICATES = 10_000
 REGISTERED_BOOTSTRAP_SEED = 20260713
 EXACT_BOOTSTRAP_BATCH_SIZE = 500
 REGISTERED_CANDIDATE_FAMILY_COUNTS = (25, 50, 75, 100, 150, 200)
+AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY = 77
+REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS = max(
+    candidate
+    for candidate in REGISTERED_CANDIDATE_FAMILY_COUNTS
+    if candidate <= AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY
+)
 REGISTERED_REQUIRED_SCENARIO_COUNT = 2
 REGISTERED_SELECTION_FAMILY_SIZE = (
     len(REGISTERED_CANDIDATE_FAMILY_COUNTS) * REGISTERED_REQUIRED_SCENARIO_COUNT
 )
 SELECTION_MULTIPLICITY_METHOD = "bonferroni-fixed-required-scenario-candidate-grid-v1"
 SELECTION_RULE = (
-    "smallest-candidate-for-which-every-primary-gate-and-the-joint-gate-have-"
+    "smallest-production-feasible-candidate-at-or-below-75-for-which-every-primary-"
+    "gate-and-the-joint-gate-have-"
     "bonferroni-simultaneous-lower-probability-bounds-at-or-above-target-in-every-"
-    "required-scenario"
+    "required-scenario;no-feasible-qualifier-blocks-before-sealed-execution"
 )
 SELECTION_AUDIT_COVERAGE_RULE = (
-    "deterministic-sequential-exact-joint-bonferroni-certificate-v2: divide familywise alpha "
-    "equally over the fixed required-scenario-by-candidate grid; qualify with the minimum "
-    "exact joint-pass count whose one-sided Clopper-Pearson lower bound at the per-cell alpha "
-    "reaches target; block with the complementary exact joint-failure count; inspect "
-    "approximate-pass-first for a provisionally qualifying cell and approximate-fail-first "
-    "otherwise"
+    "deterministic-sequential-exact-joint-bonferroni-certificate-v3: divide familywise alpha "
+    "equally over the fixed full required-scenario-by-candidate grid; retain estimates for all "
+    "cells; exact-certify only ascending production-feasible candidates at or below 75, the "
+    "largest registered candidate below the audited minimum sealed-family availability of 77; "
+    "qualify with the minimum exact joint-pass count whose one-sided Clopper-Pearson lower bound "
+    "at the per-cell alpha reaches target; block with the complementary exact joint-failure "
+    "count; inspect approximate-pass-first for a provisionally qualifying cell and "
+    "approximate-fail-first otherwise; no feasible qualifier blocks before sealed execution"
 )
+
+
+def _selection_eligible_family_counts(
+    candidates: Sequence[int],
+    *,
+    test_mode: bool,
+) -> tuple[int, ...]:
+    """Retain unrestricted test grids but close production selection to feasible counts."""
+
+    values = tuple(candidates)
+    if test_mode:
+        return values
+    return tuple(
+        candidate
+        for candidate in values
+        if candidate <= REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+    )
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_JSON_BYTES = 256 * 1024 * 1024
@@ -608,6 +634,13 @@ class JointPowerDesignConfig:
     def selection_family_size(self) -> int:
         required_scenarios = sum(item.selection_required for item in self.effect_scenarios)
         return len(self.candidate_families_per_corpus) * required_scenarios
+
+    @property
+    def selection_eligible_families_per_corpus(self) -> tuple[int, ...]:
+        return _selection_eligible_family_counts(
+            self.candidate_families_per_corpus,
+            test_mode=self.test_mode,
+        )
 
     @property
     def selection_cell_alpha(self) -> float:
@@ -2063,6 +2096,14 @@ class JointPowerSelectionAudit:
             raise JointPowerDesignError("selection audit certificates must be typed and non-empty")
         if not all(isinstance(item, ExactSelectionStudyAudit) for item in records):
             raise JointPowerDesignError("selection audit records must be typed")
+        if not test_mode and any(
+            item.families_per_corpus > REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+            for item in certificates
+        ):
+            raise JointPowerDesignError(
+                "production selection audit certifies a family count above the registered "
+                "sealed-family feasibility ceiling"
+            )
         certificate_keys = tuple(
             (item.scenario_id, item.families_per_corpus) for item in certificates
         )
@@ -2135,6 +2176,16 @@ class JointPowerSelectionAudit:
             raise JointPowerDesignError("selection audit contains an unreferenced study record")
         if self.selection_satisfied != (self.selected_families_per_corpus is not None):
             raise JointPowerDesignError("selection audit selected count and status disagree")
+        if (
+            not test_mode
+            and self.selected_families_per_corpus is not None
+            and self.selected_families_per_corpus
+            > REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+        ):
+            raise JointPowerDesignError(
+                "production selection audit exceeds the registered sealed-family feasibility "
+                "ceiling"
+            )
         object.__setattr__(self, "panel_sha256s", tuple(sorted(panel_pins.items())))
         object.__setattr__(self, "certificates", certificates)
         object.__setattr__(self, "records", records)
@@ -2589,10 +2640,24 @@ class JointPowerDesignReport:
                 raise JointPowerDesignError(
                     "report joint-probability confidence differs from the selection grid"
                 )
+        eligible_candidates = _selection_eligible_family_counts(
+            candidates,
+            test_mode=test_mode,
+        )
+        if (
+            not test_mode
+            and self.selected_families_per_corpus is not None
+            and self.selected_families_per_corpus
+            > REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+        ):
+            raise JointPowerDesignError(
+                "production report selection exceeds the registered sealed-family feasibility "
+                "ceiling"
+            )
         expected_selection = next(
             (
                 candidate
-                for candidate in candidates
+                for candidate in eligible_candidates
                 if all(
                     next(
                         item
@@ -3045,7 +3110,7 @@ def run_joint_power_selection_audit(
     records: list[ExactSelectionStudyAudit] = []
     selected: int | None = None
 
-    for families in config.candidate_families_per_corpus:
+    for families in config.selection_eligible_families_per_corpus:
         candidate_qualified = required_successes is not None
         for scenario in required_scenarios:
             computation = computations[(scenario.scenario_id, families)]
@@ -3117,7 +3182,7 @@ def run_joint_power_selection_audit(
     provisional_selected = next(
         (
             families
-            for families in config.candidate_families_per_corpus
+            for families in config.selection_eligible_families_per_corpus
             if all(
                 computations[(scenario.scenario_id, families)].estimate.qualifies(
                     config.target_power
@@ -3199,7 +3264,7 @@ def _validate_selection_audit_binding(
     )
     selected: int | None = None
 
-    for families in config.candidate_families_per_corpus:
+    for families in config.selection_eligible_families_per_corpus:
         candidate_qualified = required_successes is not None
         for scenario in required_scenarios:
             if required_successes is None:
@@ -3376,7 +3441,7 @@ def run_joint_power_design(
     selected = next(
         (
             families
-            for families in config.candidate_families_per_corpus
+            for families in config.selection_eligible_families_per_corpus
             if all(
                 next(
                     estimate

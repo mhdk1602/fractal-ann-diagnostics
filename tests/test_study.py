@@ -12,6 +12,7 @@ from urllib.request import Request
 import pytest
 from production_workload_fixtures import registered_production_workloads
 
+import fractal_ann_diagnostics.joint_power_design as joint_power_module
 import fractal_ann_diagnostics.study as study_module
 from fractal_ann_diagnostics.artifact_integrity import (
     ArtifactVerificationReceipt,
@@ -1616,6 +1617,20 @@ def test_joint_power_candidate_grid_is_exact(candidate_grid: list[int]) -> None:
         validate_study_manifest(payload)
 
 
+def test_power_feasibility_cap_matches_the_audited_minimum_and_design_module() -> None:
+    assert study_module.AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY == 77
+    assert study_module.REGISTERED_POWER_MAX_SELECTABLE_FAMILIES_PER_CORPUS == 75
+    assert (
+        study_module.REGISTERED_POWER_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+        == joint_power_module.REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+    )
+    assert study_module.REGISTERED_POWER_MAX_SELECTABLE_FAMILIES_PER_CORPUS == max(
+        candidate
+        for candidate in REGISTERED_POWER_FAMILY_CANDIDATES
+        if candidate <= study_module.AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY
+    )
+
+
 @pytest.mark.parametrize(
     ("value", "message"),
     (
@@ -1666,6 +1681,7 @@ def test_joint_power_simultaneous_selection_contract_is_exact(
         ("selected_families_per_corpus", "tbd", "must be pinned"),
         ("selected_families_per_corpus", 1, "at least 2"),
         ("selected_families_per_corpus", 60, "registered candidate"),
+        ("selected_families_per_corpus", 100, "feasibility ceiling of 75"),
         ("selected_joint_power_lower_bound", "tbd", "must be pinned"),
         ("selected_joint_power_lower_bound", 0.89, "power_target"),
         ("simulation_count", 4_999, "at least 5000"),

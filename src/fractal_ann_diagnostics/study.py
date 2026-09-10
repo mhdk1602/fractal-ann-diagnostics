@@ -153,6 +153,12 @@ REGISTERED_POWER_ENDPOINTS = (
     "h3-zero-entitlement-violations",
 )
 REGISTERED_POWER_FAMILY_CANDIDATES = (25, 50, 75, 100, 150, 200)
+AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY = 77
+REGISTERED_POWER_MAX_SELECTABLE_FAMILIES_PER_CORPUS = max(
+    candidate
+    for candidate in REGISTERED_POWER_FAMILY_CANDIDATES
+    if candidate <= AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY
+)
 REGISTERED_POWER_REQUIRED_SCENARIO_COUNT = 2
 REGISTERED_POWER_SELECTION_FAMILY_SIZE = 12
 REGISTERED_POWER_SELECTION_FAMILYWISE_CONFIDENCE = 0.95
@@ -984,6 +990,14 @@ def _validate_power(power_value: object, *, frozen: bool, power_target: float) -
     if selected is not None and selected not in candidates:
         raise StudyManifestError(
             "analysis.power.selected_families_per_corpus must be a registered candidate"
+        )
+    if (
+        selected is not None
+        and selected > REGISTERED_POWER_MAX_SELECTABLE_FAMILIES_PER_CORPUS
+    ):
+        raise StudyManifestError(
+            "analysis.power.selected_families_per_corpus exceeds the registered "
+            "sealed-family feasibility ceiling of 75"
         )
     lower_bound = _draftable_number(
         power["selected_joint_power_lower_bound"],

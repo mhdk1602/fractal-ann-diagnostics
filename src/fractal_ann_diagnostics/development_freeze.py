@@ -154,6 +154,22 @@ def _canonical_bytes(value: object, *, newline: bool = True) -> bytes:
     return encoded + (b"\n" if newline else b"")
 
 
+def _canonical_source_jsonl_bytes(value: object) -> bytes:
+    try:
+        encoded = json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise DevelopmentFreezeError(
+            "development source rows require finite canonical UTF-8 JSON"
+        ) from exc
+    return encoded + b"\n"
+
+
 def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -228,7 +244,7 @@ def _decode_jsonl(encoded: bytes, *, label: str) -> tuple[Mapping[str, Any], ...
     rows: list[Mapping[str, Any]] = []
     for position, line in enumerate(encoded.splitlines(keepends=True), start=1):
         value = _decode_json(line, label=f"{label} line {position}")
-        if not isinstance(value, Mapping) or line != _canonical_bytes(value):
+        if not isinstance(value, Mapping) or line != _canonical_source_jsonl_bytes(value):
             raise DevelopmentFreezeError(f"{label} line {position} is not canonical JSON")
         rows.append(value)
     return tuple(rows)

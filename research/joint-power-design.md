@@ -166,10 +166,14 @@ deterministic simulation machinery. Nonrequired scenarios retain pointwise 95% l
 The joint event is the row-wise intersection of all nine gates. It receives the same probability
 estimate and multiplicity-adjusted lower bound. A candidate count qualifies only when every
 primary endpoint lower bound and the joint lower bound meet `target_power` in every required
-scenario. The report then chooses the first qualifying count in the strictly increasing registered
-candidate list. If none qualifies, the selected count is JSON `null` and the design remains
-blocked. The action-position sensitivity retains a pointwise 95% limit and cannot affect this
-choice.
+scenario. The six registered counts remain in the report and in the 12-cell Bonferroni family.
+Production selection is prospectively restricted to 25, 50, and 75 families per corpus. The cap is
+75 because it is the largest registered candidate below the label-free assignment audit's minimum
+sealed-family availability of 77, attained by SciFact. Counts 100, 150, and 200 remain design
+diagnostics but cannot be selected. The report chooses the first qualifying production-feasible
+count. If none of 25, 50, or 75 qualifies, the selected count is JSON `null` and the study stops
+before sealed execution. The action-position sensitivity retains a pointwise 95% limit and cannot
+affect this choice.
 
 This explicit endpoint check is redundant in population logic because joint success is a subset of
 each gate. The multiplicity family therefore has 12 scenario-candidate cells, not 120
@@ -192,13 +196,15 @@ regardless of every unaudited study. Observing $M-k+1$ exact joint failures prov
 $k-1$ studies can pass, so the target is unreachable. This gives a sufficient early-stopping
 certificate without treating a small convenience sample as the full simulation grid.
 
-The audit processes candidate counts in registered ascending order and required scenarios in their
-canonical order. For a provisionally qualifying cell, it checks approximate-pass study indices
-first, in ascending order, until it has $k$ exact joint passes. For a provisionally failing cell,
-it checks approximate-fail indices first until it has $M-k+1$ exact failures. Each checked study
-uses the registered 10,000-replicate directional family bootstrap. The file binds the config,
-panels, complete plug-in selection basis, family-draw digest for every checked study, exact and
-approximate bounds, gate decisions, stopping thresholds, and selected count.
+The audit processes production-feasible candidate counts in registered ascending order and
+required scenarios in their canonical order. It retains the complete plug-in selection basis for
+all six candidates, so the multiplicity allocation remains `0.05 / 12`. For a provisionally
+qualifying feasible cell, it checks approximate-pass study indices first, in ascending order,
+until it has $k$ exact joint passes. For a provisionally failing feasible cell, it checks
+approximate-fail indices first until it has $M-k+1$ exact failures. Each checked study uses the
+registered 10,000-replicate directional family bootstrap. The file binds the config, panels,
+complete plug-in selection basis, family-draw digest for every checked study, exact and approximate
+bounds, gate decisions, stopping thresholds, and selected count.
 
 At the production values $M=5{,}000$, $p_0=0.90$, $G=12$, and $\alpha_C=0.05/12$,
 $k=4{,}556$ and the blocking threshold is 445 failures. The lower limit is approximately
@@ -329,10 +335,13 @@ A design report is admissible only when all of these conditions hold:
 - config and panel bytes pass their canonical loaders and exact SHA-256 checks;
 - all candidate counts were run with at least 5,000 calibration and 5,000 evaluation studies;
 - the candidate grid is exactly 25, 50, 75, 100, 150, and 200, in that order;
+- only 25, 50, or 75 can be selected in production because 75 is the largest grid value below the
+  audited minimum sealed-family availability of 77;
 - every required scenario is present and marked before simulation;
 - `selection-audit.json` satisfies the closed exact stopping rule with 10,000 bootstrap replicates
   per checked study and contains no primary approximate/exact decision disagreement;
-- `selected_families_per_corpus` is the smallest candidate that satisfies the closed rule;
+- `selected_families_per_corpus` is the smallest production-feasible candidate that satisfies the
+  closed rule, and absence of a feasible qualifier blocks the study before sealed execution;
 - `freeze_ready=true`; and
 - an independent rerun from the same bytes produces the same audit and report bytes.
 

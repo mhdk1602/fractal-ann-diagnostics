@@ -8,16 +8,19 @@ import pytest
 
 import fractal_ann_diagnostics.joint_power_design as joint_power_design
 from fractal_ann_diagnostics.joint_power_design import (
+    AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY,
     CONTINUOUS_ENDPOINTS,
     ENDPOINT_ORDER,
     FIXED_CORPORA,
     POSITION_SENSITIVITY_ENDPOINT,
     PRIMARY_ENDPOINT_ORDER,
     REGISTERED_CANDIDATE_FAMILY_COUNTS,
+    REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS,
     DependenceSource,
     DevelopmentFamilyRow,
     DevelopmentScenarioPanel,
     EffectScenario,
+    ExactSelectionStudyAudit,
     GeometryGainThresholds,
     JointPowerDesignConfig,
     JointPowerDesignError,
@@ -118,6 +121,91 @@ def _config(
         simulation_seed=817263,
         test_mode=True,
     )
+
+
+def _production_estimates(
+    *,
+    qualifying_from: int,
+) -> tuple[object, ...]:
+    template_panel = _panel("template")
+    template = run_joint_power_design(
+        _config((template_panel,), candidates=(2,), n_simulations=20, target_power=0.20),
+        (template_panel,),
+    ).estimates[0]
+    cell_confidence = 1.0 - (0.05 / 12)
+    estimates = []
+    for scenario_id in ("conservative", "expected"):
+        for families in REGISTERED_CANDIDATE_FAMILY_COUNTS:
+            passes = np.full(5_000, families >= qualifying_from, dtype=np.bool_)
+            probabilities = tuple(
+                OperatingProbability.from_passes(
+                    endpoint,
+                    passes,
+                    confidence=(
+                        0.95 if endpoint == POSITION_SENSITIVITY_ENDPOINT else cell_confidence
+                    ),
+                )
+                for endpoint in ENDPOINT_ORDER
+            )
+            estimates.append(
+                replace(
+                    template,
+                    scenario_id=scenario_id,
+                    selection_required=True,
+                    families_per_corpus=families,
+                    total_families=families * len(FIXED_CORPORA),
+                    n_simulations=5_000,
+                    bound_calibration_simulations=5_000,
+                    endpoint_probabilities=probabilities,
+                    joint_probability=OperatingProbability.from_passes(
+                        "h2-and-h3-all-gates-pass",
+                        passes,
+                        confidence=cell_confidence,
+                    ),
+                    zero_event_family_rate_upper_bound_if_no_events=(
+                        1.0 - 0.05 ** (1.0 / (families * len(FIXED_CORPORA)))
+                    ),
+                )
+            )
+    return tuple(estimates)
+
+
+def _production_config() -> tuple[
+    JointPowerDesignConfig,
+    tuple[DevelopmentScenarioPanel, DevelopmentScenarioPanel],
+]:
+    expected = _panel("expected")
+    conservative = _panel("conservative")
+    config = _config(
+        (expected, conservative),
+        candidates=REGISTERED_CANDIDATE_FAMILY_COUNTS,
+        n_simulations=5_000,
+        target_power=0.90,
+    )
+    return replace(config, test_mode=False), (expected, conservative)
+
+
+def _fake_computations(
+    estimates: tuple[object, ...],
+) -> dict[tuple[str, int], object]:
+    result = {}
+    for estimate in estimates:
+        joint_passes = np.full(
+            5_000,
+            estimate.joint_probability.passing_simulations == 5_000,
+            dtype=np.bool_,
+        )
+        result[(estimate.scenario_id, estimate.families_per_corpus)] = (
+            joint_power_design._CandidateComputation(
+                estimate=estimate,
+                prepared={},
+                evaluation=None,
+                bounds={},
+                passes={},
+                joint_passes=joint_passes,
+            )
+        )
+    return result
 
 
 def test_canonical_config_panel_and_report_round_trip() -> None:
@@ -577,6 +665,119 @@ def test_production_selection_uses_a_simultaneous_12_cell_probability_family() -
         )
     with pytest.raises(JointPowerDesignError, match="multiplicity method"):
         replace(production, selection_multiplicity_method="pointwise")
+
+
+@pytest.mark.parametrize(
+    ("qualifying_from", "expected_selection"),
+    ((75, 75), (100, None)),
+)
+def test_production_selection_retains_full_grid_but_only_selects_feasible_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    qualifying_from: int,
+    expected_selection: int | None,
+) -> None:
+    config, panels = _production_config()
+    estimates = _production_estimates(qualifying_from=qualifying_from)
+    computations = _fake_computations(estimates)
+    evaluated: list[tuple[str, int]] = []
+
+    def candidate(*_args: object, **kwargs: object):
+        scenario = _args[1]
+        families = kwargs["families_per_corpus"]
+        key = (scenario.scenario_id, families)
+        evaluated.append(key)
+        return computations[key]
+
+    monkeypatch.setattr(joint_power_design, "_candidate_computation", candidate)
+
+    report = run_joint_power_design(config, panels)
+
+    assert AUDITED_MINIMUM_SEALED_FAMILY_AVAILABILITY == 77
+    assert REGISTERED_MAX_SELECTABLE_FAMILIES_PER_CORPUS == 75
+    assert config.selection_family_size == 12
+    assert config.selection_eligible_families_per_corpus == (25, 50, 75)
+    assert {item.families_per_corpus for item in report.estimates} == set(
+        REGISTERED_CANDIDATE_FAMILY_COUNTS
+    )
+    assert {families for _, families in evaluated} == set(REGISTERED_CANDIDATE_FAMILY_COUNTS)
+    assert all(
+        estimate.qualifies(config.target_power)
+        for estimate in report.estimates
+        if estimate.families_per_corpus >= qualifying_from
+    )
+    assert report.selected_families_per_corpus == expected_selection
+    assert report.selection_satisfied is (expected_selection is not None)
+    if expected_selection is None:
+        assert not report.freeze_ready
+        with pytest.raises(JointPowerDesignError, match="feasibility ceiling"):
+            replace(
+                report,
+                selected_families_per_corpus=100,
+                selection_satisfied=True,
+            )
+
+
+def test_production_selection_audit_never_certifies_an_infeasible_qualifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, panels = _production_config()
+    estimates = _production_estimates(qualifying_from=100)
+    computations = _fake_computations(estimates)
+    audited_counts: list[int] = []
+
+    def candidate(*_args: object, **kwargs: object):
+        scenario = _args[1]
+        families = kwargs["families_per_corpus"]
+        return computations[(scenario.scenario_id, families)]
+
+    def exact_record(*_args: object, **kwargs: object) -> ExactSelectionStudyAudit:
+        families = kwargs["families_per_corpus"]
+        audited_counts.append(families)
+        failed = tuple((endpoint, False) for endpoint in ENDPOINT_ORDER)
+        zero_bounds = tuple((endpoint, 0.0) for endpoint in CONTINUOUS_ENDPOINTS)
+        return ExactSelectionStudyAudit(
+            scenario_id=kwargs["scenario_id"],
+            families_per_corpus=families,
+            study_index=kwargs["study_index"],
+            family_draws_sha256="f" * 64,
+            approximate_bounds=zero_bounds,
+            exact_bounds=zero_bounds,
+            approximate_passes=failed,
+            exact_passes=failed,
+            approximate_joint_passed=False,
+            exact_joint_passed=False,
+        )
+
+    monkeypatch.setattr(joint_power_design, "_candidate_computation", candidate)
+    monkeypatch.setattr(joint_power_design, "_exact_selection_study_audit", exact_record)
+    monkeypatch.setattr(
+        joint_power_design,
+        "_minimum_successes_for_probability_target",
+        lambda *_args, **_kwargs: 5_000,
+    )
+
+    audit = run_joint_power_selection_audit(config, panels)
+
+    assert audit.selected_families_per_corpus is None
+    assert not audit.selection_satisfied
+    assert audited_counts == [25, 50, 75]
+    assert max(certificate.families_per_corpus for certificate in audit.certificates) == 75
+    with pytest.raises(JointPowerDesignError, match="feasibility ceiling"):
+        replace(
+            audit,
+            selected_families_per_corpus=100,
+            selection_satisfied=True,
+        )
+
+
+def test_test_mode_candidate_selection_is_not_subject_to_production_feasibility_cap() -> None:
+    panel = _panel()
+    config = _config((panel,), candidates=(100, 150))
+
+    report = run_joint_power_design(config, (panel,))
+
+    assert config.selection_eligible_families_per_corpus == (100, 150)
+    assert report.selected_families_per_corpus == 100
 
 
 def test_exact_selection_audit_round_trip_and_closed_coverage() -> None:

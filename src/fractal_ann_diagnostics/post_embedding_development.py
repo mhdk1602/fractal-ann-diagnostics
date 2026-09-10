@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -18,7 +19,6 @@ import re
 import shutil
 import stat
 import sys
-import tempfile
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -110,6 +110,7 @@ POST_EMBEDDING_RECEIPT_SCHEMA = "fractal-post-embedding-development-receipt-v1"
 POST_EMBEDDING_STRATUM_SCHEMA = "fractal-post-embedding-development-stratum-v1"
 POST_EMBEDDING_ARTIFACT_SCHEMA = "fractal-post-embedding-development-artifact-v1"
 JOINT_POWER_INVOCATION_SCHEMA = "fractal-joint-power-single-invocation-v1"
+JOINT_POWER_NO_FEASIBLE_SCHEMA = "fractal-joint-power-no-feasible-checkpoint-v1"
 POST_EMBEDDING_CLI_RESULT_SCHEMA = "fractal-post-embedding-development-cli-result-v1"
 
 OPERATOR_CONFIG_FILENAME = "operator-config.json"
@@ -125,6 +126,7 @@ FREEZE_DIRECTORY = "development-freeze"
 JOINT_POWER_INVOCATION_FILENAME = "joint-power-invocation.json"
 ANALYSIS_DIRECTORY = "analysis"
 JOINT_POWER_DIRECTORY = "joint-power-design"
+JOINT_POWER_NO_FEASIBLE_FILENAME = "no-feasible-design.json"
 JOINT_POWER_SELECTION_AUDIT_FILENAME = "selection-audit.json"
 RECEIPT_FILENAME = "post-embedding-development-receipt.json"
 
@@ -249,6 +251,11 @@ _KNOWN_TOP_LEVEL = frozenset(
         SELECTION_FILENAME,
     }
 )
+_FREEZE_STAGING_PREFIX = f".{FREEZE_DIRECTORY}.staging-"
+_JOINT_POWER_WORK_PREFIX = f".{JOINT_POWER_DIRECTORY}.work-"
+JOINT_POWER_PENDING_DIRECTORY = f".{JOINT_POWER_DIRECTORY}.pending-v1"
+_JOINT_POWER_INVOCATION_NEXT_FILENAME = f".{JOINT_POWER_INVOCATION_FILENAME}.next"
+_CHECKPOINT_NEXT_SUFFIX = ".next"
 
 
 class PostEmbeddingDevelopmentError(RuntimeError):
@@ -411,6 +418,14 @@ class _FreshJointPowerVerification:
     panels: tuple[Any, ...]
     report: Any
     tree_sha256: str
+
+
+@dataclass(frozen=True)
+class _EnsuredJointPower:
+    """Verified final bundle plus whether this call performed the exact replay."""
+
+    verification: _FreshJointPowerVerification
+    exact_replay_performed: bool
 
 
 @dataclass(frozen=True)
@@ -920,7 +935,31 @@ def _ensure_output_root(
     )
 
 
-def _assert_known_tree(root: Path) -> None:
+def _interrupted_freeze_staging(root: Path) -> tuple[Path, ...]:
+    candidates = tuple(
+        sorted(
+            (child for child in root.iterdir() if child.name.startswith(_FREEZE_STAGING_PREFIX)),
+            key=lambda path: path.name,
+        )
+    )
+    for candidate in candidates:
+        _require_real_directory(
+            candidate, label="interrupted development freeze staging", private=True
+        )
+        try:
+            digest_directory_tree(candidate)
+        except ArtifactIntegrityError as exc:
+            raise PostEmbeddingDevelopmentError(
+                f"interrupted development freeze staging is not regular and closed: {exc}"
+            ) from exc
+    return candidates
+
+
+def _assert_known_tree(
+    root: Path,
+    *,
+    allow_interrupted_freeze_staging: bool = False,
+) -> None:
     try:
         tree = digest_directory_tree(root)
     except ArtifactIntegrityError as exc:
@@ -928,11 +967,62 @@ def _assert_known_tree(root: Path) -> None:
             f"operator tree is not regular and closed: {exc}"
         ) from exc
     top = {PurePosixPath(path).parts[0] for path in tree.entries}
-    unexpected = top - _KNOWN_TOP_LEVEL
+    staging = {name for name in top if name.startswith(_FREEZE_STAGING_PREFIX)}
+    if staging and allow_interrupted_freeze_staging:
+        _interrupted_freeze_staging(root)
+    unexpected = top - _KNOWN_TOP_LEVEL - (staging if allow_interrupted_freeze_staging else set())
     if unexpected:
         raise PostEmbeddingDevelopmentError(
             f"operator output has unexpected top-level entries: {sorted(unexpected)}"
         )
+
+
+def _acquire_operator_lock(root: Path) -> int:
+    path = root / OPERATOR_CONFIG_FILENAME
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise PostEmbeddingDevelopmentError(f"cannot open operator lock anchor: {exc}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise PostEmbeddingDevelopmentError(
+                "operator lock anchor is not a private regular file"
+            )
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise PostEmbeddingDevelopmentError(
+                "another post-embedding development process is active"
+            ) from exc
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _release_operator_lock(descriptor: int) -> None:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+def _recover_interrupted_freeze_staging(root: Path) -> None:
+    candidates = _interrupted_freeze_staging(root)
+    if not candidates:
+        return
+    if os.path.lexists(root / FREEZE_DIRECTORY):
+        raise PostEmbeddingDevelopmentError(
+            "interrupted development freeze staging remains beside a published freeze"
+        )
+    for candidate in candidates:
+        shutil.rmtree(candidate)
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _ensure_private_directory(path: Path) -> None:
@@ -946,8 +1036,19 @@ def _ensure_private_directory(path: Path) -> None:
         _require_real_directory(path, label=str(path), private=True)
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _exclusive_publish_directory(work: Path, output: Path) -> None:
-    """Publish one directory with an operating-system no-replace primitive."""
+    """Publish one filesystem object with an operating-system no-replace primitive."""
 
     if os.path.lexists(output):
         raise PostEmbeddingDevelopmentError(f"publication target already exists: {output}")
@@ -988,15 +1089,69 @@ def _exclusive_publish_directory(work: Path, output: Path) -> None:
         number = ctypes.get_errno()
         if number in {errno.EEXIST, errno.ENOTEMPTY}:
             raise PostEmbeddingDevelopmentError(f"publication target already exists: {output}")
-        raise PostEmbeddingDevelopmentError(f"cannot publish directory: {os.strerror(number)}")
+        raise PostEmbeddingDevelopmentError(f"cannot publish object: {os.strerror(number)}")
+    for parent in {work.parent, output.parent}:
+        descriptor = os.open(
+            parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def _remove_uncommitted_file(path: Path, *, label: str) -> None:
+    """Remove only one runner-owned regular temporary file and persist the unlink."""
+
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise PostEmbeddingDevelopmentError(f"cannot inspect {label}: {exc}") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
+        raise PostEmbeddingDevelopmentError(f"{label} is not one private regular file")
+    try:
+        path.unlink()
+    except OSError as exc:
+        raise PostEmbeddingDevelopmentError(f"cannot remove {label}: {exc}") from exc
     descriptor = os.open(
-        output.parent,
+        path.parent,
         os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
     )
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _atomic_write_no_replace(
+    target: Path,
+    encoded: bytes,
+    *,
+    label: str,
+    next_path: Path | None = None,
+) -> None:
+    """Fsync bytes under a temporary name, then publish the final name once."""
+
+    temporary = (
+        target.with_name(f".{target.name}{_CHECKPOINT_NEXT_SUFFIX}")
+        if next_path is None
+        else next_path
+    )
+    if os.path.lexists(target) or os.path.lexists(temporary):
+        raise PostEmbeddingDevelopmentError(f"{label} publication state already exists")
+    _write_exclusive(temporary, encoded, label=f"{label} next file")
+    _exclusive_publish_directory(temporary, target)
+
+
+def _checkpoint_next_path(target: Path) -> Path:
+    return target.with_name(f".{target.name}{_CHECKPOINT_NEXT_SUFFIX}")
 
 
 def _expected_embedding_bindings(
@@ -1537,88 +1692,587 @@ def _reuse_fresh_joint_power_verification(
     )
 
 
-def _ensure_joint_power(config: PostEmbeddingDevelopmentConfig, freeze_tree_sha256: str):
+def _joint_power_expected_entries(panels: Sequence[Any]) -> set[str]:
+    return {
+        "config.json",
+        "report.json",
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        "panels",
+        *(f"panels/{panel.sha256}.json" for panel in panels),
+    }
+
+
+def _joint_power_pending_checkpoint_entries(panels: Sequence[Any]) -> set[str]:
+    return _joint_power_expected_entries(panels) | {JOINT_POWER_NO_FEASIBLE_FILENAME}
+
+
+def _joint_power_pending_allowed_entries(panels: Sequence[Any]) -> set[str]:
+    final_entries = _joint_power_pending_checkpoint_entries(panels)
+    next_entries = {
+        str(PurePosixPath(path).with_name(f".{PurePosixPath(path).name}{_CHECKPOINT_NEXT_SUFFIX}"))
+        for path in final_entries
+        if path != "panels"
+    }
+    return final_entries | next_entries
+
+
+def _inspect_joint_power_pending(pending: Path, panels: Sequence[Any]) -> None:
+    _require_real_directory(pending, label="joint-power pending bundle", private=True)
+    try:
+        entries = set(digest_directory_tree(pending).entries)
+    except ArtifactIntegrityError as exc:
+        raise PostEmbeddingDevelopmentError(
+            f"joint-power pending bundle is not regular and closed: {exc}"
+        ) from exc
+    unexpected = entries - _joint_power_pending_allowed_entries(panels)
+    if unexpected:
+        raise PostEmbeddingDevelopmentError(
+            f"joint-power pending bundle has unexpected members: {sorted(unexpected)}"
+        )
+    for relative in _joint_power_pending_checkpoint_entries(panels) - {"panels"}:
+        final = pending.joinpath(*PurePosixPath(relative).parts)
+        if os.path.lexists(final) and os.path.lexists(_checkpoint_next_path(final)):
+            raise PostEmbeddingDevelopmentError(
+                f"joint-power pending file has both final and next names: {relative}"
+            )
+    audit_exists = os.path.lexists(pending / JOINT_POWER_SELECTION_AUDIT_FILENAME)
+    report_exists = os.path.lexists(pending / "report.json")
+    later_than_audit = entries - {
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        f".{JOINT_POWER_SELECTION_AUDIT_FILENAME}{_CHECKPOINT_NEXT_SUFFIX}",
+    }
+    if not audit_exists and later_than_audit:
+        raise PostEmbeddingDevelopmentError(
+            "joint-power pending bundle advanced before its selection-audit checkpoint"
+        )
+    later_than_report = entries - {
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        "report.json",
+        f".report.json{_CHECKPOINT_NEXT_SUFFIX}",
+    }
+    if audit_exists and not report_exists and later_than_report:
+        raise PostEmbeddingDevelopmentError(
+            "joint-power pending bundle advanced before its report checkpoint"
+        )
+    config_exists = os.path.lexists(pending / "config.json")
+    before_config = {
+        JOINT_POWER_SELECTION_AUDIT_FILENAME,
+        "report.json",
+        f".config.json{_CHECKPOINT_NEXT_SUFFIX}",
+        JOINT_POWER_NO_FEASIBLE_FILENAME,
+        f".{JOINT_POWER_NO_FEASIBLE_FILENAME}{_CHECKPOINT_NEXT_SUFFIX}",
+    }
+    if report_exists and not config_exists and entries - before_config:
+        raise PostEmbeddingDevelopmentError(
+            "joint-power pending bundle advanced before its config checkpoint"
+        )
+    panel_root = pending / "panels"
+    if os.path.lexists(panel_root):
+        _require_real_directory(panel_root, label="joint-power pending panels", private=True)
+
+
+def _validate_selection_audit_checkpoint(
+    power_config: Any,
+    panels: Sequence[Any],
+    audit: Any,
+) -> None:
+    panel_pins = {panel.scenario_id: panel.sha256 for panel in panels}
+    if (
+        audit.config_sha256 != power_config.sha256
+        or dict(audit.panel_sha256s) != panel_pins
+        or audit.test_mode
+    ):
+        raise PostEmbeddingDevelopmentError(
+            "joint-power selection-audit checkpoint differs from its invocation"
+        )
+
+
+def _load_or_run_selection_audit(
+    pending: Path,
+    power_config: Any,
+    panels: Sequence[Any],
+) -> tuple[Any, bool]:
+    target = pending / JOINT_POWER_SELECTION_AUDIT_FILENAME
+    temporary = _checkpoint_next_path(target)
+    reused = os.path.lexists(target) or os.path.lexists(temporary)
+    if os.path.lexists(target):
+        try:
+            audit = load_joint_power_selection_audit(
+                _read_control(target, label="joint-power selection-audit checkpoint")
+            )
+        except JointPowerDesignError as exc:
+            raise PostEmbeddingDevelopmentError(
+                f"joint-power selection-audit checkpoint is invalid: {exc}"
+            ) from exc
+        _validate_selection_audit_checkpoint(power_config, panels, audit)
+        return audit, True
+    if os.path.lexists(temporary):
+        try:
+            audit = load_joint_power_selection_audit(
+                _read_control(temporary, label="joint-power selection-audit next file")
+            )
+        except (JointPowerDesignError, PostEmbeddingDevelopmentError):
+            _remove_uncommitted_file(
+                temporary,
+                label="incomplete joint-power selection-audit next file",
+            )
+            reused = False
+        else:
+            _validate_selection_audit_checkpoint(power_config, panels, audit)
+            _exclusive_publish_directory(temporary, target)
+            return audit, True
+    audit = run_joint_power_selection_audit(power_config, panels)
+    encoded = canonical_joint_power_selection_audit_bytes(audit)
+    _atomic_write_no_replace(target, encoded, label="joint-power selection-audit checkpoint")
+    try:
+        observed = load_joint_power_selection_audit(
+            _read_control(target, label="joint-power selection-audit checkpoint")
+        )
+    except JointPowerDesignError as exc:
+        raise PostEmbeddingDevelopmentError(
+            f"joint-power selection-audit checkpoint readback failed: {exc}"
+        ) from exc
+    if canonical_joint_power_selection_audit_bytes(observed) != encoded:
+        raise PostEmbeddingDevelopmentError("joint-power selection-audit checkpoint changed")
+    return observed, reused
+
+
+def _validate_power_report_checkpoint(
+    power_config: Any,
+    panels: Sequence[Any],
+    selection_audit: Any,
+    report: Any,
+) -> None:
+    panel_pins = {panel.scenario_id: panel.sha256 for panel in panels}
+    feasible = (
+        report.freeze_ready
+        and report.selection_satisfied
+        and report.selected_families_per_corpus is not None
+    )
+    no_feasible_candidate = (
+        not report.freeze_ready
+        and not report.selection_satisfied
+        and report.selected_families_per_corpus is None
+    )
+    if (
+        report.config_sha256 != power_config.sha256
+        or dict(report.panel_sha256s) != panel_pins
+        or report.selection_audit_sha256 != selection_audit.sha256
+        or report.selection_audit_basis_sha256 != selection_audit.selection_basis_sha256
+        or report.selection_audit_exact_bootstrap_replicates
+        != selection_audit.exact_bootstrap_replicates
+        or report.selection_audit_coverage_rule != selection_audit.coverage_rule
+        or report.selected_families_per_corpus != selection_audit.selected_families_per_corpus
+        or report.selection_satisfied != selection_audit.selection_satisfied
+        or report.test_mode
+        or not (feasible or no_feasible_candidate)
+    ):
+        raise PostEmbeddingDevelopmentError(
+            "joint-power report checkpoint is not terminal and bound"
+        )
+
+
+def _load_or_run_power_report(
+    pending: Path,
+    power_config: Any,
+    panels: Sequence[Any],
+    selection_audit: Any,
+) -> tuple[Any, bool]:
+    target = pending / "report.json"
+    temporary = _checkpoint_next_path(target)
+    if os.path.lexists(target):
+        encoded = _read_control(target, label="joint-power report checkpoint")
+        try:
+            observed = load_joint_power_report(encoded)
+        except JointPowerDesignError as exc:
+            raise PostEmbeddingDevelopmentError(
+                f"joint-power report checkpoint is invalid: {exc}"
+            ) from exc
+        _validate_power_report_checkpoint(power_config, panels, selection_audit, observed)
+        return observed, True
+    if os.path.lexists(temporary):
+        try:
+            encoded = _read_control(temporary, label="joint-power report next file")
+            observed = load_joint_power_report(encoded)
+        except (JointPowerDesignError, PostEmbeddingDevelopmentError):
+            _remove_uncommitted_file(temporary, label="incomplete joint-power report next file")
+        else:
+            _validate_power_report_checkpoint(power_config, panels, selection_audit, observed)
+            _exclusive_publish_directory(temporary, target)
+            return observed, True
+    expected = run_joint_power_design(
+        power_config,
+        panels,
+        selection_audit=selection_audit,
+    )
+    _validate_power_report_checkpoint(power_config, panels, selection_audit, expected)
+    expected_bytes = canonical_joint_power_report_bytes(expected)
+    _atomic_write_no_replace(target, expected_bytes, label="joint-power report checkpoint")
+    return expected, False
+
+
+def _ensure_exact_pending_file(target: Path, expected: bytes, *, label: str) -> None:
+    temporary = _checkpoint_next_path(target)
+    if os.path.lexists(target):
+        if _read_control(target, label=label) != expected:
+            raise PostEmbeddingDevelopmentError(f"{label} differs from its invocation")
+        return
+    if os.path.lexists(temporary):
+        try:
+            observed = _read_control(temporary, label=f"{label} next file")
+        except PostEmbeddingDevelopmentError:
+            _remove_uncommitted_file(temporary, label=f"incomplete {label} next file")
+        else:
+            if observed == expected:
+                _exclusive_publish_directory(temporary, target)
+                return
+            _remove_uncommitted_file(temporary, label=f"incomplete {label} next file")
+    _atomic_write_no_replace(target, expected, label=label)
+
+
+def _joint_power_no_feasible_payload(
+    *,
+    freeze_tree_sha256: str,
+    invocation_bytes: bytes,
+    power_config: Any,
+    panels: Sequence[Any],
+    selection_audit: Any,
+    report: Any,
+) -> bytes:
+    if (
+        report.freeze_ready
+        or report.selection_satisfied
+        or report.selected_families_per_corpus is not None
+        or selection_audit.selection_satisfied
+        or selection_audit.selected_families_per_corpus is not None
+    ):
+        raise PostEmbeddingDevelopmentError(
+            "no-feasible checkpoint requires a terminal unselected design"
+        )
+    return _canonical_bytes(
+        {
+            "disposition": "no-feasible-registered-candidate",
+            "freeze_tree_sha256": freeze_tree_sha256,
+            "joint_power_config_sha256": power_config.sha256,
+            "joint_power_report_sha256": _sha256(canonical_joint_power_report_bytes(report)),
+            "panel_sha256s": {panel.scenario_id: panel.sha256 for panel in panels},
+            "selection_audit_sha256": _sha256(
+                canonical_joint_power_selection_audit_bytes(selection_audit)
+            ),
+            "single_invocation_sha256": _sha256(invocation_bytes),
+            "sealed_execution_authorized": False,
+            "selected_families_per_corpus": None,
+            "schema_version": JOINT_POWER_NO_FEASIBLE_SCHEMA,
+        }
+    )
+
+
+def _ensure_no_feasible_joint_power_checkpoint(
+    pending: Path,
+    *,
+    freeze_tree_sha256: str,
+    invocation_bytes: bytes,
+    power_config: Any,
+    panels: Sequence[Any],
+    selection_audit: Any,
+    report: Any,
+) -> None:
+    conflicting = {
+        "config.json": pending / "config.json",
+        "config next file": _checkpoint_next_path(pending / "config.json"),
+        "panels directory": pending / "panels",
+    }
+    observed = sorted(label for label, path in conflicting.items() if os.path.lexists(path))
+    if observed:
+        raise PostEmbeddingDevelopmentError(
+            "no-feasible joint-power checkpoint coexists with successful bundle members: "
+            f"{observed}"
+        )
+    target = pending / JOINT_POWER_NO_FEASIBLE_FILENAME
+    expected = _joint_power_no_feasible_payload(
+        freeze_tree_sha256=freeze_tree_sha256,
+        invocation_bytes=invocation_bytes,
+        power_config=power_config,
+        panels=panels,
+        selection_audit=selection_audit,
+        report=report,
+    )
+    _ensure_exact_pending_file(
+        target,
+        expected,
+        label="joint-power no-feasible terminal checkpoint",
+    )
+
+
+def _read_back_new_joint_power_bundle(
+    bundle: Path,
+    *,
+    power_config: Any,
+    panels: Sequence[Any],
+    selection_audit: Any,
+    report: Any,
+) -> str:
+    expected_entries = _joint_power_expected_entries(panels)
+    expected = {
+        "config.json": canonical_joint_power_config_bytes(power_config),
+        "report.json": canonical_joint_power_report_bytes(report),
+        JOINT_POWER_SELECTION_AUDIT_FILENAME: canonical_joint_power_selection_audit_bytes(
+            selection_audit
+        ),
+        **{
+            f"panels/{panel.sha256}.json": canonical_development_panel_bytes(panel)
+            for panel in panels
+        },
+    }
+    for relative, encoded in expected.items():
+        path = bundle.joinpath(*PurePosixPath(relative).parts)
+        if _read_control(path, label=f"joint-power readback {relative}") != encoded:
+            raise PostEmbeddingDevelopmentError(f"joint-power readback differs at {relative}")
+    try:
+        tree = digest_directory_tree(bundle)
+    except ArtifactIntegrityError as exc:
+        raise PostEmbeddingDevelopmentError(
+            f"cannot pin joint-power pending bundle: {exc}"
+        ) from exc
+    if set(tree.entries) != expected_entries:
+        raise PostEmbeddingDevelopmentError("joint-power pending bundle membership differs")
+    return tree.sha256
+
+
+def _fresh_joint_power_token(
+    *,
+    bundle: Path,
+    freeze_tree_sha256: str,
+    invocation_bytes: bytes,
+    power_config: Any,
+    panels: Sequence[Any],
+    report: Any,
+    tree_sha256: str,
+) -> _FreshJointPowerVerification:
+    return _FreshJointPowerVerification(
+        bundle_root=bundle,
+        freeze_tree_sha256=freeze_tree_sha256,
+        invocation_bytes=invocation_bytes,
+        power_config=power_config,
+        panels=tuple(panels),
+        report=report,
+        tree_sha256=tree_sha256,
+    )
+
+
+def _ensure_joint_power(
+    config: PostEmbeddingDevelopmentConfig,
+    freeze_tree_sha256: str,
+) -> _EnsuredJointPower:
     root = config.output_root
     freeze_root = root / FREEZE_DIRECTORY
     power_config, panels = _joint_power_source(freeze_root)
     invocation_path = root / JOINT_POWER_INVOCATION_FILENAME
     analysis_parent = root / ANALYSIS_DIRECTORY
     bundle = analysis_parent / JOINT_POWER_DIRECTORY
+    pending = analysis_parent / JOINT_POWER_PENDING_DIRECTORY
+    invocation_next = analysis_parent / _JOINT_POWER_INVOCATION_NEXT_FILENAME
+    invocation_bytes = _invocation_payload(freeze_tree_sha256, power_config, panels)
     if os.path.lexists(bundle):
         if not os.path.lexists(invocation_path):
             raise PostEmbeddingDevelopmentError("joint-power bundle lacks its invocation marker")
-        return _verify_joint_power_bundle(
+        _require_real_directory(analysis_parent, label="analysis parent", private=True)
+        if {child.name for child in analysis_parent.iterdir()} != {JOINT_POWER_DIRECTORY}:
+            raise PostEmbeddingDevelopmentError(
+                "analysis parent has unexpected members beside the joint-power bundle"
+            )
+        verified = _verify_joint_power_bundle(
             bundle,
             freeze_tree_sha256=freeze_tree_sha256,
             invocation_path=invocation_path,
-            reproduce_exact=False,
+            reproduce_exact=True,
         )
-    if os.path.lexists(invocation_path):
-        raise PostEmbeddingDevelopmentError(
-            "joint-power invocation began without a complete package; retry is forbidden"
+        observed_config, observed_panels, observed_report, tree_sha256 = verified
+        return _EnsuredJointPower(
+            verification=_fresh_joint_power_token(
+                bundle=bundle,
+                freeze_tree_sha256=freeze_tree_sha256,
+                invocation_bytes=invocation_bytes,
+                power_config=observed_config,
+                panels=observed_panels,
+                report=observed_report,
+                tree_sha256=tree_sha256,
+            ),
+            exact_replay_performed=True,
         )
+    invocation_exists = os.path.lexists(invocation_path)
+    if invocation_exists and (
+        _read_control(
+            invocation_path,
+            label="joint-power invocation marker",
+        )
+        != invocation_bytes
+    ):
+        raise PostEmbeddingDevelopmentError("joint-power invocation marker differs")
     if os.path.lexists(analysis_parent):
         _require_real_directory(analysis_parent, label="analysis parent", private=True)
-        if any(analysis_parent.iterdir()):
-            raise PostEmbeddingDevelopmentError("analysis parent is not empty before publication")
+        members = tuple(analysis_parent.iterdir())
+        work_directories = tuple(
+            child for child in members if child.name.startswith(_JOINT_POWER_WORK_PREFIX)
+        )
+        if len(work_directories) > 1:
+            raise PostEmbeddingDevelopmentError("multiple interrupted joint-power work roots exist")
+        if pending in members and work_directories:
+            raise PostEmbeddingDevelopmentError(
+                "fixed and legacy joint-power work roots cannot coexist"
+            )
+        allowed = {pending, invocation_next, *work_directories}
+        if set(members) - allowed:
+            raise PostEmbeddingDevelopmentError("analysis parent has unexpected pending members")
+        if (pending in members or work_directories) and not invocation_exists:
+            raise PostEmbeddingDevelopmentError(
+                "joint-power work exists without its invocation marker"
+            )
+        if invocation_exists and invocation_next in members:
+            raise PostEmbeddingDevelopmentError(
+                "joint-power invocation has both final and next marker names"
+            )
+        for work in work_directories:
+            _require_real_directory(work, label="interrupted joint-power work", private=True)
+            try:
+                digest_directory_tree(work)
+            except ArtifactIntegrityError as exc:
+                raise PostEmbeddingDevelopmentError(
+                    f"interrupted joint-power work is not regular and closed: {exc}"
+                ) from exc
+            shutil.rmtree(work)
+        if work_directories:
+            _fsync_directory(analysis_parent)
     else:
         _ensure_private_directory(analysis_parent)
-    invocation_bytes = _invocation_payload(freeze_tree_sha256, power_config, panels)
-    _write_exclusive(invocation_path, invocation_bytes, label="joint-power invocation marker")
-
-    # This is the sole production invocation.  A marker without a final bundle
-    # is terminal because a process failure cannot prove whether simulation ran.
-    selection_audit = run_joint_power_selection_audit(power_config, panels)
-    report = run_joint_power_design(
+    if not invocation_exists:
+        if os.path.lexists(invocation_next):
+            try:
+                next_bytes = _read_control(
+                    invocation_next,
+                    label="joint-power invocation next marker",
+                )
+            except PostEmbeddingDevelopmentError:
+                _remove_uncommitted_file(
+                    invocation_next,
+                    label="incomplete joint-power invocation next marker",
+                )
+            else:
+                if next_bytes == invocation_bytes:
+                    _exclusive_publish_directory(invocation_next, invocation_path)
+                    invocation_exists = True
+                else:
+                    _remove_uncommitted_file(
+                        invocation_next,
+                        label="incomplete joint-power invocation next marker",
+                    )
+        if not invocation_exists:
+            _atomic_write_no_replace(
+                invocation_path,
+                invocation_bytes,
+                label="joint-power invocation marker",
+                next_path=invocation_next,
+            )
+            invocation_exists = True
+    if not invocation_exists:
+        raise PostEmbeddingDevelopmentError("joint-power invocation marker was not published")
+    if not os.path.lexists(pending):
+        _ensure_private_directory(pending)
+        _fsync_directory(analysis_parent)
+    _inspect_joint_power_pending(pending, panels)
+    selection_audit, audit_reused = _load_or_run_selection_audit(
+        pending,
         power_config,
         panels,
-        selection_audit=selection_audit,
     )
-    if report.test_mode or not report.freeze_ready or report.selected_families_per_corpus is None:
-        raise PostEmbeddingDevelopmentError("joint-power run did not yield a freeze-ready design")
-    work = Path(tempfile.mkdtemp(prefix=f".{JOINT_POWER_DIRECTORY}.work-", dir=analysis_parent))
-    try:
-        (work / "panels").mkdir(mode=0o700)
-        _write_exclusive(
-            work / "config.json",
-            canonical_joint_power_config_bytes(power_config),
-            label="joint-power config",
+    _inspect_joint_power_pending(pending, panels)
+    report, _report_reused = _load_or_run_power_report(
+        pending,
+        power_config,
+        panels,
+        selection_audit,
+    )
+    _inspect_joint_power_pending(pending, panels)
+    no_feasible = pending / JOINT_POWER_NO_FEASIBLE_FILENAME
+    no_feasible_next = _checkpoint_next_path(no_feasible)
+    if report.selected_families_per_corpus is None:
+        _ensure_no_feasible_joint_power_checkpoint(
+            pending,
+            freeze_tree_sha256=freeze_tree_sha256,
+            invocation_bytes=invocation_bytes,
+            power_config=power_config,
+            panels=panels,
+            selection_audit=selection_audit,
+            report=report,
         )
-        _write_exclusive(
-            work / "report.json",
-            canonical_joint_power_report_bytes(report),
-            label="joint-power report",
-        )
-        _write_exclusive(
-            work / JOINT_POWER_SELECTION_AUDIT_FILENAME,
-            canonical_joint_power_selection_audit_bytes(selection_audit),
-            label="joint-power selection audit",
-        )
-        for panel in panels:
-            _write_exclusive(
-                work / "panels" / f"{panel.sha256}.json",
-                canonical_development_panel_bytes(panel),
-                label=f"joint-power panel {panel.scenario_id}",
-            )
-        _exclusive_publish_directory(work, bundle)
-        work = Path()
-    finally:
-        if work != Path() and work.exists():
-            shutil.rmtree(work)
-    if _read_control(
-        bundle / JOINT_POWER_SELECTION_AUDIT_FILENAME,
-        label="published joint-power selection audit",
-    ) != canonical_joint_power_selection_audit_bytes(selection_audit) or _read_control(
-        bundle / "report.json", label="published joint-power report"
-    ) != canonical_joint_power_report_bytes(report):
+        _inspect_joint_power_pending(pending, panels)
         raise PostEmbeddingDevelopmentError(
-            "published joint-power audit or report differs from the in-memory result"
+            "joint-power selection found no feasible registered candidate; "
+            "sealed execution remains unauthorized"
         )
-    return _verify_joint_power_bundle(
-        bundle,
+    if os.path.lexists(no_feasible) or os.path.lexists(no_feasible_next):
+        raise PostEmbeddingDevelopmentError(
+            "a feasible joint-power report conflicts with a no-feasible checkpoint"
+        )
+    _ensure_exact_pending_file(
+        pending / "config.json",
+        canonical_joint_power_config_bytes(power_config),
+        label="joint-power config checkpoint",
+    )
+    panel_root = pending / "panels"
+    if not os.path.lexists(panel_root):
+        _ensure_private_directory(panel_root)
+        _fsync_directory(pending)
+    else:
+        _require_real_directory(panel_root, label="joint-power pending panels", private=True)
+    for panel in panels:
+        _ensure_exact_pending_file(
+            panel_root / f"{panel.sha256}.json",
+            canonical_development_panel_bytes(panel),
+            label=f"joint-power panel checkpoint {panel.scenario_id}",
+        )
+    _inspect_joint_power_pending(pending, panels)
+    pending_tree_sha256 = _read_back_new_joint_power_bundle(
+        pending,
+        power_config=power_config,
+        panels=panels,
+        selection_audit=selection_audit,
+        report=report,
+    )
+    if audit_reused:
+        verified = _verify_joint_power_bundle(
+            pending,
+            freeze_tree_sha256=freeze_tree_sha256,
+            invocation_path=invocation_path,
+            reproduce_exact=True,
+        )
+        observed_config, observed_panels, observed_report, tree_sha256 = verified
+        exact_replay = True
+    else:
+        observed_config = power_config
+        observed_panels = tuple(panels)
+        observed_report = report
+        tree_sha256 = pending_tree_sha256
+        exact_replay = False
+    _exclusive_publish_directory(pending, bundle)
+    verification = _fresh_joint_power_token(
+        bundle=bundle,
+        freeze_tree_sha256=freeze_tree_sha256,
+        invocation_bytes=invocation_bytes,
+        power_config=observed_config,
+        panels=observed_panels,
+        report=observed_report,
+        tree_sha256=tree_sha256,
+    )
+    _reuse_fresh_joint_power_verification(
+        verification,
+        bundle=bundle,
         freeze_tree_sha256=freeze_tree_sha256,
         invocation_path=invocation_path,
-        reproduce_exact=False,
+    )
+    return _EnsuredJointPower(
+        verification=verification,
+        exact_replay_performed=exact_replay,
     )
 
 
@@ -1886,86 +2540,73 @@ def _execute_post_embedding_development(
     if not isinstance(config, PostEmbeddingDevelopmentConfig):
         raise PostEmbeddingDevelopmentError("config must be PostEmbeddingDevelopmentConfig")
     _ensure_output_root(config, resume=resume)
-    _assert_known_tree(config.output_root)
-    if os.path.lexists(config.output_root / RECEIPT_FILENAME):
-        if resume:
-            return verify_post_embedding_development(config.output_root)
-        raise PostEmbeddingDevelopmentError("completed operator output cannot be rerun")
-    upstream = _admit_upstream(config)
-    selection_sha, bindings_sha, materialization_sha = _ensure_selection_and_materialization(
-        config,
-        upstream,
-        allow_writes=True,
-    )
-    strata, index_config_sha = _ensure_policy_and_indexes(
-        config,
-        materialization_sha,
-        allow_writes=True,
-    )
-    execution_config, execution_receipt = _ensure_execution(
-        config,
-        materialization_sha,
-        strata,
-        allow_writes=True,
-    )
-    freeze_config_sha, freeze_receipt_sha, freeze_tree_sha = _ensure_freeze(
-        config,
-        execution_receipt.artifact_sha256,
-        allow_writes=True,
-    )
-    ensured_power = _ensure_joint_power(
-        config,
-        freeze_tree_sha,
-    )
-    joint_bundle = config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY
-    joint_invocation = config.output_root / JOINT_POWER_INVOCATION_FILENAME
-    if resume:
-        power_config, panels, power_report, joint_tree_sha = _verify_joint_power_bundle(
-            joint_bundle,
-            freeze_tree_sha256=freeze_tree_sha,
-            invocation_path=joint_invocation,
+    lock = _acquire_operator_lock(config.output_root)
+    try:
+        _recover_interrupted_freeze_staging(config.output_root)
+        _assert_known_tree(config.output_root)
+        if os.path.lexists(config.output_root / RECEIPT_FILENAME):
+            if resume:
+                return verify_post_embedding_development(config.output_root)
+            raise PostEmbeddingDevelopmentError("completed operator output cannot be rerun")
+        upstream = _admit_upstream(config)
+        selection_sha, bindings_sha, materialization_sha = _ensure_selection_and_materialization(
+            config,
+            upstream,
+            allow_writes=True,
         )
-    else:
-        power_config, panels, power_report, joint_tree_sha = ensured_power
-    fresh_joint_power = _FreshJointPowerVerification(
-        bundle_root=joint_bundle,
-        freeze_tree_sha256=freeze_tree_sha,
-        invocation_bytes=_read_control(
-            joint_invocation,
-            label="joint-power invocation",
-        ),
-        power_config=power_config,
-        panels=panels,
-        report=power_report,
-        tree_sha256=joint_tree_sha,
-    )
-    receipt = _build_receipt(
-        config,
-        upstream,
-        embedding_bindings_sha256=bindings_sha,
-        selection_receipt_sha256=selection_sha,
-        materialization_receipt_sha256=materialization_sha,
-        strata=strata,
-        index_config_sha256=index_config_sha,
-        execution_config=execution_config,
-        execution_receipt=execution_receipt,
-        freeze_config_sha256=freeze_config_sha,
-        freeze_receipt_sha256=freeze_receipt_sha,
-        freeze_tree_sha256=freeze_tree_sha,
-        power_config=power_config,
-        power_report=power_report,
-        joint_tree_sha256=joint_tree_sha,
-    )
-    _write_exclusive(
-        config.output_root / RECEIPT_FILENAME,
-        receipt.canonical_file_bytes(),
-        label="post-embedding receipt",
-    )
-    return _verify_post_embedding_development_config(
-        config,
-        expected_receipt_sha256=receipt.artifact_sha256,
-        fresh_joint_power=fresh_joint_power,
-    )
+        strata, index_config_sha = _ensure_policy_and_indexes(
+            config,
+            materialization_sha,
+            allow_writes=True,
+        )
+        execution_config, execution_receipt = _ensure_execution(
+            config,
+            materialization_sha,
+            strata,
+            allow_writes=True,
+        )
+        freeze_config_sha, freeze_receipt_sha, freeze_tree_sha = _ensure_freeze(
+            config,
+            execution_receipt.artifact_sha256,
+            allow_writes=True,
+        )
+        ensured_power = _ensure_joint_power(
+            config,
+            freeze_tree_sha,
+        )
+        fresh_joint_power = ensured_power.verification
+        power_config = fresh_joint_power.power_config
+        power_report = fresh_joint_power.report
+        joint_tree_sha = fresh_joint_power.tree_sha256
+        receipt = _build_receipt(
+            config,
+            upstream,
+            embedding_bindings_sha256=bindings_sha,
+            selection_receipt_sha256=selection_sha,
+            materialization_receipt_sha256=materialization_sha,
+            strata=strata,
+            index_config_sha256=index_config_sha,
+            execution_config=execution_config,
+            execution_receipt=execution_receipt,
+            freeze_config_sha256=freeze_config_sha,
+            freeze_receipt_sha256=freeze_receipt_sha,
+            freeze_tree_sha256=freeze_tree_sha,
+            power_config=power_config,
+            power_report=power_report,
+            joint_tree_sha256=joint_tree_sha,
+        )
+        _write_exclusive(
+            config.output_root / RECEIPT_FILENAME,
+            receipt.canonical_file_bytes(),
+            label="post-embedding receipt",
+        )
+        return _verify_post_embedding_development_config(
+            config,
+            expected_receipt_sha256=receipt.artifact_sha256,
+            fresh_joint_power=fresh_joint_power,
+        )
+    finally:
+        _release_operator_lock(lock)
 
 
 def run_post_embedding_development(
@@ -1998,7 +2639,7 @@ def post_embedding_development_status(
             "schema_version": POST_EMBEDDING_CLI_RESULT_SCHEMA,
         }
     _require_real_directory(config.output_root, label="operator output root", private=True)
-    _assert_known_tree(config.output_root)
+    _assert_known_tree(config.output_root, allow_interrupted_freeze_staging=True)
     present = sorted(child.name for child in config.output_root.iterdir())
     marker = JOINT_POWER_INVOCATION_FILENAME in present
     bundle = (config.output_root / ANALYSIS_DIRECTORY / JOINT_POWER_DIRECTORY).is_dir()

@@ -453,11 +453,16 @@ The report must pin its development-data dependence source, effect scenarios, si
 at least 5,000 simulated studies for each candidate count. Candidate family counts are 25, 50, 75,
 100, 150, and 200 per corpus. It reports endpoint-specific operating characteristics, the joint
 H2+H3 pass probability, Monte Carlo uncertainty, and the zero-event condition's finite-sample
-behavior. The selected family count is the maximum requirement across the endpoint-specific and
-joint-gate calculations; its one-sided lower Monte Carlo bound must reach the frozen 0.90 design
-target. Until those fields and the report are pinned, no power claim or family-count selection is
-permitted. Simulation-based planning for clustered models follows the approach illustrated by
-[Green and MacLeod](https://doi.org/10.1111/2041-210X.12504).
+behavior. All six counts remain in the fixed 12-cell multiplicity family and in the reported
+estimates. Production selection is limited to 25, 50, or 75 families per corpus. Seventy-five is
+the largest registered candidate below the label-free assignment audit's minimum sealed-family
+availability of 77, attained by SciFact. Counts 100, 150, and 200 cannot be selected. The selected
+family count is the maximum requirement across the endpoint-specific and joint-gate calculations;
+its one-sided lower Monte Carlo bound must reach the frozen 0.90 design target. If no feasible count
+qualifies, the study remains unfrozen and stops before sealed execution. Until those fields and the
+report are pinned, no power claim or family-count selection is permitted. Simulation-based planning
+for clustered models follows the approach illustrated by [Green and
+MacLeod](https://doi.org/10.1111/2041-210X.12504).
 
 The production selection certificate is fail-closed. The multiplicity family is fixed before
 simulation at six candidate counts by two required scenarios, or 12 cells. Let $M=5{,}000$, target
@@ -466,8 +471,10 @@ smallest integer whose one-sided Clopper-Pearson lower bound at that cellwise al
 $p_0$; here $k=4{,}556$. A scenario-candidate cell qualifies only after 4,556 checked studies pass
 the exact joint gate. It is blocked after 445 checked studies fail the exact joint gate. This gives
 simultaneous coverage of at least 0.95 over the fixed grid without assuming independence among
-cells. Candidate counts are processed in the registered ascending order. Required scenarios are
-processed in canonical order. Approximate-pass indices are checked first for a provisional pass;
+cells. Production-feasible candidate counts are processed in registered ascending order; the full
+six-candidate grid still determines the Bonferroni denominator and remains in the plug-in selection
+basis. Required scenarios are processed in canonical order. Approximate-pass indices are checked
+first for a provisional pass;
 approximate-fail indices are checked first for a provisional failure; ties retain ascending study
 index. Each checked study uses the registered 10,000-replicate bootstrap and records its exact
 family-draw digest. This stopping rule is sufficient because unchecked studies cannot lower a
